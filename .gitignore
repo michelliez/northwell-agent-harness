@@ -10,5 +10,10 @@ wheels/
 # Virtual environments
 .venv
 
+.agents/
+claude-code.md
 .env
-runs/
+logs/*
+!logs/.gitkeep
+pytest-cache-files-*
+pytest-cache-files-*/
