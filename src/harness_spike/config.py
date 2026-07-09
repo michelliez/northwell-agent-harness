@@ -1,38 +1,80 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, ValidationError
 
 
-class Settings(BaseModel):
-    anthropic_api_key: str = Field(min_length=1)
-    anthropic_base_url: str = Field(min_length=1)
-    anthropic_custom_headers: dict[str, str] = Field(default_factory=dict)
-    claude_model: str = Field(min_length=1)
-    mcp_weather_url: str = Field(default="http://localhost:8000/mcp", min_length=1)
-    model_port: int = Field(default=8080, ge=1, le=65535)
+def _bool_env(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return int(raw)
+
+
+@dataclass(frozen=True)
+class Settings:
+    anthropic_api_key: str | None
+    anthropic_base_url: str | None
+    anthropic_custom_headers: dict[str, str] = field(default_factory=dict)
+    claude_model: str | None = "claude-haiku-4-5-20251001"
+    mcp_weather_url: str = "http://localhost:8000/mcp"
+    model_port: int = 8080
+    trace_dir: str = "logs/runs"
+    log_raw_prompts: bool = False
+
+    def require_anthropic_api_key(self) -> str:
+        if not self.anthropic_api_key:
+            raise RuntimeError(
+                "Set ANTHROPIC_API_KEY or AI_HUB_API_KEY in your environment "
+                "or .env file."
+            )
+        return self.anthropic_api_key
+
+    def require_anthropic_base_url(self) -> str:
+        if not self.anthropic_base_url:
+            raise RuntimeError(
+                "Set ANTHROPIC_BASE_URL in your environment or .env file."
+            )
+        return self.anthropic_base_url
+
+    def require_claude_model(self) -> str:
+        if not self.claude_model:
+            raise RuntimeError("Set CLAUDE_MODEL in your environment or .env file.")
+        return self.claude_model
 
 
 def get_settings() -> Settings:
     load_dotenv()
 
     try:
-        return Settings(
-            anthropic_api_key=os.environ["ANTHROPIC_API_KEY"],
-            anthropic_base_url=os.environ["ANTHROPIC_BASE_URL"],
-            anthropic_custom_headers=parse_custom_headers(
-                os.getenv("ANTHROPIC_CUSTOM_HEADERS", "")
-            ),
-            claude_model=os.getenv("CLAUDE_MODEL", "claude-haiku-4-5"),
-            mcp_weather_url=os.getenv("MCP_WEATHER_URL", "http://localhost:8000/mcp"),
-            model_port=int(os.getenv("MODEL_PORT", "8080")),
-        )
-    except KeyError as exc:
-        raise RuntimeError(f"Missing required environment variable: {exc.args[0]}") from exc
-    except (ValueError, ValidationError) as exc:
-        raise RuntimeError(f"Invalid environment configuration:\n{exc}") from exc
+        model_port = _int_env("MODEL_PORT", 8080)
+    except ValueError as exc:
+        raise RuntimeError("MODEL_PORT must be an integer.") from exc
+
+    if model_port < 1 or model_port > 65535:
+        raise RuntimeError("MODEL_PORT must be between 1 and 65535.")
+
+    return Settings(
+        anthropic_api_key=os.getenv("ANTHROPIC_API_KEY") or os.getenv("AI_HUB_API_KEY"),
+        anthropic_base_url=os.getenv("ANTHROPIC_BASE_URL") or None,
+        anthropic_custom_headers=parse_custom_headers(
+            os.getenv("ANTHROPIC_CUSTOM_HEADERS", "")
+        ),
+        claude_model=os.getenv("CLAUDE_MODEL") or "claude-haiku-4-5-20251001",
+        mcp_weather_url=os.getenv("MCP_WEATHER_URL", "http://localhost:8000/mcp"),
+        model_port=model_port,
+        trace_dir=os.getenv("TRACE_DIR", "logs/runs"),
+        log_raw_prompts=_bool_env("LOG_RAW_PROMPTS", False),
+    )
 
 
 def parse_custom_headers(raw_headers: str) -> dict[str, str]:

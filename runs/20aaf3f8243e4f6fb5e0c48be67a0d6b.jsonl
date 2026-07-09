@@ -1,0 +1,3 @@
+{"ts": 1783541725.5056782, "run_id": "20aaf3f8243e4f6fb5e0c48be67a0d6b", "event": "request.received", "question": "[hidden]"}
+{"ts": 1783541726.890768, "run_id": "20aaf3f8243e4f6fb5e0c48be67a0d6b", "event": "mcp.tools.listed", "mcp_url": "http://localhost:8000/mcp", "tools": ["get_weather"]}
+{"ts": 1783541726.9352589, "run_id": "20aaf3f8243e4f6fb5e0c48be67a0d6b", "event": "model.request.first", "model": "claude-haiku-4-5", "messages": "[hidden]", "tools": ["get_weather"]}

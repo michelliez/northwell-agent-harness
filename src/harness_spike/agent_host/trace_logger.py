@@ -8,6 +8,12 @@ from typing import Any
 
 
 def jsonable(value: Any) -> Any:
+    """Convert SDK/Pydantic objects into plain JSON values for trace files.
+
+    The agent does not need this to reason or call tools. This only exists
+    because objects returned by SDKs are often not directly writable with
+    json.dumps().
+    """
     if value is None or isinstance(value, str | int | float | bool):
         return value
 
@@ -33,6 +39,8 @@ def jsonable(value: Any) -> Any:
 
 
 class TraceLogger:
+    """Append one JSON object per line to a run-specific trace file."""
+
     def __init__(self, trace_dir: str = "logs/runs", run_id: str | None = None) -> None:
         self.run_id = run_id or uuid.uuid4().hex
         self.path = Path(trace_dir) / f"{self.run_id}.jsonl"
