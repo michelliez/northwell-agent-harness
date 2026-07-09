@@ -15,6 +15,14 @@ class GetTableSchemaArgs(BaseModel):
     table_name: str = Field(min_length=1)
 
 
+class SearchDocsArgs(BaseModel):
+    query: str = Field(min_length=1)
+
+
+class GetTableInfoArgs(BaseModel):
+    table_name: str = Field(min_length=1)
+
+
 TABLES: dict[str, dict[str, object]] = {
     "encounters": {
         "description": "One row per patient visit or encounter.",
@@ -92,6 +100,77 @@ TABLES: dict[str, dict[str, object]] = {
         ],
     },
 }
+
+
+DOCS: list[dict[str, str]] = [
+    {
+        "name": "encounters",
+        "description": (
+            "Contains admission, discharge, department, and encounter date "
+            "information for dummy hospital visits."
+        ),
+    },
+    {
+        "name": "diagnoses",
+        "description": (
+            "Contains diagnosis codes and diagnosis descriptions for dummy "
+            "clinical metadata exploration."
+        ),
+    },
+    {
+        "name": "departments",
+        "description": (
+            "Contains department names and department metadata for dummy "
+            "operational analytics."
+        ),
+    },
+]
+
+
+TABLE_INFO: dict[str, dict[str, str]] = {
+    "encounters": {
+        "table": "encounters",
+        "primary_key": "encounter_id",
+        "description": (
+            "Contains admission, discharge, department, and encounter date "
+            "information."
+        ),
+    },
+    "diagnoses": {
+        "table": "diagnoses",
+        "primary_key": "diagnosis_id",
+        "description": "Contains diagnosis codes and diagnosis descriptions.",
+    },
+    "departments": {
+        "table": "departments",
+        "primary_key": "department_id",
+        "description": "Contains department names and department metadata.",
+    },
+}
+
+
+@mcp.tool
+def search_docs(query: str) -> list[dict[str, str]]:
+    """Search tiny hospital documentation for relevant dummy tables."""
+    args = SearchDocsArgs(query=query.strip())
+    q = args.query.lower()
+    return [
+        doc
+        for doc in DOCS
+        if q in f"{doc['name']} {doc['description']}".lower()
+    ]
+
+
+@mcp.tool
+def get_table_info(table_name: str) -> dict[str, str]:
+    """Return metadata about a mock hospital table."""
+    args = GetTableInfoArgs(table_name=table_name.strip())
+    table = TABLE_INFO.get(args.table_name.lower())
+    if table is None:
+        return {
+            "error": f"Unknown table: {args.table_name}",
+        }
+    return table
 
 
 @mcp.tool

@@ -14,6 +14,7 @@ This spike demonstrates a small agentic loop:
 ```text
 user prompt
 -> agent host
+-> deterministic policy gate
 -> model decides whether to call a tool
 -> MCP tool server runs bounded dummy tools
 -> agent host returns the final answer and trace
@@ -33,11 +34,13 @@ Evaluator should flag: wrong tool input, even if the tool returned valid data.
 
 ## Current Nodes
 
-- `agent_host`: owns the model loop, tool-call execution, and trace logging.
+- `agent_host`: owns the policy gate, model loop, tool-call execution, and
+  trace logging.
 - `mcp_servers`: owns dummy MCP tools such as data catalog or weather tools.
+- `gates`: owns deterministic safety checks that run before model or tool
+  routing.
 - future `evaluators`: should judge tool choice, tool input, tool output usage,
   and final answer grounding.
-- future `gates`: should enforce deterministic safety checks before execution.
 
 Keep model decisions and deterministic checks separate. The model may request an
 action; the host decides what is allowed to run.
@@ -81,6 +84,34 @@ Expected tool pattern for the data-catalog spike:
 ```text
 search_tables
 get_table_schema
+```
+
+Additional dummy hospital documentation tools are also exposed by the data
+catalog MCP server:
+
+```text
+search_docs
+get_table_info
+```
+
+`search_docs(query)` searches tiny static hospital documentation for relevant
+dummy tables. `get_table_info(table_name)` returns mock table metadata such as
+primary key and description.
+
+## Run The Policy Gate Smoke Test
+
+Blocked prompts return before model or tool routing:
+
+```powershell
+uv run nh-spike-agent "Show me patient names" --json
+```
+
+Expected policy-gate pattern:
+
+```text
+allowed=false
+used_tools=[]
+matched_term=patient name
 ```
 
 ## Add A Dummy MCP Tool

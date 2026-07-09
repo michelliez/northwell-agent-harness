@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, ValidationError
 from harness_spike.agent_host.mcp_bridge import MCPToolBridge
 from harness_spike.agent_host.trace_logger import TraceLogger
 from harness_spike.config import get_settings
+from harness_spike.gates import policy_gate
 
 class AskRequest(BaseModel):
     question: str = Field(min_length=1)
@@ -22,6 +23,9 @@ class AskResponse(BaseModel):
     used_tools: list[str]
     run_id: str
     trace_file: str
+    allowed: bool = True
+    policy_reason: str | None = None
+    matched_term: str | None = None
 
 
 async def ask(question: str) -> dict[str, Any]:
@@ -77,6 +81,28 @@ async def answer_question(question: str) -> AskResponse:
         "request.received",
         question=question if settings.log_raw_prompts else "[hidden]",
     )
+
+    gate_result = policy_gate(question)
+    trace.record("policy_gate.checked", result=gate_result)
+    if not gate_result["allowed"]:
+        answer = (
+            "I can't help with that request because it is blocked by the "
+            f"policy gate: {gate_result['reason']}."
+        )
+        trace.record(
+            "request.blocked",
+            reason=gate_result["reason"],
+            matched_term=gate_result["matched_term"],
+        )
+        return AskResponse(
+            answer=answer,
+            used_tools=[],
+            run_id=trace.run_id,
+            trace_file=str(trace.path),
+            allowed=False,
+            policy_reason=gate_result["reason"],
+            matched_term=gate_result["matched_term"],
+        )
 
     async with MCPToolBridge(settings.mcp_server_url) as mcp:
         claude_tools = await mcp.list_anthropic_tools()
