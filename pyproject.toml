@@ -14,6 +14,7 @@ dependencies = [
 
 [project.scripts]
 nh-spike-agent = "harness_spike.agent_host.cli:main"
+nh-spike-data-catalog = "harness_spike.mcp_servers.data_catalog:main"
 
 [build-system]
 requires = ["hatchling"]

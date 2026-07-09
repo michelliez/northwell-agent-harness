@@ -23,10 +23,12 @@ class AskResponse(BaseModel):
     run_id: str
     trace_file: str
 
+
 async def ask(question: str) -> dict[str, Any]:
     """CLI-friendly wrapper around the same agent logic used by HTTP."""
     response = await answer_question(question)
     return response.model_dump()
+
 
 class Handler(BaseHTTPRequestHandler):
     """HTTP wrapper: POST /ask in, JSON response out.
@@ -61,13 +63,13 @@ class Handler(BaseHTTPRequestHandler):
 
 
 async def answer_question(question: str) -> AskResponse:
-    """Run the smallest agent loop.
+    """Runs a bounded agent loop.
 
     1. Discover tools from the MCP server.
     2. Ask Claude the user's question while showing it those tools.
     3. If Claude answers directly, return that answer.
     4. If Claude requests a tool, the host executes it through MCP.
-    5. Send the tool result back to Claude for the final answer.
+    5. Send the tool result back to Claude and continue until answer or limit.
     """
     settings = get_settings()
     trace = TraceLogger(settings.trace_dir)
@@ -76,11 +78,11 @@ async def answer_question(question: str) -> AskResponse:
         question=question if settings.log_raw_prompts else "[hidden]",
     )
 
-    async with MCPToolBridge(settings.mcp_weather_url) as mcp:
+    async with MCPToolBridge(settings.mcp_server_url) as mcp:
         claude_tools = await mcp.list_anthropic_tools()
         trace.record(
             "mcp.tools.listed",
-            mcp_url=settings.mcp_weather_url,
+            mcp_url=settings.mcp_server_url,
             tools=claude_tools if settings.log_raw_prompts else tool_names(claude_tools),
         )
 
@@ -93,107 +95,106 @@ async def answer_question(question: str) -> AskResponse:
         model = settings.require_claude_model()
 
         messages: list[MessageParam] = [{"role": "user", "content": question}]
+        used_tools: list[str] = []
+        model_call_number = 0
+        tool_rounds_used = 0
 
-        trace.record(
-            "model.request.first",
-            model=model,
-            messages=messages if settings.log_raw_prompts else "[hidden]",
-            tools=claude_tools if settings.log_raw_prompts else tool_names(claude_tools),
-        )
-
-        first_response = client.messages.create(
-            model=model,
-            max_tokens=300,
-            messages=messages,
-            tools=claude_tools,
-        )
-
-        trace.record(
-            "model.response.first",
-            response=first_response if settings.log_raw_prompts else "[hidden]",
-        )
-
-        tool_uses = [
-            block
-            for block in first_response.content
-            if isinstance(block, ToolUseBlock)
-        ]
-
-        if not tool_uses:
-            answer = "".join(
-                block.text
-                for block in first_response.content
-                if isinstance(block, TextBlock)
-            ).strip()
-            trace.record("answer.ready", answer=answer, used_tools=[])
-            return AskResponse(
-                answer=answer,
-                used_tools=[],
-                run_id=trace.run_id,
-                trace_file=str(trace.path),
+        while True:
+            model_call_number += 1
+            trace.record(
+                "model.request",
+                round=model_call_number,
+                model=model,
+                messages=messages if settings.log_raw_prompts else "[hidden]",
+                tools=claude_tools if settings.log_raw_prompts else tool_names(claude_tools),
             )
 
-        tool_use = tool_uses[0]
-        trace.record(
-            "tool.selected",
-            name=tool_use.name,
-            input=tool_use.input,
-            tool_use_id=tool_use.id,
-        )
+            response = client.messages.create(
+                model=model,
+                max_tokens=300,
+                messages=messages,
+                tools=claude_tools,
+            )
 
-        tool_result = await mcp.call_tool(tool_use.name, tool_use.input)
-        trace.record("tool.result", name=tool_use.name, result=tool_result)
+            trace.record(
+                "model.response",
+                round=model_call_number,
+                response=response if settings.log_raw_prompts else "[hidden]",
+            )
 
-        # Preserve Claude's tool request, then provide the host-executed result.
-        messages.append(
-            {
-                "role": "assistant",
-                "content": cast(Any, first_response.content),
-            }
-        )
+            tool_uses = [
+                block
+                for block in response.content
+                if isinstance(block, ToolUseBlock)
+            ]
 
-        messages.append(
-            {
-                "role": "user",
-                "content": [
+            if not tool_uses:
+                answer = text_from_blocks(response.content)
+                trace.record("answer.ready", answer=answer, used_tools=used_tools)
+                return AskResponse(
+                    answer=answer,
+                    used_tools=used_tools,
+                    run_id=trace.run_id,
+                    trace_file=str(trace.path),
+                )
+
+            if tool_rounds_used >= settings.max_tool_rounds:
+                answer = (
+                    "Stopped before completing because the agent reached "
+                    f"MAX_TOOL_ROUNDS={settings.max_tool_rounds}."
+                )
+                trace.record(
+                    "agent.max_rounds_reached",
+                    requested_tools=[tool_use.name for tool_use in tool_uses],
+                    used_tools=used_tools,
+                )
+                return AskResponse(
+                    answer=answer,
+                    used_tools=used_tools,
+                    run_id=trace.run_id,
+                    trace_file=str(trace.path),
+                )
+
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": cast(Any, response.content),
+                }
+            )
+
+            tool_results: list[dict[str, str]] = []
+            tool_rounds_used += 1
+            for tool_use in tool_uses:
+                trace.record(
+                    "tool.selected",
+                    round=model_call_number,
+                    name=tool_use.name,
+                    input=tool_use.input,
+                    tool_use_id=tool_use.id,
+                )
+
+                tool_result = await mcp.call_tool(tool_use.name, tool_use.input)
+                used_tools.append(tool_use.name)
+                trace.record(
+                    "tool.result",
+                    round=model_call_number,
+                    name=tool_use.name,
+                    result=tool_result,
+                )
+                tool_results.append(
                     {
                         "type": "tool_result",
                         "tool_use_id": tool_use.id,
                         "content": json.dumps(tool_result),
                     }
-                ],
-            }
-        )
+                )
 
-        trace.record(
-            "model.request.final",
-            model=model,
-            messages=messages if settings.log_raw_prompts else "[hidden]",
-            tools=claude_tools if settings.log_raw_prompts else tool_names(claude_tools),
-        )
-        final_response = client.messages.create(
-            model=model,
-            max_tokens=300,
-            messages=messages,
-            tools=claude_tools,
-        )
-        trace.record(
-            "model.response.final",
-            response=final_response if settings.log_raw_prompts else "[hidden]",
-        )
-
-        answer = "".join(
-            block.text
-            for block in final_response.content
-            if isinstance(block, TextBlock)
-        ).strip()
-        trace.record("answer.ready", answer=answer, used_tools=[tool_use.name])
-        return AskResponse(
-            answer=answer,
-            used_tools=[tool_use.name],
-            run_id=trace.run_id,
-            trace_file=str(trace.path),
-        )
+            messages.append(
+                {
+                    "role": "user",
+                    "content": cast(Any, tool_results),
+                }
+            )
 
 
 def tool_names(tools: list[Any]) -> list[str]:
@@ -201,6 +202,14 @@ def tool_names(tools: list[Any]) -> list[str]:
         str(tool.get("name", "unknown")) if isinstance(tool, dict) else "unknown"
         for tool in tools
     ]
+
+
+def text_from_blocks(blocks: list[Any]) -> str:
+    return "".join(
+        block.text
+        for block in blocks
+        if isinstance(block, TextBlock)
+    ).strip()
 
 
 if __name__ == "__main__":
