@@ -22,6 +22,7 @@ async def run_agent_loop(
     mcp: MCPToolBridge,
     settings: Settings,
     trace: TraceLogger,
+    system: str,
 ) -> AskResponse:
     messages: list[MessageParam] = [{"role": "user", "content": question}]
     used_tools: list[str] = []
@@ -38,6 +39,7 @@ async def run_agent_loop(
             trace=trace,
             settings=settings,
             round_number=model_call_number,
+            system=system,
         )
 
         tool_uses = get_tool_uses(response)
@@ -121,6 +123,7 @@ def call_model(
     trace: TraceLogger,
     settings: Settings,
     round_number: int,
+    system: str,
 ):
     trace.record(
         "model.request",
@@ -135,6 +138,7 @@ def call_model(
         max_tokens=300,
         messages=messages,
         tools=tools,
+        system=system,
     )
 
     trace.record(
