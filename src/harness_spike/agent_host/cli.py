@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from harness_spike.agent_host.model_server import ask
+from harness_spike.agent_host.agent import ask
 
 
 def main() -> None:

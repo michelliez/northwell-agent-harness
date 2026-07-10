@@ -15,9 +15,11 @@ from harness_spike.agent_host.trace_logger import TraceLogger
 from harness_spike.config import get_settings
 from harness_spike.gates import policy_gate
 
+#Used by HTTP handler, Pydantic model for HTTP input, expects one question
 class AskRequest(BaseModel):
     question: str = Field(min_length=1)
 
+#Defines the shape of final response from agent
 class AskResponse(BaseModel):
     answer: str
     used_tools: list[str]
@@ -27,7 +29,7 @@ class AskResponse(BaseModel):
     policy_reason: str | None = None
     matched_term: str | None = None
 
-
+#CLI needs dict, converts agent response into a dictionary
 async def ask(question: str) -> dict[str, Any]:
     """CLI-friendly wrapper around the same agent logic used by HTTP."""
     response = await answer_question(question)

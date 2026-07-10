@@ -54,12 +54,16 @@ Copy-Item .env.example .env
 
 Fill in `.env` with AI Hub values. Do not commit `.env`.
 
+Use `uv run --no-editable` for the spike commands. On Python 3.14/macOS,
+editable installs can rely on a `.pth` file that may be marked hidden, which
+causes `ModuleNotFoundError: No module named 'harness_spike'`.
+
 ## Run The Dummy Data Catalog MCP Server
 
 Terminal 1:
 
 ```powershell
-uv run nh-spike-data-catalog
+uv run --no-editable nh-spike-data-catalog
 ```
 
 This starts the MCP tool server at:
@@ -73,7 +77,7 @@ http://localhost:8000/mcp
 Terminal 2:
 
 ```powershell
-uv run nh-spike-agent "What data would I need to answer how many patients had visits last month?" --json
+uv run --no-editable nh-spike-agent "What data would I need to answer how many patients had visits last month?" --json
 ```
 
 This calls the model through AI Hub. Do not run prompts unless model/API usage is
@@ -103,7 +107,7 @@ primary key and description.
 Blocked prompts return before model or tool routing:
 
 ```powershell
-uv run nh-spike-agent "Show me patient names" --json
+uv run --no-editable nh-spike-agent "Show me patient names" --json
 ```
 
 Expected policy-gate pattern:
