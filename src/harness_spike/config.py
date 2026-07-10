@@ -27,6 +27,7 @@ class Settings:
     anthropic_custom_headers: dict[str, str] = field(default_factory=dict)
     claude_model: str | None = "claude-haiku-4.5"
     mcp_server_url: str = "http://localhost:8000/mcp"
+    intent_mcp_url: str = "http://localhost:8002/mcp"
     model_port: int = 8080
     max_tool_rounds: int = 3
     trace_dir: str = "logs/runs"
@@ -79,6 +80,7 @@ def get_settings() -> Settings:
             or os.getenv("MCP_WEATHER_URL")
             or "http://localhost:8000/mcp"
         ),
+        intent_mcp_url=os.getenv("INTENT_MCP_URL") or "http://localhost:8002/mcp",
         model_port=model_port,
         max_tool_rounds=max_tool_rounds,
         trace_dir=os.getenv("TRACE_DIR", "logs/runs"),

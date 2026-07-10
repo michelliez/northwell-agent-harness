@@ -15,6 +15,7 @@ This spike demonstrates a small agentic loop:
 user prompt
 -> agent host
 -> deterministic policy gate
+-> intent classifier MCP node
 -> model decides whether to call a tool
 -> MCP tool server runs bounded dummy tools
 -> agent host returns the final answer and trace
@@ -39,6 +40,8 @@ Evaluator should flag: wrong tool input, even if the tool returned valid data.
 - `mcp_servers`: owns dummy MCP tools such as data catalog or weather tools.
 - `gates`: owns deterministic safety checks that run before model or tool
   routing.
+- `intent_classifier`: classifies allowed requests for bounded routing metadata before
+  the main model and catalog are contacted.
 - future `evaluators`: should judge tool choice, tool input, tool output usage,
   and final answer grounding.
 
@@ -72,9 +75,26 @@ This starts the MCP tool server at:
 http://localhost:8000/mcp
 ```
 
-## Run The Agent CLI
+## Run The Intent Classifier MCP Server
 
 Terminal 2:
+
+```powershell
+uv run --no-editable nh-spike-intent
+```
+
+This starts the classifier MCP server at:
+
+```text
+http://localhost:8002/mcp
+```
+
+The classifier uses the configured AI Hub model, returns structured intent metadata,
+and does not answer questions or access catalog data.
+
+## Run The Agent CLI
+
+Terminal 3:
 
 ```powershell
 uv run --no-editable nh-spike-agent "What data would I need to answer how many patients had visits last month?" --json

@@ -16,3 +16,5 @@ class AskResponse(BaseModel):
     allowed: bool = True
     policy_reason: str | None = None
     matched_term: str | None = None
+    intent: str | None = None
+    intent_confidence: float | None = None
