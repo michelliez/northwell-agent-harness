@@ -28,7 +28,6 @@ class Settings:
     claude_model: str | None = "claude-haiku-4.5"
     mcp_server_url: str = "http://localhost:8000/mcp"
     intent_mcp_url: str = "http://localhost:8002/mcp"
-    model_port: int = 8080
     max_tool_rounds: int = 3
     trace_dir: str = "logs/runs"
     log_raw_prompts: bool = False
@@ -58,13 +57,9 @@ def get_settings() -> Settings:
     load_dotenv()
 
     try:
-        model_port = _int_env("MODEL_PORT", 8080)
         max_tool_rounds = _int_env("MAX_TOOL_ROUNDS", 3)
     except ValueError as exc:
-        raise RuntimeError("MODEL_PORT and MAX_TOOL_ROUNDS must be integers.") from exc
-
-    if model_port < 1 or model_port > 65535:
-        raise RuntimeError("MODEL_PORT must be between 1 and 65535.")
+        raise RuntimeError("MAX_TOOL_ROUNDS must be an integer.") from exc
     if max_tool_rounds < 0:
         raise RuntimeError("MAX_TOOL_ROUNDS must be 0 or greater.")
 
@@ -75,13 +70,8 @@ def get_settings() -> Settings:
             os.getenv("ANTHROPIC_CUSTOM_HEADERS", "")
         ),
         claude_model=os.getenv("CLAUDE_MODEL") or "claude-haiku-4.5",
-        mcp_server_url=(
-            os.getenv("MCP_SERVER_URL")
-            or os.getenv("MCP_WEATHER_URL")
-            or "http://localhost:8000/mcp"
-        ),
+        mcp_server_url=os.getenv("MCP_SERVER_URL") or "http://localhost:8000/mcp",
         intent_mcp_url=os.getenv("INTENT_MCP_URL") or "http://localhost:8002/mcp",
-        model_port=model_port,
         max_tool_rounds=max_tool_rounds,
         trace_dir=os.getenv("TRACE_DIR", "logs/runs"),
         log_raw_prompts=_bool_env("LOG_RAW_PROMPTS", False),

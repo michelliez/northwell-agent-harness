@@ -12,7 +12,7 @@ class MCPToolBridge:
     """Small adapter between the MCP server and Anthropic's tool API.
 
     MCP and Anthropic describe tools with slightly different Python objects.
-    This class keeps that translation out of the agent loop in model_server.py.
+    This class keeps that translation out of the agent host.
     """
 
     def __init__(self, server_source: str) -> None:

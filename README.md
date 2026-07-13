@@ -25,19 +25,15 @@ The current value is not SQL generation. The higher-value direction is agent
 evaluation: checking whether the model chose the right tool, supplied the right
 tool input, and used tool output without muddying the final answer.
 
-Example failure to evaluate later:
-
-```text
-User asks: "What is the weather in New York?"
-Model calls: get_weather(location="Tokyo")
-Evaluator should flag: wrong tool input, even if the tool returned valid data.
-```
+Example failure to evaluate later: a user asks which data supports a visit
+count, and the model calls an unrelated catalog tool or claims a column it has
+not observed. The evaluator should flag either failure.
 
 ## Current Nodes
 
 - `agent_host`: owns the policy gate, model loop, tool-call execution, and
   trace logging.
-- `mcp_servers`: owns dummy MCP tools such as data catalog or weather tools.
+- `mcp_servers`: owns the dummy data-catalog and intent-classifier MCP tools.
 - `gates`: owns deterministic safety checks that run before model or tool
   routing.
 - `intent_classifier`: classifies allowed requests for bounded routing metadata before
@@ -193,3 +189,31 @@ The next useful node is an evaluator that can inspect:
 - final answer
 
 and return a structured pass/fail result with reasons.
+
+## Run Deterministic Evaluations
+
+The checked-in suites contain synthetic prompts only. The evaluator runs each
+case through the host, reads its trace, and checks policy decisions, node
+ordering, catalog calls, and simple grounding expectations. It does not use an
+LLM judge; it will make AI Hub calls for allowed cases, so start both MCP
+servers and use it only when model usage is approved.
+
+After pulling this change, stop any existing MCP servers and run `uv sync` once
+before restarting them; a running Windows console script can prevent `uv` from
+refreshing the new `nh-spike-eval` entry point.
+
+```powershell
+uv run --no-editable nh-spike-eval --suite smoke
+```
+
+Reports are written under `evals/results/` and are ignored by Git. A non-zero
+exit code means one or more assertions failed. The initial smoke suite includes
+a grounding check that rejects an exact column name (`patient_id`) unless the
+host has actually obtained schema evidence; this is an intentional regression
+test for the currently observed hallucination.
+
+Run the broader synthetic adversarial suite with:
+
+```powershell
+uv run --no-editable nh-spike-eval --suite red_team
+```

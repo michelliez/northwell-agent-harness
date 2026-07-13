@@ -66,6 +66,7 @@ Examples:
   needs_clarification=false.
 """.strip()
 
+#anthropic tool schema
 INTENT_TOOL: dict[str, Any] = {
     "name": "emit_intent",
     "description": "Return the validated intent classification for the request.",
