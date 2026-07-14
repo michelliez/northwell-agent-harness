@@ -106,6 +106,36 @@ def test_classify_intent_fails_closed_on_low_confidence(
     }
 
 
+def test_classify_intent_accepts_general_question(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = _response(
+        {
+            "intent": "general_question",
+            "confidence": 0.91,
+            "risk_flags": [],
+            "recommended_action": "answer_without_tools",
+            "needs_clarification": False,
+        }
+    )
+    monkeypatch.setattr(intent, "Anthropic", lambda **_: FakeClient(response))
+    monkeypatch.setattr(
+        intent,
+        "get_settings",
+        lambda: SimpleNamespace(
+            require_anthropic_api_key=lambda: "test-key",
+            require_anthropic_base_url=lambda: "https://example.test",
+            anthropic_custom_headers={},
+            require_claude_model=lambda: "test-model",
+        ),
+    )
+
+    result = intent.classify_intent("What color is the sky?")
+
+    assert result["intent"] == "general_question"
+    assert result["recommended_action"] == "answer_without_tools"
+
+
 def test_classify_intent_rejects_missing_or_duplicate_tool_results(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -147,4 +177,6 @@ def test_v2_prompt_covers_observed_adversarial_failure_modes() -> None:
     assert "metadata with patient-level output" in intent.CLASSIFIER_SYSTEM_PROMPT
     assert "safe_sql_generation" in intent.CLASSIFIER_SYSTEM_PROMPT
     assert "generate_sql" in intent.CLASSIFIER_SYSTEM_PROMPT
+    assert "general_question" in intent.CLASSIFIER_SYSTEM_PROMPT
+    assert "answer_without_tools" in intent.CLASSIFIER_SYSTEM_PROMPT
     assert '"Show me the schema" means unknown, clarify' in intent.CLASSIFIER_SYSTEM_PROMPT

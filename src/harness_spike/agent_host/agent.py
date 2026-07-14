@@ -41,6 +41,8 @@ async def answer_question(question: str) -> AskResponse:
 
     if classification.intent == "safe_sql_generation":
         return await run_safe_sql_workflow(question, classification, settings, trace)
+    if classification.intent == "general_question":
+        return answer_general_question(question, classification, settings, trace)
 
     async with MCPToolBridge(settings.mcp_server_url) as mcp:
         tools = await discover_tools(mcp, settings, trace)
@@ -130,6 +132,43 @@ def routing_metadata(classification: IntentResult) -> str:
         f"intent={classification.intent}; confidence={classification.confidence:.2f}; "
         f"recommended_action={classification.recommended_action}; "
         f"risk_flags={classification.risk_flags}"
+    )
+
+
+def answer_general_question(
+    question: str,
+    classification: IntentResult,
+    settings: Settings,
+    trace: TraceLogger,
+) -> AskResponse:
+    """Answer a harmless general question without exposing any MCP tools."""
+    trace.record("general_question.started", intent=classification.model_dump())
+    client = build_model_client(settings)
+    response = call_model(
+        client=client,
+        model=settings.require_claude_model(),
+        messages=[{"role": "user", "content": question}],
+        tools=[],
+        trace=trace,
+        settings=settings,
+        round_number=1,
+        system=(
+            "Answer the user's harmless general question directly. Do not claim "
+            "access to hospital data, local files, secrets, SQL execution, or "
+            "external tools."
+        ),
+    )
+    answer = "".join(
+        block.text for block in response.content if isinstance(block, TextBlock)
+    ).strip()
+    trace.record("answer.ready", answer=answer, used_tools=[])
+    return AskResponse(
+        answer=answer,
+        used_tools=[],
+        run_id=trace.run_id,
+        trace_file=str(trace.path),
+        intent=classification.intent,
+        intent_confidence=classification.confidence,
     )
 
 

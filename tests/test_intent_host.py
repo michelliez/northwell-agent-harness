@@ -26,6 +26,14 @@ class FakeBridge:
     async def call_tool(self, name: str, arguments: object) -> dict[str, object]:
         if "intent" in self.url:
             self.events.append(f"intent:{name}")
+            if isinstance(arguments, dict) and "sky" in str(arguments.get("question", "")).lower():
+                return {
+                    "intent": "general_question",
+                    "confidence": 0.91,
+                    "risk_flags": [],
+                    "recommended_action": "answer_without_tools",
+                    "needs_clarification": False,
+                }
             if isinstance(arguments, dict) and "sql" in str(arguments.get("question", "")).lower():
                 return {
                     "intent": "safe_sql_generation",
@@ -156,6 +164,27 @@ async def test_blocked_request_does_not_call_intent_node(
 
     assert result.allowed is False
     assert result.intent is None
+
+
+@pytest.mark.asyncio
+async def test_general_question_answers_without_catalog_tools(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    FakeBridge.events = []
+    client = FakeClient()
+    monkeypatch.setattr(agent, "get_settings", lambda: _settings(str(tmp_path)))
+    monkeypatch.setattr(agent, "MCPToolBridge", FakeBridge)
+    monkeypatch.setattr(agent, "build_model_client", lambda _: client)
+
+    result = await agent.answer_question("What color is the sky?")
+
+    assert result.intent == "general_question"
+    assert result.intent_confidence == 0.91
+    assert result.used_tools == []
+    assert result.answer == "catalog answer"
+    assert FakeBridge.events == ["intent:classify_intent", "model:create"]
+    assert client.messages.kwargs is not None
+    assert client.messages.kwargs["tools"] == []
 
 
 @pytest.mark.asyncio

@@ -13,12 +13,20 @@ VALID_INTENTS = {
     "schema_lookup",
     "aggregate_definition",
     "safe_sql_generation",
+    "general_question",
     "patient_specific_request",
     "policy_probe",
     "unsupported_sql_request",
     "unknown",
 }
-VALID_ACTIONS = {"search_tables", "get_table_schema", "generate_sql", "clarify", "refuse"}
+VALID_ACTIONS = {
+    "search_tables",
+    "get_table_schema",
+    "generate_sql",
+    "answer_without_tools",
+    "clarify",
+    "refuse",
+}
 VALID_SAFETY_CLASSES = {"safe", "must_clarify", "must_refuse"}
 
 

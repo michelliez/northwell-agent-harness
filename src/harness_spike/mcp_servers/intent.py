@@ -18,6 +18,7 @@ IntentName = Literal[
     "schema_lookup",
     "aggregate_definition",
     "safe_sql_generation",
+    "general_question",
     "patient_specific_request",
     "policy_probe",
     "unsupported_sql_request",
@@ -27,6 +28,7 @@ RecommendedAction = Literal[
     "search_tables",
     "get_table_schema",
     "generate_sql",
+    "answer_without_tools",
     "clarify",
     "refuse",
 ]
@@ -71,7 +73,11 @@ Apply this order when a request contains more than one intent:
 5. For a purely safe non-SQL request, use `table_discovery` for finding a table,
    `schema_lookup` for fields of a named table, or `aggregate_definition` for
    the data needed to define a count, rate, or trend.
-6. Use `unknown`, `clarify`, and `needs_clarification=true` when the target
+6. `general_question`: The request is a harmless general-knowledge or
+   conversational question that does not need hospital catalog tools, SQL,
+   patient data, secrets, local files, or policy changes. Return
+   `answer_without_tools`.
+7. Use `unknown`, `clarify`, and `needs_clarification=true` when the target
    table, metric, or request context is missing. Do not guess a safe route.
 
 Examples:
@@ -92,6 +98,8 @@ Examples:
   generate_sql, needs_clarification=false.
 - "Write SQL to select patient_id from encounters" means unsupported_sql_request,
   refuse, needs_clarification=false.
+- "What color is the sky?" means general_question, answer_without_tools,
+  needs_clarification=false.
 """.strip()
 
 #anthropic tool schema
@@ -108,6 +116,7 @@ INTENT_TOOL: dict[str, Any] = {
                     "schema_lookup",
                     "aggregate_definition",
                     "safe_sql_generation",
+                    "general_question",
                     "patient_specific_request",
                     "policy_probe",
                     "unsupported_sql_request",
@@ -122,6 +131,7 @@ INTENT_TOOL: dict[str, Any] = {
                     "search_tables",
                     "get_table_schema",
                     "generate_sql",
+                    "answer_without_tools",
                     "clarify",
                     "refuse",
                 ],
