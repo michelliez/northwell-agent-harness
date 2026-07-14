@@ -100,6 +100,9 @@ DESTRUCTIVE_DB_TERMS: dict[str, str] = {
 
 POLICY_MANIPULATION_TERMS: dict[str, str] = {
     "ignore policy": "Tries to change rules",
+    "ignore rules": "Tries to change rules",
+    "ignore the rules": "Tries to change rules",
+    "ignore all rules": "Tries to change rules",
     "ignore permissions": "Tries to change rules",
     "bypass": "Tries to change rules",
     "override": "Tries to change rules",
