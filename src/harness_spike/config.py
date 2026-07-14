@@ -25,7 +25,7 @@ class Settings:
     anthropic_api_key: str | None
     anthropic_base_url: str | None
     anthropic_custom_headers: dict[str, str] = field(default_factory=dict)
-    claude_model: str | None = "claude-haiku-4.5"
+    claude_model: str | None = "claude-haiku-4-5-20251001"
     mcp_server_url: str = "http://localhost:8000/mcp"
     intent_mcp_url: str = "http://localhost:8002/mcp"
     max_tool_rounds: int = 3
@@ -69,7 +69,7 @@ def get_settings() -> Settings:
         anthropic_custom_headers=parse_custom_headers(
             os.getenv("ANTHROPIC_CUSTOM_HEADERS", "")
         ),
-        claude_model=os.getenv("CLAUDE_MODEL") or "claude-haiku-4.5",
+        claude_model=os.getenv("CLAUDE_MODEL") or "claude-haiku-4-5-20251001",
         mcp_server_url=os.getenv("MCP_SERVER_URL") or "http://localhost:8000/mcp",
         intent_mcp_url=os.getenv("INTENT_MCP_URL") or "http://localhost:8002/mcp",
         max_tool_rounds=max_tool_rounds,
