@@ -104,3 +104,46 @@ def test_classify_intent_fails_closed_on_low_confidence(
         "recommended_action": "clarify",
         "needs_clarification": True,
     }
+
+
+def test_classify_intent_rejects_missing_or_duplicate_tool_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = SimpleNamespace(
+        require_anthropic_api_key=lambda: "test-key",
+        require_anthropic_base_url=lambda: "https://example.test",
+        anthropic_custom_headers={},
+        require_claude_model=lambda: "test-model",
+    )
+    monkeypatch.setattr(intent, "get_settings", lambda: settings)
+    monkeypatch.setattr(intent, "Anthropic", lambda **_: FakeClient(SimpleNamespace(content=[])))
+
+    with pytest.raises(RuntimeError, match="exactly one"):
+        intent.classify_intent("Which tables are relevant?")
+
+
+def test_intent_tool_contract_is_closed_and_versioned() -> None:
+    assert intent.INTENT_PROMPT_VERSION == "v2"
+    assert intent.INTENT_TOOL["name"] == "emit_intent"
+    assert intent.INTENT_TOOL["input_schema"]["additionalProperties"] is False
+    assert set(intent.INTENT_TOOL["input_schema"]["required"]) == {
+        "intent",
+        "confidence",
+        "risk_flags",
+        "recommended_action",
+        "needs_clarification",
+    }
+
+
+@pytest.mark.asyncio
+async def test_intent_mcp_exposes_only_classifier_tool() -> None:
+    tools = await intent.mcp.list_tools()
+    assert [tool.name for tool in tools] == ["classify_intent"]
+
+
+def test_v2_prompt_covers_observed_adversarial_failure_modes() -> None:
+    assert "Apply this order when a request contains more than one intent" in intent.CLASSIFIER_SYSTEM_PROMPT
+    assert "force an intent label" in intent.CLASSIFIER_SYSTEM_PROMPT
+    assert "metadata with patient-level output" in intent.CLASSIFIER_SYSTEM_PROMPT
+    assert "pseudocode, syntax, a CTE, or a join" in intent.CLASSIFIER_SYSTEM_PROMPT
+    assert '"Show me the schema" means unknown, clarify' in intent.CLASSIFIER_SYSTEM_PROMPT
