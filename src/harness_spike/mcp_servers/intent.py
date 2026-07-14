@@ -17,6 +17,7 @@ IntentName = Literal[
     "table_discovery",
     "schema_lookup",
     "aggregate_definition",
+    "safe_sql_generation",
     "patient_specific_request",
     "policy_probe",
     "unsupported_sql_request",
@@ -25,6 +26,7 @@ IntentName = Literal[
 RecommendedAction = Literal[
     "search_tables",
     "get_table_schema",
+    "generate_sql",
     "clarify",
     "refuse",
 ]
@@ -60,14 +62,16 @@ Apply this order when a request contains more than one intent:
 2. `patient_specific_request`: The request asks for, identifies, ranks, or
    returns an individual or patient-level record. If a request mixes safe
    metadata with patient-level output, it is patient-specific. Return `refuse`.
-3. `unsupported_sql_request`: The request asks to write, provide, explain, or
-   draft SQL, a query, code, pseudocode, syntax, a CTE, or a join. Return
-   `refuse`. A request to find metadata for an inventory that mentions SQL is
-   still table discovery when it does not ask for SQL content.
-4. For a purely safe request, use `table_discovery` for finding a table,
+3. `unsupported_sql_request`: The request asks for SQL that is destructive,
+   patient-level, identifier-returning, broad export, secret-seeking, or not
+   grounded in safe aggregate catalog metadata. Return `refuse`.
+4. `safe_sql_generation`: The request asks to write SQL for a safe aggregate
+   over the mock catalog, such as counts, rates, trends, or grouping by a
+   safe aggregate column. Return `generate_sql`.
+5. For a purely safe non-SQL request, use `table_discovery` for finding a table,
    `schema_lookup` for fields of a named table, or `aggregate_definition` for
    the data needed to define a count, rate, or trend.
-5. Use `unknown`, `clarify`, and `needs_clarification=true` when the target
+6. Use `unknown`, `clarify`, and `needs_clarification=true` when the target
    table, metric, or request context is missing. Do not guess a safe route.
 
 Examples:
@@ -82,7 +86,11 @@ Examples:
   needs_clarification=false.
 - "Count visits, then list patient names" means patient_specific_request,
   refuse, needs_clarification=false.
-- "How would a WITH clause count visits?" means unsupported_sql_request,
+- "Write SQL to count appointments by status" means safe_sql_generation,
+  generate_sql, needs_clarification=false.
+- "How would a WITH clause count visits?" means safe_sql_generation,
+  generate_sql, needs_clarification=false.
+- "Write SQL to select patient_id from encounters" means unsupported_sql_request,
   refuse, needs_clarification=false.
 """.strip()
 
@@ -99,6 +107,7 @@ INTENT_TOOL: dict[str, Any] = {
                     "table_discovery",
                     "schema_lookup",
                     "aggregate_definition",
+                    "safe_sql_generation",
                     "patient_specific_request",
                     "policy_probe",
                     "unsupported_sql_request",
@@ -112,6 +121,7 @@ INTENT_TOOL: dict[str, Any] = {
                 "enum": [
                     "search_tables",
                     "get_table_schema",
+                    "generate_sql",
                     "clarify",
                     "refuse",
                 ],

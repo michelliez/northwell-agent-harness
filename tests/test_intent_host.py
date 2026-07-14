@@ -24,14 +24,60 @@ class FakeBridge:
         return []
 
     async def call_tool(self, name: str, arguments: object) -> dict[str, object]:
-        self.events.append(f"intent:{name}")
-        return {
-            "intent": "aggregate_definition",
-            "confidence": 0.93,
-            "risk_flags": [],
-            "recommended_action": "search_tables",
-            "needs_clarification": False,
-        }
+        if "intent" in self.url:
+            self.events.append(f"intent:{name}")
+            if isinstance(arguments, dict) and "sql" in str(arguments.get("question", "")).lower():
+                return {
+                    "intent": "safe_sql_generation",
+                    "confidence": 0.94,
+                    "risk_flags": [],
+                    "recommended_action": "generate_sql",
+                    "needs_clarification": False,
+                }
+            return {
+                "intent": "aggregate_definition",
+                "confidence": 0.93,
+                "risk_flags": [],
+                "recommended_action": "search_tables",
+                "needs_clarification": False,
+            }
+        if "catalog" in self.url:
+            self.events.append(f"catalog:{name}")
+            if name == "search_tables":
+                return {
+                    "candidates": [
+                        {"table_name": "appointments"},
+                    ],
+                }
+            return {
+                "table_name": "appointments",
+                "columns": [
+                    {"name": "status", "safety_label": "safe_aggregate"},
+                ],
+            }
+        if "sql-generation" in self.url:
+            self.events.append(f"sql_generation:{name}")
+            return {
+                "sql": "SELECT status, COUNT(*) AS appointment_count FROM appointments GROUP BY status;",
+                "tables": ["appointments"],
+                "notes": ["Generated from mock schema."],
+                "refused": False,
+                "reason": None,
+                "source": "claude_sql_generation",
+                "is_dummy": True,
+            }
+        if "sql-validation" in self.url:
+            self.events.append(f"sql_validation:{name}")
+            return {
+                "allowed": True,
+                "reason": None,
+                "normalized_sql": "SELECT status, COUNT(*) AS appointment_count FROM appointments GROUP BY status;",
+                "tables": ["appointments"],
+                "notes": ["SQL passed validation."],
+                "source": "deterministic_sql_validation",
+                "is_dummy": True,
+            }
+        raise AssertionError(f"Unexpected bridge URL: {self.url}")
 
 
 class FakeMessages:
@@ -57,6 +103,8 @@ def _settings(trace_dir: str) -> SimpleNamespace:
         log_raw_prompts=False,
         intent_mcp_url="http://intent.test/mcp",
         mcp_server_url="http://catalog.test/mcp",
+        sql_generation_mcp_url="http://sql-generation.test/mcp",
+        sql_validation_mcp_url="http://sql-validation.test/mcp",
         max_tool_rounds=3,
         require_anthropic_api_key=lambda: "test-key",
         require_anthropic_base_url=lambda: "https://example.test",
@@ -108,3 +156,32 @@ async def test_blocked_request_does_not_call_intent_node(
 
     assert result.allowed is False
     assert result.intent is None
+
+
+@pytest.mark.asyncio
+async def test_safe_sql_request_searches_generates_and_validates(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    FakeBridge.events = []
+    monkeypatch.setattr(agent, "get_settings", lambda: _settings(str(tmp_path)))
+    monkeypatch.setattr(agent, "MCPToolBridge", FakeBridge)
+
+    result = await agent.answer_question("Write SQL to count appointments by status")
+
+    assert result.intent == "safe_sql_generation"
+    assert result.intent_confidence == 0.94
+    assert result.used_tools == [
+        "search_tables",
+        "get_table_schema",
+        "generate_sql",
+        "validate_sql",
+    ]
+    assert "```sql" in result.answer
+    assert "GROUP BY status" in result.answer
+    assert FakeBridge.events == [
+        "intent:classify_intent",
+        "catalog:search_tables",
+        "catalog:get_table_schema",
+        "sql_generation:generate_sql",
+        "sql_validation:validate_sql",
+    ]

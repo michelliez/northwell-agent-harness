@@ -11,7 +11,7 @@ from harness_spike.agent_host.mcp_bridge import MCPToolBridge
 from harness_spike.agent_host.schemas import AskResponse
 from harness_spike.agent_host.trace_logger import TraceLogger
 from harness_spike.config import Settings, get_settings
-from harness_spike.gates import policy_gate
+from harness_spike.policy.gates import policy_gate
 from harness_spike.mcp_servers.intent import IntentResult, MIN_CONFIDENCE
 
 
@@ -38,6 +38,9 @@ async def answer_question(question: str) -> AskResponse:
     if isinstance(classification_or_response, AskResponse):
         return classification_or_response
     classification = classification_or_response
+
+    if classification.intent == "safe_sql_generation":
+        return await run_safe_sql_workflow(question, classification, settings, trace)
 
     async with MCPToolBridge(settings.mcp_server_url) as mcp:
         tools = await discover_tools(mcp, settings, trace)
@@ -127,6 +130,164 @@ def routing_metadata(classification: IntentResult) -> str:
         f"intent={classification.intent}; confidence={classification.confidence:.2f}; "
         f"recommended_action={classification.recommended_action}; "
         f"risk_flags={classification.risk_flags}"
+    )
+
+
+async def run_safe_sql_workflow(
+    question: str,
+    classification: IntentResult,
+    settings: Settings,
+    trace: TraceLogger,
+) -> AskResponse:
+    """Plan/search schema, generate SQL, then validate it before returning."""
+    used_tools: list[str] = []
+    trace.record("sql.workflow.started", intent=classification.model_dump())
+
+    async with MCPToolBridge(settings.mcp_server_url) as catalog_mcp:
+        search_result = await call_workflow_tool(
+            catalog_mcp,
+            "search_tables",
+            {"question": question},
+            trace,
+            used_tools,
+        )
+        schemas = await fetch_candidate_schemas(
+            catalog_mcp, search_result, trace, used_tools
+        )
+
+    schema_context = json.dumps(
+        {
+            "search_tables": search_result,
+            "schemas": schemas,
+        }
+    )
+
+    async with MCPToolBridge(settings.sql_generation_mcp_url) as generation_mcp:
+        generated = await call_workflow_tool(
+            generation_mcp,
+            "generate_sql",
+            {"question": question, "schema_context": schema_context},
+            trace,
+            used_tools,
+        )
+
+    if not isinstance(generated, dict):
+        trace.record("sql.generation.failed", error="invalid_result")
+        return sql_workflow_response(
+            "I couldn't generate SQL in a structured format, so I stopped.",
+            used_tools,
+            trace,
+            classification,
+        )
+    if generated.get("refused") or not generated.get("sql"):
+        trace.record("sql.generation.refused", result=generated)
+        return sql_workflow_response(
+            "I can't generate SQL for that request because the SQL generation "
+            f"node refused it: {generated.get('reason') or 'unsafe_or_unsupported_request'}.",
+            used_tools,
+            trace,
+            classification,
+        )
+
+    async with MCPToolBridge(settings.sql_validation_mcp_url) as validation_mcp:
+        validation = await call_workflow_tool(
+            validation_mcp,
+            "validate_sql",
+            {"sql": generated["sql"], "tables": generated.get("tables", [])},
+            trace,
+            used_tools,
+        )
+
+    if not isinstance(validation, dict):
+        trace.record("sql.validation.failed", error="invalid_result")
+        return sql_workflow_response(
+            "I couldn't validate the generated SQL, so I stopped before returning it.",
+            used_tools,
+            trace,
+            classification,
+        )
+    if not validation.get("allowed"):
+        trace.record("sql.validation.blocked", result=validation)
+        return sql_workflow_response(
+            "I generated a SQL candidate, but the SQL validation node blocked it: "
+            f"{validation.get('reason') or 'failed_validation'}.",
+            used_tools,
+            trace,
+            classification,
+        )
+
+    sql = validation.get("normalized_sql") or generated["sql"]
+    answer = f"Here is validated mock SQL for that aggregate request:\n\n```sql\n{sql}\n```"
+    trace.record("sql.workflow.completed", sql=sql, used_tools=used_tools)
+    return sql_workflow_response(answer, used_tools, trace, classification)
+
+
+async def call_workflow_tool(
+    mcp: MCPToolBridge,
+    name: str,
+    arguments: dict[str, Any],
+    trace: TraceLogger,
+    used_tools: list[str],
+) -> Any:
+    trace.record("tool.selected", name=name, input=arguments)
+    result = await mcp.call_tool(name, arguments)
+    used_tools.append(name)
+    trace.record("tool.result", name=name, result=result)
+    return result
+
+
+async def fetch_candidate_schemas(
+    catalog_mcp: MCPToolBridge,
+    search_result: Any,
+    trace: TraceLogger,
+    used_tools: list[str],
+) -> list[Any]:
+    table_names = candidate_table_names(search_result)
+    schemas = []
+    for table_name in table_names:
+        schemas.append(
+            await call_workflow_tool(
+                catalog_mcp,
+                "get_table_schema",
+                {"table_name": table_name},
+                trace,
+                used_tools,
+            )
+        )
+    return schemas
+
+
+def candidate_table_names(search_result: Any) -> list[str]:
+    if not isinstance(search_result, dict):
+        return []
+    candidates = search_result.get("candidates")
+    if not isinstance(candidates, list):
+        return []
+
+    table_names: list[str] = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        table_name = candidate.get("table_name")
+        if isinstance(table_name, str) and table_name not in table_names:
+            table_names.append(table_name)
+    return table_names
+
+
+def sql_workflow_response(
+    answer: str,
+    used_tools: list[str],
+    trace: TraceLogger,
+    classification: IntentResult,
+) -> AskResponse:
+    trace.record("answer.ready", answer=answer, used_tools=used_tools)
+    return AskResponse(
+        answer=answer,
+        used_tools=used_tools,
+        run_id=trace.run_id,
+        trace_file=str(trace.path),
+        intent=classification.intent,
+        intent_confidence=classification.confidence,
     )
 
 

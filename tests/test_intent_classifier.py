@@ -145,5 +145,6 @@ def test_v2_prompt_covers_observed_adversarial_failure_modes() -> None:
     assert "Apply this order when a request contains more than one intent" in intent.CLASSIFIER_SYSTEM_PROMPT
     assert "force an intent label" in intent.CLASSIFIER_SYSTEM_PROMPT
     assert "metadata with patient-level output" in intent.CLASSIFIER_SYSTEM_PROMPT
-    assert "pseudocode, syntax, a CTE, or a join" in intent.CLASSIFIER_SYSTEM_PROMPT
+    assert "safe_sql_generation" in intent.CLASSIFIER_SYSTEM_PROMPT
+    assert "generate_sql" in intent.CLASSIFIER_SYSTEM_PROMPT
     assert '"Show me the schema" means unknown, clarify' in intent.CLASSIFIER_SYSTEM_PROMPT

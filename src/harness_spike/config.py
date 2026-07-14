@@ -28,6 +28,8 @@ class Settings:
     claude_model: str | None = "claude-haiku-4-5-20251001"
     mcp_server_url: str = "http://localhost:8000/mcp"
     intent_mcp_url: str = "http://localhost:8002/mcp"
+    sql_generation_mcp_url: str = "http://localhost:8003/mcp"
+    sql_validation_mcp_url: str = "http://localhost:8004/mcp"
     max_tool_rounds: int = 3
     trace_dir: str = "logs/runs"
     log_raw_prompts: bool = False
@@ -72,6 +74,12 @@ def get_settings() -> Settings:
         claude_model=os.getenv("CLAUDE_MODEL") or "claude-haiku-4-5-20251001",
         mcp_server_url=os.getenv("MCP_SERVER_URL") or "http://localhost:8000/mcp",
         intent_mcp_url=os.getenv("INTENT_MCP_URL") or "http://localhost:8002/mcp",
+        sql_generation_mcp_url=(
+            os.getenv("SQL_GENERATION_MCP_URL") or "http://localhost:8003/mcp"
+        ),
+        sql_validation_mcp_url=(
+            os.getenv("SQL_VALIDATION_MCP_URL") or "http://localhost:8004/mcp"
+        ),
         max_tool_rounds=max_tool_rounds,
         trace_dir=os.getenv("TRACE_DIR", "logs/runs"),
         log_raw_prompts=_bool_env("LOG_RAW_PROMPTS", False),

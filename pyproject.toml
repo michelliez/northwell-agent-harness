@@ -16,6 +16,8 @@ dependencies = [
 nh-spike-agent = "harness_spike.agent_host.cli:main"
 nh-spike-data-catalog = "harness_spike.mcp_servers.data_catalog:main"
 nh-spike-intent = "harness_spike.mcp_servers.intent:main"
+nh-spike-sql-generation = "harness_spike.mcp_servers.sql_generation:main"
+nh-spike-sql-validation = "harness_spike.mcp_servers.sql_validation:main"
 nh-spike-eval = "harness_spike.evals.runner:main"
 
 [build-system]
