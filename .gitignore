@@ -6,6 +6,7 @@ dist/
 wheels/
 *.egg-info
 .mypy_cache/
+/.pytest_cache
 
 # Virtual environments
 .venv
@@ -15,5 +16,7 @@ claude-code.md
 .env
 logs/*
 !logs/.gitkeep
+evals/results/*
+!evals/results/.gitkeep
 pytest-cache-files-*
 pytest-cache-files-*/

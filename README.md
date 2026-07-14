@@ -25,25 +25,21 @@ The current value is not SQL generation. The higher-value direction is agent
 evaluation: checking whether the model chose the right tool, supplied the right
 tool input, and used tool output without muddying the final answer.
 
-Example failure to evaluate later:
-
-```text
-User asks: "What is the weather in New York?"
-Model calls: get_weather(location="Tokyo")
-Evaluator should flag: wrong tool input, even if the tool returned valid data.
-```
+Example failure to evaluate later: a user asks which data supports a visit
+count, and the model calls an unrelated catalog tool or claims a column it has
+not observed. The evaluator should flag either failure.
 
 ## Current Nodes
 
 - `agent_host`: owns the policy gate, model loop, tool-call execution, and
   trace logging.
-- `mcp_servers`: owns dummy MCP tools such as data catalog or weather tools.
+- `mcp_servers`: owns the dummy data-catalog and intent-classifier MCP tools.
 - `gates`: owns deterministic safety checks that run before model or tool
   routing.
 - `intent_classifier`: classifies allowed requests for bounded routing metadata before
   the main model and catalog are contacted.
-- future `evaluators`: should judge tool choice, tool input, tool output usage,
-  and final answer grounding.
+- `evals`: runs versioned, deterministic checks against the final response and
+  its trace.
 
 Keep model decisions and deterministic checks separate. The model may request an
 action; the host decides what is allowed to run.
@@ -173,23 +169,83 @@ developer can run it with `uv run <script-name>`.
 - Do not add real SQL execution, database credentials, or proprietary schemas
   in this repo.
 
-## Near-Term Consolidation Direction
+## Run Deterministic Evaluations
 
-For two interns, consolidate around one shared harness with 3-4 clear nodes:
+The checked-in suites contain synthetic prompts only. The evaluator runs each
+case through the host, reads its trace, and checks policy decisions, node
+ordering, catalog calls, and simple grounding expectations. It does not use an
+LLM judge; it will make AI Hub calls for allowed cases, so start both MCP
+servers and use it only when model usage is approved.
 
-```text
-agent host
--> MCP tools
--> evaluator node
--> deterministic gates
+After pulling this change, stop any existing MCP servers and run `uv sync` once
+before restarting them; a running Windows console script can prevent `uv` from
+refreshing the new `nh-spike-eval` entry point.
+
+```powershell
+uv run --no-editable nh-spike-eval --suite smoke
 ```
 
-The next useful node is an evaluator that can inspect:
+Reports are written under `evals/results/` and are ignored by Git. A non-zero
+exit code means one or more assertions failed. The initial smoke suite includes
+a grounding check that rejects an exact column name (`patient_id`) unless the
+host has actually obtained schema evidence; this is an intentional regression
+test for the currently observed hallucination.
 
-- original user prompt
-- tool selected
-- tool input
-- tool output
-- final answer
+Run the broader synthetic adversarial suite with:
 
-and return a structured pass/fail result with reasons.
+```powershell
+uv run --no-editable nh-spike-eval --suite red_team
+```
+## Threat Surface and Red-Team Plan
+
+This is a localhost-only, dummy-data POC. Its security claim is limited to
+safe routing and observable behavior: policy runs first, uncertain intent stops
+before catalog access, catalog use is traceable, and evaluation cases can catch
+regressions. It does **not** demonstrate production authorization, PHI
+protection, network isolation, BigQuery controls, or database access.
+
+The important trust boundaries are:
+
+```text
+user prompt -> host/policy -> intent MCP and AI Hub
+                         -> catalog MCP
+                         -> local trace files
+```
+
+Build the red-team corpus in this order:
+
+1. **Boundary checks:** direct PHI, writes, and policy-bypass prompts must be
+   blocked with no downstream intent, model, or catalog event.
+2. **Routing checks:** safe discovery, schema, and ambiguous prompts must
+   select the expected intent/action or safely clarify.
+3. **Tool and grounding checks:** only allowlisted tools run; a response may
+   name only tables/columns actually returned by a catalog tool.
+4. **Failure checks:** unavailable, malformed, or low-confidence intent must
+   stop before catalog use; catalog failure must not produce invented facts.
+5. **Known gaps to test and present:** the policy gate is lexical and can have
+   bypasses/false positives; intent's `refuse` recommendation is not yet a
+   host-enforced stop; MCP is unauthenticated because it is local-only.
+
+Track each case's expected policy decision, intent, catalog calls, final
+outcome, and trace. Do not put PHI, production prompts, or credentials in the
+corpus or reports. For external security framing, use the [MCP security best
+practices](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices)
+and [OWASP's excessive-agency guidance](https://genai.owasp.org/llmrisk/llm062025-excessive-agency/);
+do not describe this POC as implementing those production controls.
+
+## Three-Slide POC Deck
+
+**Slide 1 — What we built and why.** Show the three-component diagram above.
+State: dummy metadata only; no SQL or real data; the goal is observable,
+testable agent routing before Epic-to-BigQuery work.
+
+**Slide 2 — What can break and how we test it.** Show the five red-team
+categories: policy bypass/PHI, prompt injection, intent misrouting, tool or
+grounding errors, and node failure. Include one trace that stops at policy and
+one safe trace that reaches the catalog.
+
+**Slide 3 — Evidence, limits, and next control.** Show smoke/red-team pass
+counts and one failure finding. State the known gaps above. The immediate next
+control is host enforcement for `recommended_action="refuse"`, followed by
+more synthetic cases and structured grounding checks before any real-system
+connection.

@@ -10,7 +10,7 @@ from harness_spike.agent_host.agent import ask
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the Anthropic + MCP weather spike.")
+    parser = argparse.ArgumentParser(description="Run the MCP data-catalog prototype.")
     parser.add_argument("prompt", nargs="+", help="User prompt to send to Claude.")
     parser.add_argument("--json", action="store_true", help="Print raw JSON result.")
     parser.add_argument(
