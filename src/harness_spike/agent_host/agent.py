@@ -92,6 +92,28 @@ async def classify_request(
         return uncertain_intent_response(trace)
 
     trace.record("intent.classification.result", result=classification.model_dump())
+
+    if classification.recommended_action == "refuse":
+        trace.record(
+            "request.blocked",
+            reason="intent_classifier_refused",
+            intent=classification.intent,
+            risk_flags=classification.risk_flags,
+        )
+        return AskResponse(
+            answer=(
+                "I can't help with that request. It has been identified as "
+                "unsafe and cannot be processed."
+            ),
+            used_tools=[],
+            run_id=trace.run_id,
+            trace_file=str(trace.path),
+            allowed=False,
+            policy_reason=f"intent_classifier_refused: {classification.intent}",
+            intent=classification.intent,
+            intent_confidence=classification.confidence,
+        )
+
     if (
         classification.intent == "unknown"
         or classification.needs_clarification
@@ -120,6 +142,8 @@ def uncertain_intent_response(trace: TraceLogger) -> AskResponse:
         used_tools=[],
         run_id=trace.run_id,
         trace_file=str(trace.path),
+        allowed=False,
+        policy_reason="intent_classifier_uncertain",
         intent="unknown",
     )
 

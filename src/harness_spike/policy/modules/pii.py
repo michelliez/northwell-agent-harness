@@ -138,6 +138,27 @@ ROW_LEVEL_OBJECTS = {
     "encounter records",
 }
 
+AGGREGATE_KEYWORDS = {
+    "count",
+    "sum",
+    "avg",
+    "average",
+    "min",
+    "max",
+    "median",
+    "percentile",
+    "rate",
+    "ratio",
+    "trend",
+    "total",
+    "aggregate",
+    "group by",
+    "distribution",
+    "summary",
+    "breakdown",
+    "compare",
+}
+
 FUZZY_HIGH_RISK_TERMS: dict[str, str] = {
     "patient": "Likely typo for patient-identifying information",
     "patients": "Likely typo for patient-identifying information",
@@ -205,6 +226,13 @@ def check_fuzzy_terms(q: str) -> PolicyGateResult | None:
 
 
 def check_row_level_request(q: str) -> PolicyGateResult | None:
+    has_aggregate_keyword = any(
+        contains_phrase(q, term) for term in AGGREGATE_KEYWORDS
+    )
+
+    if has_aggregate_keyword:
+        return None
+
     has_unsafe_verb = any(contains_phrase(q, term) for term in ROW_LEVEL_VERBS)
     has_row_object = any(contains_phrase(q, term) for term in ROW_LEVEL_OBJECTS)
 

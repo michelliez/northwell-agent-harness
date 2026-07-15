@@ -30,3 +30,16 @@ def allowed() -> PolicyGateResult:
         "reason": None,
         "matched_term": None,
     }
+
+
+def no_verdict() -> PolicyGateResult:
+    """No module fired. Passes to L2 for semantic evaluation.
+
+    Distinct from allowed() so traces can show whether L1 explicitly
+    whitelisted a request or simply had no deterministic verdict.
+    """
+    return {
+        "allowed": True,
+        "reason": "no_deterministic_verdict",
+        "matched_term": None,
+    }

@@ -4,6 +4,7 @@ from collections.abc import Callable
 
 from harness_spike.policy.consolidate import consolidate_findings
 from harness_spike.policy.modules import (
+    jailbreak,
     operational_risk,
     pii,
     prompt_injection,
@@ -20,6 +21,7 @@ PolicyCheckEntry = tuple[str, PolicyCheck]
 #Ordered from high risk to low risk
 POLICY_CHECKS: tuple[PolicyCheckEntry, ...] = (
     ("prompt_injection.policy_manipulation", prompt_injection.check_policy_manipulation),
+    ("prompt_injection.jailbreak", jailbreak.check_jailbreak),
     ("operational_risk.secret_access", operational_risk.check_secret_access),
     ("prompt_injection.tool_bypass", prompt_injection.check_tool_bypass),
     ("operational_risk.local_execution_and_exfiltration", operational_risk.check_local_execution_and_exfiltration),
