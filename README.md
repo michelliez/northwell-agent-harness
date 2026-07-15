@@ -88,9 +88,26 @@ http://localhost:8002/mcp
 The classifier uses the configured AI Hub model, returns structured intent metadata,
 and does not answer questions or access catalog data.
 
+## Run The Mock SQL MCP Servers
+
+Safe aggregate SQL requests use a separate probabilistic generator followed by a
+deterministic SQLGlot validator. Both operate only on the checked-in dummy catalog;
+they do not connect to or execute against BigQuery.
+
+Terminals 3 and 4:
+
+```powershell
+uv run --no-editable nh-spike-sql-generation
+uv run --no-editable nh-spike-sql-validation
+```
+
+The validator parses BigQuery SQL, derives tables and columns from its AST,
+checks them against the mock catalog, enforces aggregate-only and identifier-use
+rules, and fails closed before SQL is returned.
+
 ## Run The Agent CLI
 
-Terminal 3:
+Terminal 5:
 
 ```powershell
 uv run --no-editable nh-spike-agent "What data would I need to answer how many patients had visits last month?" --json
@@ -173,9 +190,10 @@ developer can run it with `uv run <script-name>`.
 
 The checked-in suites contain synthetic prompts only. The evaluator runs each
 case through the host, reads its trace, and checks policy decisions, node
-ordering, catalog calls, and simple grounding expectations. It does not use an
-LLM judge; it will make AI Hub calls for allowed cases, so start both MCP
-servers and use it only when model usage is approved.
+ordering, catalog calls, simple grounding expectations, and structural SQL
+validation evidence. It does not use an LLM judge; it will make AI Hub calls
+for allowed cases, so start the catalog, intent, SQL-generation, and
+SQL-validation MCP servers and use it only when model usage is approved.
 
 After pulling this change, stop any existing MCP servers and run `uv sync` once
 before restarting them; a running Windows console script can prevent `uv` from

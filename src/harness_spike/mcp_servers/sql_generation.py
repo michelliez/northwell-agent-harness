@@ -5,7 +5,7 @@ from typing import Any
 from anthropic import Anthropic
 from anthropic.types import ToolUseBlock
 from fastmcp import FastMCP
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from harness_spike.config import get_settings
 
@@ -30,6 +30,18 @@ class SqlGenerationResult(BaseModel):
     source: str = "claude_sql_generation"
     is_dummy: bool = True
 
+    @model_validator(mode="after")
+    def validate_result_state(self) -> SqlGenerationResult:
+        if self.refused:
+            if self.sql is not None or self.tables or not self.reason:
+                raise ValueError("refusals require a reason and cannot contain SQL or tables")
+        elif self.sql is None:
+            if self.tables or self.reason != "unsupported_or_ambiguous_request":
+                raise ValueError("unsupported results require the canonical reason and no tables")
+        elif not self.tables or self.reason is not None:
+            raise ValueError("generated SQL requires tables and cannot contain a reason")
+        return self
+
 
 SQL_GENERATION_SYSTEM_PROMPT = """
 Generate SQL for a health system database.
@@ -44,8 +56,11 @@ Rules:
   DROP, DELETE, UPDATE, MERGE, INSERT, CREATE, CREATE OR REPLACE, ALTER,
   TRUNCATE, EXPORT DATA, CALL, EXECUTE IMMEDIATE, DECLARE, BEGIN, COMMIT,
   COPY, EXPORT, EXEC, or ROLLBACK.
-- Never select direct patient identifiers such as patient_id, encounter_id, or
-  appointment_id unless explaining schema outside SQL.
+- Produce an aggregate query, not row-level output.
+- Never return direct patient identifiers such as patient_id, encounter_id, or
+  appointment_id. They may appear only inside COUNT or COUNT DISTINCT, or in
+  identifier-to-identifier join equality.
+- Do not use columns labelled sensitive.
 - Do not generate multi-statement scripts, semicolon-separated SQL, remote
   functions, external connections, temporary function creation, unapproved
   wildcard table scans, or SELECT *.
@@ -53,6 +68,7 @@ Rules:
   "unsupported_or_ambiguous_request".
 - If refusing for safety, set sql=null, refused=true, and provide a short reason.
 - The SQL is illustrative only and must not claim to query real data.
+- The tables result must exactly list the physical tables referenced by SQL.
 """.strip()
 
 

@@ -255,7 +255,15 @@ async def run_safe_sql_workflow(
             classification,
         )
 
-    sql = validation.get("normalized_sql") or generated["sql"]
+    sql = validation.get("normalized_sql")
+    if not isinstance(sql, str) or not sql.strip():
+        trace.record("sql.validation.failed", error="missing_normalized_sql")
+        return sql_workflow_response(
+            "The SQL validation result was incomplete, so I stopped before returning SQL.",
+            used_tools,
+            trace,
+            classification,
+        )
     answer = f"Here is validated mock SQL for that aggregate request:\n\n```sql\n{sql}\n```"
     trace.record("sql.workflow.completed", sql=sql, used_tools=used_tools)
     return sql_workflow_response(answer, used_tools, trace, classification)

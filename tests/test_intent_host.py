@@ -88,6 +88,45 @@ class FakeBridge:
         raise AssertionError(f"Unexpected bridge URL: {self.url}")
 
 
+class ConfigurableSqlBridge(FakeBridge):
+    generated_result: dict[str, object] = {
+        "sql": "SELECT status, COUNT(*) AS appointment_count FROM appointments GROUP BY status;",
+        "tables": ["appointments"],
+        "notes": [],
+        "refused": False,
+        "reason": None,
+        "source": "claude_sql_generation",
+        "is_dummy": True,
+    }
+    validation_result: object = {
+        "allowed": True,
+        "reason": None,
+        "normalized_sql": "SELECT status, COUNT(*) AS appointment_count FROM appointments GROUP BY status",
+        "tables": ["appointments"],
+        "referenced_tables": ["appointments"],
+        "referenced_columns": ["appointments.status"],
+        "declared_tables": ["appointments"],
+        "statement_type": "Select",
+        "violations": [],
+        "validator_version": "sqlglot_ast_v2",
+        "sqlglot_version": "30.12.0",
+        "notes": [],
+        "source": "deterministic_sql_validation",
+        "is_dummy": True,
+    }
+
+    async def call_tool(self, name: str, arguments: object) -> object:
+        if "sql-generation" in self.url:
+            self.events.append(f"sql_generation:{name}")
+            return dict(self.generated_result)
+        if "sql-validation" in self.url:
+            self.events.append(f"sql_validation:{name}")
+            if isinstance(self.validation_result, dict):
+                return dict(self.validation_result)
+            return self.validation_result
+        return await super().call_tool(name, arguments)
+
+
 class FakeMessages:
     def __init__(self) -> None:
         self.kwargs: dict[str, object] | None = None
@@ -214,3 +253,87 @@ async def test_safe_sql_request_searches_generates_and_validates(
         "sql_generation:generate_sql",
         "sql_validation:validate_sql",
     ]
+
+
+@pytest.mark.asyncio
+async def test_sql_generator_refusal_stops_before_validation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ConfigurableSqlBridge.events = []
+    ConfigurableSqlBridge.generated_result = {
+        "sql": None,
+        "tables": [],
+        "notes": [],
+        "refused": True,
+        "reason": "unsafe_request",
+        "source": "claude_sql_generation",
+        "is_dummy": True,
+    }
+    monkeypatch.setattr(agent, "get_settings", lambda: _settings(str(tmp_path)))
+    monkeypatch.setattr(agent, "MCPToolBridge", ConfigurableSqlBridge)
+
+    result = await agent.answer_question("Write SQL to count appointments by status")
+
+    assert "refused it: unsafe_request" in result.answer
+    assert "validate_sql" not in result.used_tools
+    assert "sql_validation:validate_sql" not in ConfigurableSqlBridge.events
+
+
+@pytest.mark.asyncio
+async def test_sql_validation_block_is_fail_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ConfigurableSqlBridge.events = []
+    ConfigurableSqlBridge.generated_result = {
+        "sql": "SELECT status FROM appointments",
+        "tables": ["appointments"],
+        "notes": [],
+        "refused": False,
+        "reason": None,
+        "source": "claude_sql_generation",
+        "is_dummy": True,
+    }
+    ConfigurableSqlBridge.validation_result = {
+        "allowed": False,
+        "reason": "non_aggregate_sql",
+        "normalized_sql": None,
+        "tables": ["appointments"],
+        "violations": [{"code": "non_aggregate_sql"}],
+    }
+    monkeypatch.setattr(agent, "get_settings", lambda: _settings(str(tmp_path)))
+    monkeypatch.setattr(agent, "MCPToolBridge", ConfigurableSqlBridge)
+
+    result = await agent.answer_question("Write SQL to count appointments by status")
+
+    assert "blocked it: non_aggregate_sql" in result.answer
+    assert "```sql" not in result.answer
+
+
+@pytest.mark.asyncio
+async def test_allowed_validation_without_normalized_sql_is_fail_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ConfigurableSqlBridge.events = []
+    ConfigurableSqlBridge.generated_result = {
+        "sql": "SELECT COUNT(*) FROM appointments",
+        "tables": ["appointments"],
+        "notes": [],
+        "refused": False,
+        "reason": None,
+        "source": "claude_sql_generation",
+        "is_dummy": True,
+    }
+    ConfigurableSqlBridge.validation_result = {
+        "allowed": True,
+        "reason": None,
+        "normalized_sql": None,
+        "tables": ["appointments"],
+        "violations": [],
+    }
+    monkeypatch.setattr(agent, "get_settings", lambda: _settings(str(tmp_path)))
+    monkeypatch.setattr(agent, "MCPToolBridge", ConfigurableSqlBridge)
+
+    result = await agent.answer_question("Write SQL to count appointments by status")
+
+    assert "validation result was incomplete" in result.answer
+    assert "```sql" not in result.answer
