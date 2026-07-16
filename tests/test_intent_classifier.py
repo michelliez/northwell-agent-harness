@@ -136,6 +136,72 @@ def test_classify_intent_accepts_general_question(
     assert result["recommended_action"] == "answer_without_tools"
 
 
+def test_classify_intent_forces_refusal_action_for_sensitive_intent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = _response(
+        {
+            "intent": "patient_specific_request",
+            "confidence": 0.95,
+            "risk_flags": ["patient_level"],
+            "recommended_action": "search_tables",
+            "needs_clarification": False,
+        }
+    )
+    monkeypatch.setattr(intent, "Anthropic", lambda **_: FakeClient(response))
+    monkeypatch.setattr(
+        intent,
+        "get_settings",
+        lambda: SimpleNamespace(
+            require_anthropic_api_key=lambda: "test-key",
+            require_anthropic_base_url=lambda: "https://example.test",
+            anthropic_custom_headers={},
+            require_claude_model=lambda: "test-model",
+        ),
+    )
+
+    result = intent.classify_intent("Which patient had the visit?")
+
+    assert result["recommended_action"] == "refuse"
+    assert result["needs_clarification"] is False
+
+
+def test_classify_intent_fails_closed_on_incoherent_safe_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = _response(
+        {
+            "intent": "schema_lookup",
+            "confidence": 0.95,
+            "risk_flags": [],
+            "recommended_action": "search_tables",
+            "needs_clarification": False,
+        }
+    )
+    monkeypatch.setattr(intent, "Anthropic", lambda **_: FakeClient(response))
+    monkeypatch.setattr(
+        intent,
+        "get_settings",
+        lambda: SimpleNamespace(
+            require_anthropic_api_key=lambda: "test-key",
+            require_anthropic_base_url=lambda: "https://example.test",
+            anthropic_custom_headers={},
+            require_claude_model=lambda: "test-model",
+        ),
+    )
+
+    result = intent.classify_intent("What columns are in encounters?")
+
+    assert result["intent"] == "unknown"
+    assert result["recommended_action"] == "clarify"
+    assert "incoherent_intent_action" in result["risk_flags"]
+
+
+def test_route_tool_scope_is_host_owned() -> None:
+    assert intent.allowed_tools_for("schema_lookup") == {"get_table_schema"}
+    assert intent.allowed_tools_for("patient_specific_request") == set()
+
+
 def test_classify_intent_rejects_missing_or_duplicate_tool_results(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -153,7 +219,7 @@ def test_classify_intent_rejects_missing_or_duplicate_tool_results(
 
 
 def test_intent_tool_contract_is_closed_and_versioned() -> None:
-    assert intent.INTENT_PROMPT_VERSION == "v2"
+    assert intent.INTENT_PROMPT_VERSION == "v3"
     assert intent.INTENT_TOOL["name"] == "emit_intent"
     assert intent.INTENT_TOOL["input_schema"]["additionalProperties"] is False
     assert set(intent.INTENT_TOOL["input_schema"]["required"]) == {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from harness_spike.policy.normalize import (
     contains_phrase,
+    is_schema_metadata_request,
     matches_blocked_term,
     normalize_leetspeak,
     normalize_prompt,
@@ -226,6 +227,9 @@ def check_fuzzy_terms(q: str) -> PolicyGateResult | None:
 
 
 def check_row_level_request(q: str) -> PolicyGateResult | None:
+    if is_schema_metadata_request(q):
+        return None
+
     has_aggregate_keyword = any(
         contains_phrase(q, term) for term in AGGREGATE_KEYWORDS
     )

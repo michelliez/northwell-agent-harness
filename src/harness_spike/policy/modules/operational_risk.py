@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from harness_spike.policy.normalize import matches_blocked_term
+from harness_spike.policy.normalize import (
+    is_schema_metadata_request,
+    matches_blocked_term,
+)
 from harness_spike.policy.result import PolicyGateResult, blocked
 
 
@@ -72,7 +75,12 @@ def check_local_execution_and_exfiltration(
 
 
 def check_scope_expansion(text: str, q: str) -> PolicyGateResult | None:
-    return match_terms(text, q, SCOPE_EXPANSION_TERMS)
+    for term, reason in SCOPE_EXPANSION_TERMS.items():
+        if term == "patients table" and is_schema_metadata_request(q):
+            continue
+        if matches_blocked_term(text, q, term):
+            return blocked(reason=reason, matched_term=term)
+    return None
 
 
 def check_destructive_db(text: str, q: str) -> PolicyGateResult | None:

@@ -206,6 +206,36 @@ async def test_blocked_request_does_not_call_intent_node(
 
 
 @pytest.mark.asyncio
+async def test_refusing_intent_does_not_call_catalog(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(agent, "get_settings", lambda: _settings(str(tmp_path)))
+
+    async def fake_classify_request(*_: object) -> agent.IntentResult:
+        return agent.IntentResult(
+            intent="patient_specific_request",
+            confidence=0.95,
+            risk_flags=["patient_level"],
+            recommended_action="refuse",
+            needs_clarification=False,
+        )
+
+    monkeypatch.setattr(agent, "classify_request", fake_classify_request)
+
+    class UnexpectedBridge:
+        def __init__(self, _: str) -> None:
+            raise AssertionError("refused intents must not open a catalog bridge")
+
+    monkeypatch.setattr(agent, "MCPToolBridge", UnexpectedBridge)
+
+    result = await agent.answer_question("What data supports a visit count?")
+
+    assert result.intent == "patient_specific_request"
+    assert result.used_tools == []
+    assert "classified as patient specific request" in result.answer
+
+
+@pytest.mark.asyncio
 async def test_general_question_answers_without_catalog_tools(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

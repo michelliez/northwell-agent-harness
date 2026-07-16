@@ -12,7 +12,11 @@ from harness_spike.agent_host.schemas import AskResponse
 from harness_spike.agent_host.trace_logger import TraceLogger
 from harness_spike.config import Settings, get_settings
 from harness_spike.policy.gates import policy_gate
-from harness_spike.mcp_servers.intent import IntentResult, MIN_CONFIDENCE
+from harness_spike.mcp_servers.intent import (
+    IntentResult,
+    MIN_CONFIDENCE,
+    allowed_tools_for,
+)
 
 
 async def ask(question: str) -> dict[str, Any]:
@@ -39,13 +43,26 @@ async def answer_question(question: str) -> AskResponse:
         return classification_or_response
     classification = classification_or_response
 
+    if classification.recommended_action == "refuse":
+        return refused_intent_response(classification, trace)
+
     if classification.intent == "safe_sql_generation":
         return await run_safe_sql_workflow(question, classification, settings, trace)
     if classification.intent == "general_question":
         return answer_general_question(question, classification, settings, trace)
 
     async with MCPToolBridge(settings.mcp_server_url) as mcp:
-        tools = await discover_tools(mcp, settings, trace)
+        discovered_tools = await discover_tools(mcp, settings, trace)
+        allowed_tools = allowed_tools_for(classification.intent)
+        tools = [
+            tool for tool in discovered_tools if tool.get("name") in allowed_tools
+        ]
+        trace.record(
+            "mcp.tools.scoped",
+            intent=classification.intent,
+            allowed_tools=sorted(allowed_tools),
+            tools=tool_names(tools),
+        )
         response = await run_agent_loop(
             question=question,
             client=build_model_client(settings),
@@ -55,6 +72,7 @@ async def answer_question(question: str) -> AskResponse:
             settings=settings,
             trace=trace,
             system=routing_metadata(classification),
+            allowed_tools=allowed_tools,
         )
 
     return response.model_copy(
@@ -145,6 +163,29 @@ def uncertain_intent_response(trace: TraceLogger) -> AskResponse:
         allowed=False,
         policy_reason="intent_classifier_uncertain",
         intent="unknown",
+    )
+
+
+def refused_intent_response(
+    classification: IntentResult, trace: TraceLogger
+) -> AskResponse:
+    trace.record(
+        "intent.classification.refused",
+        intent=classification.intent,
+        risk_flags=classification.risk_flags,
+    )
+    return AskResponse(
+        answer=(
+            "I can't help with that request because it was classified as "
+            f"{classification.intent.replace('_', ' ')}."
+        ),
+        used_tools=[],
+        run_id=trace.run_id,
+        trace_file=str(trace.path),
+        allowed=False,
+        policy_reason=f"intent_classifier_refused: {classification.intent}",
+        intent=classification.intent,
+        intent_confidence=classification.confidence,
     )
 
 
@@ -416,6 +457,7 @@ async def run_agent_loop(
     settings: Settings,
     trace: TraceLogger,
     system: str,
+    allowed_tools: frozenset[str],
 ) -> AskResponse:
     messages: list[MessageParam] = [{"role": "user", "content": question}]
     used_tools: list[str] = []
@@ -432,6 +474,20 @@ async def run_agent_loop(
             return final_answer_response(response, trace, used_tools)
         if tool_rounds_used >= settings.max_tool_rounds:
             return max_rounds_response(settings, trace, tool_uses, used_tools)
+
+        unauthorized = [
+            tool_use.name
+            for tool_use in tool_uses
+            if tool_use.name not in allowed_tools
+        ]
+        if unauthorized:
+            trace.record(
+                "tool.blocked",
+                reason="intent_tool_scope",
+                tools=unauthorized,
+                allowed_tools=sorted(allowed_tools),
+            )
+            return unauthorized_tool_response(trace, used_tools, unauthorized)
 
         messages.append(
             {"role": "assistant", "content": cast(Any, assistant_content(response.content))}
@@ -532,6 +588,19 @@ def final_answer_response(response: Any, trace: TraceLogger, used_tools: list[st
         block.text for block in response.content if isinstance(block, TextBlock)
     ).strip()
     trace.record("answer.ready", answer=answer, used_tools=used_tools)
+    return AskResponse(
+        answer=answer,
+        used_tools=used_tools,
+        run_id=trace.run_id,
+        trace_file=str(trace.path),
+    )
+
+
+def unauthorized_tool_response(
+    trace: TraceLogger, used_tools: list[str], tools: list[str]
+) -> AskResponse:
+    answer = "I stopped because the requested tool is outside the approved intent scope."
+    trace.record("answer.ready", answer=answer, used_tools=used_tools, blocked_tools=tools)
     return AskResponse(
         answer=answer,
         used_tools=used_tools,
