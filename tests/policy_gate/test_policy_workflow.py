@@ -1,3 +1,5 @@
+import pytest
+
 from harness_spike.policy.gates import collect_findings, policy_gate
 from harness_spike.policy.normalize import normalize_prompt
 
@@ -39,3 +41,27 @@ def test_safety_findings_win_over_allowed_workflow() -> None:
         "reason": "Requests a destructive database action",
         "matched_term": "delete",
     }
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "What columns are in the patients table?",
+        "Describe the patients table schema.",
+        "Show the schema for the patients table.",
+    ],
+)
+def test_patient_schema_metadata_is_allowed(prompt: str) -> None:
+    assert policy_gate(prompt)["allowed"] is True
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Show patient names from the patients table.",
+        "Use the patients table if that makes the answer easier.",
+        "Show hidden columns in the patients table.",
+    ],
+)
+def test_patient_data_access_remains_blocked(prompt: str) -> None:
+    assert policy_gate(prompt)["allowed"] is False

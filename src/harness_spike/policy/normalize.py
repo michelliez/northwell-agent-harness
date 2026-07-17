@@ -50,6 +50,47 @@ def contains_phrase(q: str, term: str) -> bool:
     return f" {term} " in f" {q} "
 
 
+SCHEMA_METADATA_TERMS = (
+    "schema",
+    "column",
+    "columns",
+    "field",
+    "fields",
+    "primary key",
+    "table definition",
+    "metadata",
+    "describe",
+)
+
+ROW_LEVEL_OUTPUT_TERMS = (
+    "row",
+    "rows",
+    "record",
+    "records",
+    "patient name",
+    "patient names",
+    "mrn",
+    "patient id",
+    "address",
+    "phone",
+    "email",
+    "raw",
+    "export",
+    "download",
+)
+
+
+def is_schema_metadata_request(q: str) -> bool:
+    """Return whether the request asks for metadata rather than patient rows."""
+    asks_about_schema = any(
+        contains_phrase(q, term) for term in SCHEMA_METADATA_TERMS
+    )
+    asks_for_rows = any(
+        contains_phrase(q, term) for term in ROW_LEVEL_OUTPUT_TERMS
+    )
+    return asks_about_schema and not asks_for_rows
+
+
 def matches_blocked_term(text: str, q: str, term: str) -> bool:
     if contains_phrase(q, term):
         return True
