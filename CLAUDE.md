@@ -8,6 +8,116 @@ This is an **agent evaluation harness spike** — a proof-of-concept for a multi
 
 **Do not commit proprietary data, credentials, PHI, schema exports, or logs containing prompts to this repo.** It is a non-enterprise POC designed to be copyable into an enterprise environment later.
 
+## Canonical Product Specification
+
+The full product requirements are in `PRD.md`; this file turns them into
+working instructions for code changes. The target is an evaluation harness for
+observable agent behavior, not a production healthcare data-access system.
+
+### Product rule
+
+The harness must determine whether an agent understood a request, selected the
+right route and tools, supplied valid inputs, used tool results without
+inventing facts, and returned a safe grounded answer with an auditable trace.
+
+> Evaluate every observable probabilistic decision; enforce every hard boundary
+> with deterministic code.
+
+The model may recommend an action, but the host owns execution authority. Do
+not treat model confidence, an intent label, or an MCP connection as
+authorization.
+
+### Scope and non-goals
+
+The current milestone uses only localhost services and checked-in dummy
+metadata. Do not add PHI, proprietary schemas, credentials, production Epic or
+BigQuery connections, real SQL execution, writes, clinical decisions, or
+autonomous consequential actions. Hidden chain-of-thought is not an evaluation
+input. Passing tests proves synthetic routing, observability, and regression
+behavior only; it is not evidence of HIPAA compliance, jailbreak resistance,
+or production readiness.
+
+### Required control flow
+
+```text
+request
+  -> host records request.received
+  -> deterministic user-input policy screen
+       -> block: fail closed; no intent, model, or catalog call
+       -> continue: read-only intent classification
+  -> validate intent and map to an allowlisted tool set
+  -> discover and screen tool metadata
+  -> main model proposes a bounded tool call or answer
+  -> host rechecks the requested tool name before execution
+  -> screen tool results before they re-enter model context
+  -> repeat only within MAX_TOOL_ROUNDS
+  -> screen final answer and return answer plus trace
+```
+
+Policy and intent invariants:
+
+- The policy screen is deterministic defense in depth across user input, tool
+  metadata, tool results, and final answers. It is not complete injection
+  protection, identity authorization, or a direct-MCP security boundary.
+- Blocked input produces `allowed=false`, no tools, and no downstream intent or
+  model events.
+- Intent output is structured and runtime-validated. `unknown`, low confidence,
+  refusal, malformed output, or classifier failure is non-routable and stops
+  before catalog access.
+- The host filters the model-visible tools and checks every proposed tool call
+  again immediately before execution.
+- Every stop path and context-screen decision is observable, and tool loops are
+  bounded by `MAX_TOOL_ROUNDS`.
+
+### Evaluation contracts
+
+Keep these contracts versioned and framework-neutral:
+
+- **`ScenarioSpec`**: ID/version, owner, domain/risk tags, request, available
+  tools or mocks, expected/forbidden outcomes, tool and ordering constraints,
+  reference facts, grading method, severity, and threshold.
+- **`RunTrace`**: run/scenario IDs, model/prompt/tool/policy/evaluator versions,
+  ordered observable events, route/tool decisions, arguments/results, retries,
+  final answer, operational metadata, and redaction/completeness status.
+- **`EvalResult`**: pass/fail/abstain, node, criterion, severity, score,
+  evaluator type, supporting trace evidence, expected behavior, failure reason,
+  and rubric version. Aggregates include critical-policy status, repeated-trial
+  reliability, and baseline comparison.
+
+Evaluation must cover routing, tool selection and inputs, trajectory/order,
+grounding, outcome, safety, and reliability/efficiency. Run deterministic
+graders first; use a semantic judge only for unresolved criteria. A semantic
+judge may not override a hard failure.
+
+Required functional behavior:
+
+| ID | Requirement |
+| --- | --- |
+| FR1 | Run a versioned scenario live or replay a stored JSONL trace. |
+| FR2 | Normalize source events into `RunTrace` and fail explicitly on missing required events. |
+| FR3 | Assert routes, required/forbidden tools, arguments, ordering, call counts, policy, facts, citations, and budgets deterministically. |
+| FR4 | Return typed semantic rubric scores with evidence, confidence, and `abstain` where semantic judgment is required. |
+| FR5 | Repeat stochastic cases and report pass rate, all-trials-pass reliability, variance, and critical failures. |
+| FR6 | Compare model, prompt, tool, and policy versions by scenario, node, criterion, and severity. |
+| FR7 | Emit JSON and concise Markdown reports with a nonzero exit code on release-threshold failure. |
+| FR8 | Default to synthetic fixtures, redact configured fields, exclude secrets, and keep raw prompt/result logging opt-in. |
+| FR9 | Add domains with scenarios, mocks, and optional trace adapters without changing core graders. |
+
+The MVP target is at least 30 versioned synthetic scenarios, 100% recall on
+seeded deterministic failures, explicit node-localized evidence for failures,
+repeated-trial reliability for stochastic cases, zero critical safety passes
+when any trial violates a hard boundary, and no unapproved data in repository
+or evaluation artifacts.
+
+### Roadmap and production gate
+
+Build in this order: evaluation foundation; approved Epic metadata discovery;
+structured BigQuery planning and validation; then governed read-only execution.
+Before any real data, add authenticated identity and server-side authorization,
+secure transport, credential isolation, per-tool scopes, rate limits, output
+filtering, independent high-risk input/output classification, monitoring,
+incident response, and trace-reader authorization.
+
 ## Commands
 
 ### Setup
@@ -50,7 +160,7 @@ uv run --no-editable pytest -q
 
 Run a single test:
 ```bash
-uv run --no-editable pytest tests/policy_gate_test.py::test_blocked_by_identifier -xvs
+uv run --no-editable pytest tests/policy_gate/policy_gate_test.py::test_blocked_by_identifier -xvs
 ```
 
 Run evaluations (requires both MCP servers running):
@@ -62,14 +172,15 @@ uv run --no-editable nh-spike-eval --suite intent --repetitions 3
 
 ## Architecture
 
-The system is split into **four independent components** that communicate via REST/HTTP at fixed localhost ports:
+The system is split into **five logical components** that communicate via REST/HTTP at fixed localhost ports:
 
 ### 1. **Agent Host** (`src/harness_spike/agent_host/`)
 - **Central orchestrator** for the request→response loop
-- Runs the policy gate (deterministic safety checks)
+- Runs the first-pass policy screen and surface-aware context checks
 - Calls the Anthropic model via the Anthropic SDK
 - Bridges the model to MCP tool servers
-- Logs a detailed trace of every decision to `logs/runs/<timestamp>.jsonl`
+- Fails closed on blocked or malformed content and logs observable decisions to
+  `logs/runs/<run_id>.jsonl`
 
 **Key files:**
 - `agent.py`: Main logic—`answer_question()` orchestrates policy → intent → agent loop
@@ -82,7 +193,8 @@ The system is split into **four independent components** that communicate via RE
 - **First-pass input screen:** runs before model or tool routing; it is not
   authorization or an end-to-end security boundary
 - Lexical blocklist of identifier/PHI terms (e.g., "patient name", "ssn", "mrn")
-- Returns `{allowed: bool, reason: str | None, matched_term: str | None}`
+- Returns `{allowed: bool, reason: str | None, matched_term: str | None}` for
+  the user-input decision.
 - Surface-aware checks in `policy/screen.py` also inspect tool metadata, tool
   results, and final answers with narrower context-specific rules.
 - If a request is blocked, the agent host returns a refusal without calling the model
@@ -91,10 +203,14 @@ The system is split into **four independent components** that communicate via RE
 
 ### 3. **Intent Classifier** (`src/harness_spike/mcp_servers/intent.py`)
 - **Lightweight router:** classifies user intent into categories before catalog access
-- Returns `{intent: str, action: str, confidence: float, reasoning: str, clarification: str | None}`
+- Returns structured routing metadata: `intent`, `confidence`, `risk_flags`,
+  `recommended_action`, and `needs_clarification`.
 - Uses the configured Anthropic model to classify but does not answer questions or access catalog
-- Intended intents: `"schema_lookup"`, `"safe_sql_generation"`, `"unknown"`, `"refuse"`
-- Low confidence or `"refuse"` intent should stop before catalog access (not yet enforced by host)
+- Intended intents include `"table_discovery"`, `"schema_lookup"`,
+  `"safe_sql_generation"`, `"general_question"`, `"unknown"`, and refusal
+  classes.
+- Low confidence, clarification, refusal, malformed output, or classifier
+  failure stops before catalog access; the host enforces this fail-closed path.
 
 **Key invariant:** Intent classification is always read-only and does not call the data catalog.
 
@@ -152,12 +268,14 @@ Every request produces a trace file at `logs/runs/<uuid>.jsonl`. Each line is a 
 
 ```json
 {"event": "request.received", "question": "..."}
-{"event": "policy.checked", "allowed": true, "matched_term": null}
-{"event": "intent.requested", "intent": "schema_lookup"}
-{"event": "tools.discovered", "tool_names": ["search_tables", "get_table_schema"]}
+{"event": "policy_gate.checked", "result": {"allowed": true, "matched_term": null}}
+{"event": "intent.classification.request", "mcp_url": "http://localhost:8002/mcp"}
+{"event": "intent.classification.result", "result": {"intent": "schema_lookup", "recommended_action": "get_table_schema"}}
+{"event": "mcp.tools.listed", "tools": ["search_tables", "get_table_schema"]}
+{"event": "mcp.tools.scoped", "allowed_tools": ["get_table_schema"]}
 {"event": "model.response", "tool_calls": [...]}
-{"event": "tool.executed", "tool": "search_tables", "result": {...}}
-{"event": "request.answered", "answer": "..."}
+{"event": "tool.result", "tool": "get_table_schema", "result": {...}}
+{"event": "answer.ready", "answer": "..."}
 ```
 
 The evaluator reads these traces to verify behavior without re-running the model or tools.
@@ -166,7 +284,7 @@ The evaluator reads these traces to verify behavior without re-running the model
 
 Two complementary test collections:
 
-- **`tests/policy_gate_test.py`** — fast, deterministic unit tests. Exhaustive variants of blocked requests: direct identifiers, typos, leetspeak, zero-width characters, punctuation. No MCP servers or API calls.
+- **`tests/policy_gate/policy_gate_test.py`** — fast, deterministic unit tests. Exhaustive variants of blocked requests: direct identifiers, typos, leetspeak, zero-width characters, punctuation. No MCP servers or API calls.
 - **`evals/red_team.jsonl`** — small end-to-end JSONL corpus (typically 12–18 cases). Representative scenarios that verify policy blocks before intent/catalog, and safe requests route correctly. Requires both MCP servers and Anthropic API.
 
 Each JSONL case names its expected policy decision, intent, catalog calls, and final outcome. All cases use synthetic prompts (no PHI or production data).
@@ -191,12 +309,12 @@ Settings are loaded from `.env` (see `.env.example`):
 1. Add a function with `@mcp.tool` decorator in one of the `mcp_servers/*.py` files
 2. Write a clear docstring explaining when the model should use this tool
 3. If adding a new MCP server, register a script entry in `pyproject.toml` under `[project.scripts]`
-4. Add synthetic test cases to `evals/red_team.jsonl` or `tests/policy_gate_test.py`
+4. Add synthetic test cases to `evals/red_team.jsonl` or `tests/policy_gate/policy_gate_test.py`
 
 ### Adding a Policy Rule
 
 1. Edit `src/harness_spike/policy/gates.py` — add terms to `IDENTIFIER_TERMS` or implement a new rule
-2. Add test cases to `tests/policy_gate_test.py` covering:
+2. Add test cases to `tests/policy_gate/policy_gate_test.py` covering:
    - Direct match (e.g., "patient name")
    - Typos, punctuation, leetspeak variants
    - False positives you want to allow
@@ -213,7 +331,7 @@ Settings are loaded from `.env` (see `.env.example`):
 
 ### Testing a Single Component
 
-- **Policy gate only:** `pytest tests/policy_gate_test.py` (no MCP servers needed)
+- **Policy gate only:** `pytest tests/policy_gate/policy_gate_test.py` (no MCP servers needed)
 - **Intent classifier only:** Start only `nh-spike-intent`, then `pytest tests/test_intent_classifier.py`
 - **Agent host:** Start both `nh-spike-data-catalog` and `nh-spike-intent`, then `pytest tests/test_agent_messages.py`
 - **Evaluations:** Start both MCP servers, then `uv run --no-editable nh-spike-eval --suite smoke`
@@ -233,11 +351,26 @@ It does **not** demonstrate:
 - ❌ Network isolation or encrypted inter-process communication
 - ❌ PHI protection or encryption at rest
 
-The intent classifier's `"refuse"` recommendation is not yet enforced by the host. Catalog failures may not produce invented facts in the final answer, but this is not guaranteed.
+The host enforces refusal, clarification, low-confidence, malformed-output, and
+classifier-failure stop paths before catalog access. The remaining limitation
+is that deterministic surface screening is not complete prompt-injection
+protection or production authorization; grounding assertions and server-side
+controls must continue to expand.
 
 ## Next Steps
 
-- **Host enforcement:** Make `recommended_action="refuse"` stop the agent before catalog access
-- **Grounding expansion:** Add more synthetic cases testing table/column claim verification
-- **Safe SQL workflow:** Implement SQL generation and validation for allowed requests
-- **Production integration:** Wire Epic, BigQuery, and network isolation controls
+- **Confidence calibration:** Measure the intent threshold against held-out
+  labels by risk class; do not treat model-reported confidence as calibrated
+  probability.
+- **Typed decisions:** Replace overloaded booleans with explicit blocked,
+  routed, clarify, refused, and failed statuses where callers need to
+  distinguish outcomes.
+- **Grounding expansion:** Add more synthetic cases testing table/column claim
+  verification and tool-result-to-answer support.
+- **Evaluation maturity:** Add replay, repeated-trial reliability,
+  baseline/regression comparison, and calibrated semantic graders.
+- **Safe SQL workflow:** Keep SQL generation, AST validation, dry-run, cost,
+  and result-safety controls deterministic and separately governed.
+- **Production integration:** Add authenticated identity, server-side
+  authorization, secure transport, network isolation, audit, output filtering,
+  and human approval before any real data or consequential action.
