@@ -14,7 +14,7 @@ This spike demonstrates a small agentic loop:
 ```text
 user prompt
 -> agent host
--> deterministic policy gate
+-> deterministic first-pass policy screen
 -> intent classifier MCP node
 -> model decides whether to call a tool
 -> MCP tool server runs bounded dummy tools
@@ -31,11 +31,11 @@ not observed. The evaluator should flag either failure.
 
 ## Current Nodes
 
-- `agent_host`: owns the policy gate, model loop, tool-call execution, and
-  trace logging.
+- `agent_host`: owns the first-pass policy screen, surface-aware content
+  checks, model loop, tool-call execution, and trace logging.
 - `mcp_servers`: owns the dummy data-catalog and intent-classifier MCP tools.
-- `gates`: owns deterministic safety checks that run before model or tool
-  routing.
+- `gates` and `policy/screen.py`: own deterministic input and model-context
+  checks that run before routing, tool-result reuse, and final output.
 - `intent_classifier`: classifies allowed requests for bounded routing metadata before
   the main model and catalog are contacted.
 - `evals`: runs versioned, deterministic checks against the final response and
@@ -88,9 +88,26 @@ http://localhost:8002/mcp
 The classifier uses the configured AI Hub model, returns structured intent metadata,
 and does not answer questions or access catalog data.
 
+## Run The Mock SQL MCP Servers
+
+Safe aggregate SQL requests use a separate probabilistic generator followed by a
+deterministic SQLGlot validator. Both operate only on the checked-in dummy catalog;
+they do not connect to or execute against BigQuery.
+
+Terminals 3 and 4:
+
+```powershell
+uv run --no-editable nh-spike-sql-generation
+uv run --no-editable nh-spike-sql-validation
+```
+
+The validator parses BigQuery SQL, derives tables and columns from its AST,
+checks them against the mock catalog, enforces aggregate-only and identifier-use
+rules, and fails closed before SQL is returned.
+
 ## Run The Agent CLI
 
-Terminal 3:
+Terminal 5:
 
 ```powershell
 uv run --no-editable nh-spike-agent "What data would I need to answer how many patients had visits last month?" --json
@@ -98,6 +115,30 @@ uv run --no-editable nh-spike-agent "What data would I need to answer how many p
 
 This calls the model through AI Hub. Do not run prompts unless model/API usage is
 approved.
+
+To render the run trace as an HTML diagram and open it in your browser, add
+`--viewer`:
+
+```powershell
+uv run --no-editable nh-spike-agent "What data would I need to answer how many patients had visits last month?" --viewer
+```
+
+The CLI prints the normal answer, the JSONL trace path, and a local
+`file://...` viewer URL. Trace viewer HTML files are written under
+`logs/trace_views/`. To generate the HTML without opening a browser, use:
+
+```powershell
+uv run --no-editable nh-spike-agent "What data would I need to answer how many patients had visits last month?" --viewer --no-open-viewer
+```
+
+You can also render an existing trace file later:
+
+```powershell
+uv run --no-editable nh-spike-traces logs/runs/<run_id>.jsonl
+```
+
+By default, this writes `logs/trace_views/trace_view.html`. Use `-o` to choose a
+different output path.
 
 Expected tool pattern for the data-catalog spike:
 
@@ -173,9 +214,10 @@ developer can run it with `uv run <script-name>`.
 
 The checked-in suites contain synthetic prompts only. The evaluator runs each
 case through the host, reads its trace, and checks policy decisions, node
-ordering, catalog calls, and simple grounding expectations. It does not use an
-LLM judge; it will make AI Hub calls for allowed cases, so start both MCP
-servers and use it only when model usage is approved.
+ordering, catalog calls, simple grounding expectations, and structural SQL
+validation evidence. It does not use an LLM judge; it will make AI Hub calls
+for allowed cases, so start the catalog, intent, SQL-generation, and
+SQL-validation MCP servers and use it only when model usage is approved.
 
 After pulling this change, stop any existing MCP servers and run `uv sync` once
 before restarting them; a running Windows console script can prevent `uv` from
@@ -288,9 +330,11 @@ Build the red-team corpus in this order:
    name only tables/columns actually returned by a catalog tool.
 4. **Failure checks:** unavailable, malformed, or low-confidence intent must
    stop before catalog use; catalog failure must not produce invented facts.
-5. **Known gaps to test and present:** the policy gate is lexical and can have
-   bypasses/false positives; intent's `refuse` recommendation is not yet a
-   host-enforced stop; MCP is unauthenticated because it is local-only.
+5. **Known gaps to test and present:** the policy screen and context checks are
+   deterministic lexical/structural defenses with possible false positives and
+   false negatives; they are not authorization or complete prompt-injection
+   protection. MCP remains unauthenticated because this is a localhost-only
+   dummy-data POC.
 
 Track each case's expected policy decision, intent, catalog calls, final
 outcome, and trace. Do not put PHI, production prompts, or credentials in the

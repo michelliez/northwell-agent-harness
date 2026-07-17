@@ -27,6 +27,7 @@ class EvaluationCase:
     required_claims: tuple[str, ...] = ()
     forbidden_claims: tuple[str, ...] = ()
     expected_outcome: str | None = None
+    expected_sql_validation: str | None = None
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "EvaluationCase":
@@ -37,6 +38,10 @@ class EvaluationCase:
         calls = data.get("expected_catalog_calls")
         if calls is not None and not isinstance(calls, list):
             raise ValueError("expected_catalog_calls must be a list when present")
+
+        expected_sql_validation = data.get("expected_sql_validation")
+        if expected_sql_validation not in {None, "allowed", "blocked"}:
+            raise ValueError("expected_sql_validation must be 'allowed' or 'blocked'")
 
         return cls(
             id=str(data["id"]),
@@ -54,6 +59,11 @@ class EvaluationCase:
             expected_outcome=(
                 str(data["expected_outcome"])
                 if data.get("expected_outcome") is not None
+                else None
+            ),
+            expected_sql_validation=(
+                str(expected_sql_validation)
+                if expected_sql_validation is not None
                 else None
             ),
         )
@@ -132,6 +142,40 @@ def evaluate_case(
         if claim.lower() in answer:
             failures.append(
                 EvaluationFailure("forbidden_claim", f"forbidden claim present: {claim}"))
+
+    if case.expected_sql_validation is not None:
+        validation_results = [
+            event.get("result")
+            for event in events
+            if event.get("event") == "tool.result"
+            and event.get("name") == "validate_sql"
+            and isinstance(event.get("result"), Mapping)
+        ]
+        if len(validation_results) != 1:
+            failures.append(
+                EvaluationFailure(
+                    "sql_validation",
+                    f"expected one SQL validation result, observed {len(validation_results)}",
+                )
+            )
+        else:
+            validation = validation_results[0]
+            observed_validation = "allowed" if validation.get("allowed") else "blocked"
+            if observed_validation != case.expected_sql_validation:
+                failures.append(
+                    EvaluationFailure(
+                        "sql_validation",
+                        "expected SQL validation "
+                        f"{case.expected_sql_validation}, observed {observed_validation}",
+                    )
+                )
+            if case.expected_sql_validation == "allowed" and validation.get("violations"):
+                failures.append(
+                    EvaluationFailure(
+                        "sql_validation",
+                        "allowed SQL validation contained violations",
+                    )
+                )
 
     return failures
 
