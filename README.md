@@ -82,8 +82,8 @@ untrusted request
   -> deterministic user-input policy screen
        -> block: fail closed; no intent, model, or catalog call
        -> continue: call the read-only intent classifier
-  -> validate intent and map it to an allowlisted tool set
-  -> discover and screen tool metadata
+  -> validate intent and derive scope from the host-owned tool contracts
+  -> confirm MCP inventory and expose canonical tool metadata
   -> main model proposes a bounded tool call or answer
   -> host rechecks the proposed tool name and executes it
   -> screen the tool result before it re-enters model context
@@ -110,12 +110,13 @@ untrusted request
 - Intent output is structured and runtime-validated. `unknown`, low confidence,
   refusal, malformed output, or classifier failure is non-routable and stops
   before catalog access.
-- The host maps accepted intent to a closed tool-name allowlist, filters what
-  the main model can see, and checks every requested tool again immediately
-  before execution.
+- The host derives a closed tool-name allowlist from one tool-contract registry,
+  validates the MCP inventory against it, filters what the main model can see,
+  and checks every requested tool again immediately before execution.
 - Tool results are screened before being recorded as reusable model context;
   final answers are screened before being returned.
-- Tool loops are bounded by `MAX_TOOL_ROUNDS` and all stop paths are observable.
+- Tool loops are bounded by rounds, total/per-tool calls, input/result/context
+  sizes, candidate fan-out, and wall-clock time; all stop paths are observable.
 
 ### Evaluation contracts
 
@@ -222,7 +223,8 @@ incident response, and trace-reader authorization.
 ## Current Nodes
 
 - `agent_host`: owns the first-pass policy screen, surface-aware content
-  checks, model loop, tool-call execution, and trace logging.
+  checks, host-owned tool contracts, execution budgets, model loop, tool-call
+  execution, and trace logging.
 - `mcp_servers`: owns the dummy data-catalog and intent-classifier MCP tools.
 - `gates` and `policy/screen.py`: own deterministic input and model-context
   checks that run before routing, tool-result reuse, and final output.
@@ -233,6 +235,13 @@ incident response, and trace-reader authorization.
 
 Keep model decisions and deterministic checks separate. The model may request an
 action; the host decides what is allowed to run.
+
+The host-owned tool registry is the single source of truth for executable tool
+names, canonical model-facing schemas, route membership, result validation, and
+limits. MCP discovery is used to verify compatibility; live descriptions do
+not grant capability. Each request also receives an execution budget covering
+rounds, total/per-tool calls, candidate schema fan-out, byte limits, timeouts,
+and model stop states.
 
 ## Setup
 

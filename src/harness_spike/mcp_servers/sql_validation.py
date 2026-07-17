@@ -93,10 +93,45 @@ PROHIBITED_FUNCTIONS = {
 
 @mcp.tool
 def validate_sql(sql: str, tables: list[str] | None = None) -> dict[str, object]:
-    """Validate one aggregate BigQuery query over the approved mock catalog.
+    """Apply the deterministic safety boundary to one generated BigQuery query.
 
-    ``tables`` is the generator's declaration. The validator derives physical
-    tables from the parsed SQL and blocks any mismatch instead of trusting it.
+    This tool validates read-only aggregate SQL against the validator's trusted
+    catalog and column-safety metadata. The current server configuration obtains
+    that metadata from the in-process ``TABLES`` fixture; a production deployment
+    can provide the same validation inputs from an Epic/BigQuery catalog adapter.
+    The tool does not execute SQL, estimate BigQuery cost, authorize access, or
+    repair a rejected query. ``tables`` is only the generator's declaration;
+    physical tables and columns are independently derived from the SQLGlot AST.
+
+    Validation is ordered and fail closed. The first failing gate returns a blocked
+    result with a stable violation code and AST-derived evidence when available:
+
+    1. Validate the tool arguments and reject duplicate declared tables.
+    2. Parse using the BigQuery dialect and require exactly one query statement.
+    3. Reject unsafe AST structure: empty projections, non-query roots, prohibited
+       operations or functions, system variables, recursive CTEs, windows, UNNEST,
+       unsafe joins, and every form of star projection.
+    4. Derive physical tables while excluding CTE aliases, then require at least one
+       approved, non-wildcard catalog table and require the declaration to exactly
+       match the tables observed in the AST. The current fixture policy additionally
+       rejects project- or dataset-qualified names.
+    5. Qualify the AST against the configured SQLGlot schema so unknown and ambiguous
+       columns are rejected and referenced columns can be reported structurally.
+    6. Enforce result-safety policy: every output branch must aggregate, projected
+       columns must be grouped, sensitive columns are forbidden, and identifier
+       columns may appear only in explicitly allowed aggregate or join contexts.
+    7. Render the fully qualified AST back to normalized BigQuery SQL and return it
+       with structural validation metadata. No SQL is returned for a blocked result.
+
+    Args:
+        sql: Candidate BigQuery SQL. Input is limited to one non-empty statement.
+        tables: Physical table names declared by the generator. These are advisory
+            until they exactly match the physical tables derived from the AST.
+
+    Returns:
+        A serialized ``SqlValidationResult``. Allowed results contain normalized SQL
+        and no violations; blocked results contain at least one violation and never
+        contain normalized SQL.
     """
     args = ValidateSqlArgs(sql=sql.strip(), tables=tables or [])
     declared_tables = sorted(set(args.tables))

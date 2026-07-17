@@ -5,6 +5,7 @@ import pytest
 from anthropic.types import TextBlock
 
 from harness_spike.agent_host import agent
+from harness_spike.agent_host.tool_registry import canonical_tools_for_server
 
 
 class FakeBridge:
@@ -21,7 +22,7 @@ class FakeBridge:
 
     async def list_anthropic_tools(self) -> list[dict[str, object]]:
         self.events.append("catalog:list")
-        return []
+        return canonical_tools_for_server("catalog")
 
     async def call_tool(self, name: str, arguments: object) -> dict[str, object]:
         if "intent" in self.url:
@@ -211,7 +212,7 @@ async def test_refusing_intent_does_not_call_catalog(
 ) -> None:
     monkeypatch.setattr(agent, "get_settings", lambda: _settings(str(tmp_path)))
 
-    async def fake_classify_request(*_: object) -> agent.IntentResult:
+    async def fake_classify_request(*_: object, **__: object) -> agent.IntentResult:
         return agent.IntentResult(
             intent="patient_specific_request",
             confidence=0.95,

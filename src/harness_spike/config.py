@@ -31,6 +31,20 @@ class Settings:
     sql_generation_mcp_url: str = "http://localhost:8003/mcp"
     sql_validation_mcp_url: str = "http://localhost:8004/mcp"
     max_tool_rounds: int = 3
+    max_model_calls: int = 4
+    max_tool_calls: int = 12
+    max_calls_per_tool: int = 6
+    max_candidate_schemas: int = 5
+    max_input_bytes: int = 16_000
+    max_tool_result_bytes: int = 32_000
+    max_context_bytes: int = 128_000
+    max_wall_seconds: float = 60.0
+    mcp_call_timeout_seconds: float = 10.0
+    model_call_timeout_seconds: float = 30.0
+    model_max_tokens: int = 300
+    intent_max_tokens: int = 200
+    sql_generation_max_tokens: int = 500
+    intent_min_confidence: float = 0.70
     trace_dir: str = "logs/runs"
     log_raw_prompts: bool = False
 
@@ -58,12 +72,46 @@ class Settings:
 def get_settings() -> Settings:
     load_dotenv()
 
+    int_defaults = {
+        "max_tool_rounds": ("MAX_TOOL_ROUNDS", 3),
+        "max_model_calls": ("MAX_MODEL_CALLS", 4),
+        "max_tool_calls": ("MAX_TOOL_CALLS", 12),
+        "max_calls_per_tool": ("MAX_CALLS_PER_TOOL", 6),
+        "max_candidate_schemas": ("MAX_CANDIDATE_SCHEMAS", 5),
+        "max_input_bytes": ("MAX_INPUT_BYTES", 16_000),
+        "max_tool_result_bytes": ("MAX_TOOL_RESULT_BYTES", 32_000),
+        "max_context_bytes": ("MAX_CONTEXT_BYTES", 128_000),
+        "model_max_tokens": ("MODEL_MAX_TOKENS", 300),
+        "intent_max_tokens": ("INTENT_MAX_TOKENS", 200),
+        "sql_generation_max_tokens": ("SQL_GENERATION_MAX_TOKENS", 500),
+    }
+    parsed_ints: dict[str, int] = {}
+    for field_name, (env_name, default) in int_defaults.items():
+        try:
+            parsed_ints[field_name] = _int_env(env_name, default)
+        except ValueError as exc:
+            raise RuntimeError(f"{env_name} must be an integer.") from exc
+        if parsed_ints[field_name] < 0:
+            raise RuntimeError(f"{env_name} must be 0 or greater.")
+
     try:
-        max_tool_rounds = _int_env("MAX_TOOL_ROUNDS", 3)
+        max_wall_seconds = float(os.getenv("MAX_WALL_SECONDS", "60"))
+        mcp_call_timeout_seconds = float(os.getenv("MCP_CALL_TIMEOUT_SECONDS", "10"))
+        model_call_timeout_seconds = float(os.getenv("MODEL_CALL_TIMEOUT_SECONDS", "30"))
+        intent_min_confidence = float(os.getenv("INTENT_MIN_CONFIDENCE", "0.70"))
     except ValueError as exc:
-        raise RuntimeError("MAX_TOOL_ROUNDS must be an integer.") from exc
-    if max_tool_rounds < 0:
-        raise RuntimeError("MAX_TOOL_ROUNDS must be 0 or greater.")
+        raise RuntimeError(
+            "MAX_WALL_SECONDS, MCP_CALL_TIMEOUT_SECONDS, MODEL_CALL_TIMEOUT_SECONDS, and "
+            "INTENT_MIN_CONFIDENCE must be numeric."
+        ) from exc
+    if (
+        max_wall_seconds <= 0
+        or mcp_call_timeout_seconds <= 0
+        or model_call_timeout_seconds <= 0
+    ):
+        raise RuntimeError("execution timeouts must be greater than 0.")
+    if not 0 <= intent_min_confidence <= 1:
+        raise RuntimeError("INTENT_MIN_CONFIDENCE must be between 0 and 1.")
 
     return Settings(
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY") or os.getenv("AI_HUB_API_KEY"),
@@ -80,7 +128,21 @@ def get_settings() -> Settings:
         sql_validation_mcp_url=(
             os.getenv("SQL_VALIDATION_MCP_URL") or "http://localhost:8004/mcp"
         ),
-        max_tool_rounds=max_tool_rounds,
+        max_tool_rounds=parsed_ints["max_tool_rounds"],
+        max_model_calls=parsed_ints["max_model_calls"],
+        max_tool_calls=parsed_ints["max_tool_calls"],
+        max_calls_per_tool=parsed_ints["max_calls_per_tool"],
+        max_candidate_schemas=parsed_ints["max_candidate_schemas"],
+        max_input_bytes=parsed_ints["max_input_bytes"],
+        max_tool_result_bytes=parsed_ints["max_tool_result_bytes"],
+        max_context_bytes=parsed_ints["max_context_bytes"],
+        max_wall_seconds=max_wall_seconds,
+        mcp_call_timeout_seconds=mcp_call_timeout_seconds,
+        model_call_timeout_seconds=model_call_timeout_seconds,
+        model_max_tokens=parsed_ints["model_max_tokens"],
+        intent_max_tokens=parsed_ints["intent_max_tokens"],
+        sql_generation_max_tokens=parsed_ints["sql_generation_max_tokens"],
+        intent_min_confidence=intent_min_confidence,
         trace_dir=os.getenv("TRACE_DIR", "logs/runs"),
         log_raw_prompts=_bool_env("LOG_RAW_PROMPTS", False),
     )

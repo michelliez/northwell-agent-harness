@@ -110,7 +110,7 @@ def generate_sql(question: str, schema_context: str | None = None) -> dict[str, 
     )
     response = client.messages.create(
         model=settings.require_claude_model(),
-        max_tokens=500,
+        max_tokens=getattr(settings, "sql_generation_max_tokens", 500),
         system=SQL_GENERATION_SYSTEM_PROMPT,
         messages=[
             {
@@ -125,6 +125,10 @@ def generate_sql(question: str, schema_context: str | None = None) -> dict[str, 
         tools=[SQL_TOOL],
         tool_choice={"type": "tool", "name": "emit_sql"},
     )
+
+    stop_reason = getattr(response, "stop_reason", None)
+    if stop_reason in {"refusal", "max_tokens"}:
+        raise RuntimeError(f"SQL generator stopped with {stop_reason}")
 
     tool_uses = [
         block

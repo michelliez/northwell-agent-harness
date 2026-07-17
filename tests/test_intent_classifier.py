@@ -4,6 +4,7 @@ import pytest
 from anthropic.types import ToolUseBlock
 
 from harness_spike.mcp_servers import intent
+from harness_spike.agent_host.tool_registry import tools_for_intent
 
 
 def _response(payload: dict[str, object]) -> SimpleNamespace:
@@ -198,8 +199,8 @@ def test_classify_intent_fails_closed_on_incoherent_safe_action(
 
 
 def test_route_tool_scope_is_host_owned() -> None:
-    assert intent.allowed_tools_for("schema_lookup") == {"get_table_schema"}
-    assert intent.allowed_tools_for("patient_specific_request") == set()
+    assert tools_for_intent("schema_lookup") == {"get_table_schema"}
+    assert tools_for_intent("patient_specific_request") == set()
 
 
 def test_classify_intent_rejects_missing_or_duplicate_tool_results(
