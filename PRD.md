@@ -520,3 +520,6 @@ scope, observable traces, and regression evaluation. The primary departure
 from mature industry practice is that identity, resource authorization,
 input/output safety classification, and operational monitoring do not yet
 surround those layers.
+- Retrieval-augmented generation should connect model responses to an authoritative external knowledge base, provide source attribution, and keep external data current through refresh processes: AWS, [What is RAG?](https://aws.amazon.com/what-is/retrieval-augmented-generation/).
+- Production RAG workflows should be evaluated as separate ingestion, embedding, retrieval, augmentation, and generation stages, with retrieval precision and generation faithfulness measured independently: Databricks, [End-to-End RAG Workflow](https://www.databricks.com/blog/rag-workflow).
+- Agentic retrieval systems benefit from explicit tool surfaces, context management, permissioning, summarization, and MCP-compatible execution environments; these ideas inform the harness design, even though LangChain is not required for the MVP: LangChain, [Deep Agents overview](https://docs.langchain.com/oss/python/deepagents/overview) and [Deep Agents RAG](https://docs.langchain.com/oss/python/deepagents/rag).
