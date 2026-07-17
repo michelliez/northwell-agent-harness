@@ -1,0 +1,12 @@
+{"ts": 1000.0, "run_id": "aaa", "event": "request.received", "question": "What tables have appointment data?"}
+{"ts": 1000.01, "run_id": "aaa", "event": "policy_gate.checked", "result": {"allowed": true, "reason": null, "matched_term": null}}
+{"ts": 1000.05, "run_id": "aaa", "event": "intent.classification.request", "mcp_url": "http://localhost:8002/mcp"}
+{"ts": 1001.5, "run_id": "aaa", "event": "intent.classification.result", "result": {"intent": "table_discovery", "confidence": 0.95, "risk_flags": [], "recommended_action": "search_tables", "needs_clarification": false}}
+{"ts": 1001.6, "run_id": "aaa", "event": "mcp.tools.listed", "mcp_url": "http://localhost:8000/mcp", "tools": ["search_tables", "get_table_schema"]}
+{"ts": 1001.7, "run_id": "aaa", "event": "model.request", "round": 1, "model": "claude-haiku-4-5-20251001", "messages": "[hidden]", "tools": ["search_tables", "get_table_schema"]}
+{"ts": 1002.5, "run_id": "aaa", "event": "model.response", "round": 1, "response": "[hidden]"}
+{"ts": 1002.51, "run_id": "aaa", "event": "tool.selected", "round": 1, "name": "search_tables", "input": {"question": "appointments"}, "tool_use_id": "toolu_1"}
+{"ts": 1002.55, "run_id": "aaa", "event": "tool.result", "round": 1, "name": "search_tables", "result": {"candidates": [{"table_name": "appointments"}]}}
+{"ts": 1002.56, "run_id": "aaa", "event": "model.request", "round": 2, "model": "claude-haiku-4-5-20251001", "messages": "[hidden]", "tools": ["search_tables", "get_table_schema"]}
+{"ts": 1003.2, "run_id": "aaa", "event": "model.response", "round": 2, "response": "[hidden]"}
+{"ts": 1003.21, "run_id": "aaa", "event": "answer.ready", "answer": "The appointments table has appointment data.", "used_tools": ["search_tables"]}

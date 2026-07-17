@@ -1,0 +1,4 @@
+{"ts": 3000.0, "run_id": "ccc", "event": "request.received", "question": "How many visits last month?"}
+{"ts": 3000.01, "run_id": "ccc", "event": "policy_gate.checked", "result": {"allowed": true, "reason": null, "matched_term": null}}
+{"ts": 3000.05, "run_id": "ccc", "event": "intent.classification.request", "mcp_url": "http://localhost:8002/mcp"}
+{"ts": 3000.5, "run_id": "ccc", "event": "intent.classification.failed", "error": "ToolError"}

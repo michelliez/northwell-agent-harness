@@ -116,6 +116,26 @@ uv run --no-editable nh-spike-agent "What data would I need to answer how many p
 This calls the model through AI Hub. Do not run prompts unless model/API usage is
 approved.
 
+To render the run trace as an HTML diagram and open it in your browser, add
+`--viewer`:
+
+```powershell
+uv run --no-editable nh-spike-agent "What data would I need to answer how many patients had visits last month?" --viewer
+```
+
+The CLI prints the normal answer, the JSONL trace path, and a local
+`file://...` viewer URL. To generate the HTML without opening a browser, use:
+
+```powershell
+uv run --no-editable nh-spike-agent "What data would I need to answer how many patients had visits last month?" --viewer --no-open-viewer
+```
+
+You can also render an existing trace file later:
+
+```powershell
+uv run --no-editable nh-spike-traces logs/runs/<run_id>.jsonl -o trace_view.html
+```
+
 Expected tool pattern for the data-catalog spike:
 
 ```text

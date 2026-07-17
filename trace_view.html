@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trace Viewer</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0f1117; --surface: #1a1d27; --surface2: #242836;
+    --border: #2e3348; --text: #e1e4ed; --text2: #8b8fa7;
+    --accent: #6c8cff; --green: #4ade80; --red: #f87171;
+    --orange: #fb923c; --purple: #a78bfa; --cyan: #22d3ee;
+    --yellow: #facc15;
+    --stage-prompt: #60a5fa; --stage-policy: #facc15; --stage-intent: #a78bfa;
+    --stage-agent: #22d3ee; --stage-final: #4ade80;
+  }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace; background: var(--bg); color: var(--text); height: 100vh; overflow: hidden; }
+  #app { display: flex; height: 100vh; }
+
+  /* Trace sidebar */
+  .trace-sidebar { width: 280px; border-right: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; }
+  .trace-sidebar h2 { padding: 16px; font-size: 14px; color: var(--text2); border-bottom: 1px solid var(--border); }
+  .trace-list { overflow-y: auto; flex: 1; }
+  .trace-item { padding: 12px 16px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background .15s; }
+  .trace-item:hover { background: var(--surface2); }
+  .trace-item.active { background: var(--surface2); border-left: 3px solid var(--accent); }
+  .trace-item .run-id { font-size: 11px; color: var(--text2); font-family: monospace; }
+  .trace-item .question { font-size: 13px; margin-top: 4px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .trace-item .meta { font-size: 11px; color: var(--text2); margin-top: 4px; display: flex; gap: 8px; align-items: center; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .status-dot.success { background: var(--green); }
+  .status-dot.blocked { background: var(--red); }
+  .status-dot.error { background: var(--orange); }
+  .status-dot.unknown { background: var(--text2); }
+
+  /* Graph area */
+  .graph-area { flex: 1; position: relative; background: var(--bg); display: flex; flex-direction: column; min-width: 0; }
+  .graph-container { width: 100%; flex: 1; min-height: 0; }
+
+  /* Detail panel */
+  .detail-panel { width: 420px; border-left: 1px solid var(--border); background: var(--surface); overflow-y: auto; flex-shrink: 0; display: none; }
+  .detail-panel.open { display: block; }
+  .detail-header { padding: 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: flex-start; }
+  .detail-header h3 { font-size: 14px; }
+  .detail-close { background: none; border: none; color: var(--text2); cursor: pointer; font-size: 18px; padding: 4px 8px; }
+  .detail-close:hover { color: var(--text); }
+  .detail-section { border-bottom: 1px solid var(--border); }
+  .detail-section-header { padding: 12px 16px; font-size: 12px; color: var(--text2); cursor: pointer; display: flex; justify-content: space-between; align-items: center; user-select: none; }
+  .detail-section-header:hover { background: var(--surface2); }
+  .detail-section-content { padding: 0 16px 12px; }
+  .json-tree { font-family: monospace; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; color: var(--text); }
+  .json-key { color: var(--cyan); }
+  .json-string { color: var(--green); }
+  .json-number { color: var(--orange); }
+  .json-bool { color: var(--purple); }
+  .json-null { color: var(--text2); }
+  .json-bracket { color: var(--text2); }
+  .copy-btn { background: var(--surface2); border: 1px solid var(--border); color: var(--text2); font-size: 11px; padding: 2px 8px; border-radius: 4px; cursor: pointer; margin-left: 8px; }
+  .copy-btn:hover { color: var(--text); border-color: var(--accent); }
+
+  /* Legend */
+  .legend { position: absolute; bottom: 16px; left: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; z-index: 10; font-size: 11px; }
+  .legend h4 { color: var(--text2); margin-bottom: 8px; font-size: 11px; }
+  .legend-items { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-swatch { width: 14px; height: 14px; border-radius: 3px; border: 2px solid; display: flex; align-items: center; justify-content: center; font-size: 9px; }
+
+  /* Node styles */
+  .flow-node { background: var(--surface); border: 2px solid var(--border); border-radius: 8px; padding: 10px 14px; min-width: 180px; max-width: 260px; font-size: 12px; cursor: pointer; transition: border-color .15s, box-shadow .15s; }
+  .flow-node:hover { border-color: var(--accent); box-shadow: 0 0 12px rgba(108,140,255,.2); }
+  .flow-node.selected { border-color: var(--accent); box-shadow: 0 0 16px rgba(108,140,255,.3); }
+  .flow-node .node-header { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+  .flow-node .node-icon { font-size: 14px; flex-shrink: 0; }
+  .flow-node .node-label { font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .flow-node .node-type-badge { font-size: 10px; padding: 1px 6px; border-radius: 3px; color: var(--bg); font-weight: 600; flex-shrink: 0; }
+  .flow-node .node-summary { font-size: 11px; color: var(--text2); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .flow-node .node-meta { font-size: 10px; color: var(--text2); margin-top: 4px; display: flex; gap: 8px; }
+
+  /* Node type colors */
+  .ntype-input { border-color: var(--accent); } .ntype-input .node-type-badge { background: var(--accent); }
+  .ntype-policy_gate { border-color: var(--yellow); } .ntype-policy_gate .node-type-badge { background: var(--yellow); }
+  .ntype-classifier { border-color: var(--purple); } .ntype-classifier .node-type-badge { background: var(--purple); }
+  .ntype-generation { border-color: var(--cyan); } .ntype-generation .node-type-badge { background: var(--cyan); }
+  .ntype-validation { border-color: var(--orange); } .ntype-validation .node-type-badge { background: var(--orange); }
+  .ntype-tool_call { border-color: #60a5fa; } .ntype-tool_call .node-type-badge { background: #60a5fa; }
+  .ntype-model_call { border-color: #c084fc; } .ntype-model_call .node-type-badge { background: #c084fc; }
+  .ntype-output { border-color: var(--green); } .ntype-output .node-type-badge { background: var(--green); }
+  .ntype-error { border-color: var(--red); } .ntype-error .node-type-badge { background: var(--red); }
+  .ntype-unknown { border-color: var(--text2); } .ntype-unknown .node-type-badge { background: var(--text2); }
+
+  /* Status markers */
+  .status-blocked .node-label { color: var(--red); }
+  .status-error .node-label { color: var(--orange); }
+  .status-refused .node-label { color: var(--orange); }
+
+  /* Edge labels */
+  .edge-label-container { font-size: 10px; background: var(--surface2); padding: 2px 6px; border-radius: 3px; border: 1px solid var(--border); }
+
+  /* Empty state */
+  .empty-state { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text2); font-size: 14px; }
+
+  /* Overview bar */
+  .overview-bar { padding: 12px 16px; background: var(--surface2); border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text2); display: flex; gap: 16px; align-items: center; }
+  .overview-bar .stat { display: flex; gap: 4px; align-items: center; }
+  .overview-bar .stat-value { color: var(--text); font-weight: 600; }
+  .stage-bar { padding: 10px 16px; background: rgba(15,17,23,.78); border-bottom: 1px solid var(--border); display: flex; gap: 8px; flex-wrap: wrap; }
+  .stage-pill { border: 1px solid var(--border); background: var(--surface); border-radius: 999px; padding: 4px 10px; font-size: 11px; color: var(--text2); }
+  .stage-pill.prompt { border-color: var(--stage-prompt); color: var(--stage-prompt); }
+  .stage-pill.policy { border-color: var(--stage-policy); color: var(--stage-policy); }
+  .stage-pill.intent { border-color: var(--stage-intent); color: var(--stage-intent); }
+  .stage-pill.agent { border-color: var(--stage-agent); color: var(--stage-agent); }
+  .stage-pill.final { border-color: var(--stage-final); color: var(--stage-final); }
+  .stage-label { margin-bottom: 6px; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--text2); }
+  .stage-prompt { box-shadow: inset 4px 0 0 var(--stage-prompt); }
+  .stage-policy { box-shadow: inset 4px 0 0 var(--stage-policy); }
+  .stage-intent { box-shadow: inset 4px 0 0 var(--stage-intent); }
+  .stage-agent { box-shadow: inset 4px 0 0 var(--stage-agent); }
+  .stage-final { box-shadow: inset 4px 0 0 var(--stage-final); }
+  .static-stage-heading { width: 320px; margin-top: 12px; padding: 6px 0; color: var(--text2); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; border-bottom: 1px solid var(--border); }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>const TRACE_DATA = [{"run_id": "09909c2ad0084b58b9437312ce22ce27", "question": "(question hidden)", "status": "success", "total_duration": 5.6111, "warnings": [], "events": [{"event_id": 0, "run_id": "09909c2ad0084b58b9437312ce22ce27", "event_type": "request.received", "node_type": "input", "ts": 1784214203.584457, "duration": 0.0123, "status": "success", "label": "Request Received", "summary": "(question hidden)", "input_data": {"question": "[hidden]"}, "output_data": {}, "raw": {"ts": 1784214203.584457, "run_id": "09909c2ad0084b58b9437312ce22ce27", "event": "request.received", "question": "[hidden]"}, "round_number": null, "tool_name": null, "model_name": null, "error": null}, {"event_id": 1, "run_id": "09909c2ad0084b58b9437312ce22ce27", "event_type": "policy_gate.checked", "node_type": "policy_gate", "ts": 1784214203.5967932, "duration": 0.0487, "status": "success", "label": "Policy Gate: Allowed", "summary": "no_deterministic_verdict", "input_data": {}, "output_data": {"allowed": true, "reason": "no_deterministic_verdict", "matched_term": null}, "raw": {"ts": 1784214203.5967932, "run_id": "09909c2ad0084b58b9437312ce22ce27", "event": "policy_gate.checked", "result": {"allowed": true, "reason": "no_deterministic_verdict", "matched_term": null}}, "round_number": null, "tool_name": null, "model_name": null, "error": null}, {"event_id": 2, "run_id": "09909c2ad0084b58b9437312ce22ce27", "event_type": "intent.classification.request", "node_type": "classifier", "ts": 1784214203.6454551, "duration": 2.2511, "status": "success", "label": "Intent Classification", "summary": "", "input_data": {"mcp_url": "http://localhost:8002/mcp"}, "output_data": {}, "raw": {"ts": 1784214203.6454551, "run_id": "09909c2ad0084b58b9437312ce22ce27", "event": "intent.classification.request", "mcp_url": "http://localhost:8002/mcp"}, "round_number": null, "tool_name": null, "model_name": null, "error": null}, {"event_id": 3, "run_id": "09909c2ad0084b58b9437312ce22ce27", "event_type": "intent.classification.result", "node_type": "classifier", "ts": 1784214205.896568, "duration": 0.077, "status": "success", "label": "Intent: table_discovery (95%)", "summary": "Action: search_tables", "input_data": {}, "output_data": {"intent": "table_discovery", "confidence": 0.95, "risk_flags": [], "recommended_action": "search_tables", "needs_clarification": false}, "raw": {"ts": 1784214205.896568, "run_id": "09909c2ad0084b58b9437312ce22ce27", "event": "intent.classification.result", "result": {"intent": "table_discovery", "confidence": 0.95, "risk_flags": [], "recommended_action": "search_tables", "needs_clarification": false}}, "round_number": null, "tool_name": null, "model_name": null, "error": null}, {"event_id": 4, "run_id": "09909c2ad0084b58b9437312ce22ce27", "event_type": "mcp.tools.listed", "node_type": "tool_call", "ts": 1784214205.973561, "duration": 0.0093, "status": "success", "label": "Tools Listed (4)", "summary": "", "input_data": {}, "output_data": {}, "raw": {"ts": 1784214205.973561, "run_id": "09909c2ad0084b58b9437312ce22ce27", "event": "mcp.tools.listed", "mcp_url": "http://localhost:8000/mcp", "tools": ["search_docs", "get_table_info", "search_tables", "get_table_schema"]}, "round_number": null, "tool_name": null, "model_name": null, "error": null}, {"event_id": 5, "run_id": "09909c2ad0084b58b9437312ce22ce27", "event_type": "model.request", "node_type": "model_call", "ts": 1784214205.982823, "duration": 1.0804, "status": "success", "label": "Model Request R1", "summary": "", "input_data": {"model": "claude-haiku-4-5-20251001", "round": 1, "tools": ["search_docs", "get_table_info", "search_tables", "get_table_schema"]}, "output_data": {}, "raw": {"ts": 1784214205.982823, "run_id": "09909c2ad0084b58b9437312ce22ce27", "event": "model.request", "round": 1, "model": "claude-haiku-4-5-20251001", "messages": "[hidden]", "tools": ["search_docs", "get_table_info", "search_tables", "get_table_schema"]}, "round_number": 1, "tool_name": null, "model_name": "claude-haiku-4-5-20251001", "error": null}, {"event_id": 6, "run_id": "09909c2ad0084b58b9437312ce22ce27", "event_type": "model.response", "node_type": "model_call", "ts": 1784214207.063187, "duration": 0.0002, "status": "success", "label": "Model Response R1", "summary": "", "input_data": {}, "output_data": {"round": 1, "response": "[hidden]"}, "raw": {"ts": 1784214207.063187, "run_id": "09909c2ad0084b58b9437312ce22ce27", "event": "model.response", "round": 1, "response": "[hidden]"}, "round_number": 1, "tool_name": null, "model_name": null, "error": null}, {"event_id": 7, "run_id": "09909c2ad0084b58b9437312ce22ce27", "event_type": "tool.selected", "node_type": "tool_call", "ts": 1784214207.0634172, "duration": 0.0092, "status": "success", "label": "Tool: search_tables R1", "summary": "{\"question\": \"Which tables contain information about appointments?\"}", "input_data": {"tool": "search_tables", "input": {"question": "Which tables contain information about appointments?"}}, "output_data": {}, "raw": {"ts": 1784214207.0634172, "run_id": "09909c2ad0084b58b9437312ce22ce27", "event": "tool.selected", "round": 1, "name": "search_tables", "input": {"question": "Which tables contain information about appointments?"}, "tool_use_id": "toolu_vrtx_018GJecfE85KMxECRrSt7ZE4"}, "round_number": 1, "tool_name": "search_tables", "model_name": null, "error": null}, {"event_id": 8, "run_id": "09909c2ad0084b58b9437312ce22ce27", "event_type": "tool.result", "node_type": "tool_call", "ts": 1784214207.072618, "duration": 0.0002, "status": "success", "label": "Result: search_tables", "summary": "3 candidates", "input_data": {}, "output_data": {"tool": "search_tables", "result": {"question": "Which tables contain information about appointments?", "candidates": [{"table_name": "encounters", "description": "One row per patient visit or encounter.", "why_relevant": "Potentially relevant catalog entry for initial exploration."}, {"table_name": "patients", "description": "One row per patient in the dummy catalog.", "why_relevant": "Potentially relevant catalog entry for initial exploration."}, {"table_name": "appointments", "description": "Scheduled appointment records.", "why_relevant": "Contains scheduled appointment dates and statuses."}], "source": "dummy_mcp_data_catalog", "is_dummy": true}}, "raw": {"ts": 1784214207.072618, "run_id": "09909c2ad0084b58b9437312ce22ce27", "event": "tool.result", "round": 1, "name": "search_tables", "result": {"question": "Which tables contain information about appointments?", "candidates": [{"table_name": "encounters", "description": "One row per patient visit or encounter.", "why_relevant": "Potentially relevant catalog entry for initial exploration."}, {"table_name": "patients", "description": "One row per patient in the dummy catalog.", "why_relevant": "Potentially relevant catalog entry for initial exploration."}, {"table_name": "appointments", "description": "Scheduled appointment records.", "why_relevant": "Contains scheduled appointment dates and statuses."}], "source": "dummy_mcp_data_catalog", "is_dummy": true}}, "round_number": 1, "tool_name": "search_tables", "model_name": null, "error": null}, {"event_id": 9, "run_id": "09909c2ad0084b58b9437312ce22ce27", "event_type": "model.request", "node_type": "model_call", "ts": 1784214207.072802, "duration": 2.1223, "status": "success", "label": "Model Request R2", "summary": "", "input_data": {"model": "claude-haiku-4-5-20251001", "round": 2, "tools": ["search_docs", "get_table_info", "search_tables", "get_table_schema"]}, "output_data": {}, "raw": {"ts": 1784214207.072802, "run_id": "09909c2ad0084b58b9437312ce22ce27", "event": "model.request", "round": 2, "model": "claude-haiku-4-5-20251001", "messages": "[hidden]", "tools": ["search_docs", "get_table_info", "search_tables", "get_table_schema"]}, "round_number": 2, "tool_name": null, "model_name": "claude-haiku-4-5-20251001", "error": null}, {"event_id": 10, "run_id": "09909c2ad0084b58b9437312ce22ce27", "event_type": "model.response", "node_type": "model_call", "ts": 1784214209.1951082, "duration": 0.0004, "status": "success", "label": "Model Response R2", "summary": "", "input_data": {}, "output_data": {"round": 2, "response": "[hidden]"}, "raw": {"ts": 1784214209.1951082, "run_id": "09909c2ad0084b58b9437312ce22ce27", "event": "model.response", "round": 2, "response": "[hidden]"}, "round_number": 2, "tool_name": null, "model_name": null, "error": null}, {"event_id": 11, "run_id": "09909c2ad0084b58b9437312ce22ce27", "event_type": "answer.ready", "node_type": "output", "ts": 1784214209.19551, "duration": null, "status": "success", "label": "Answer Ready", "summary": "Based on the search results, here are the **relevant tables for appointments**:\n\n1. **`appointments`** \u2b50 (Most directly ...", "input_data": {}, "output_data": {"answer": "Based on the search results, here are the **relevant tables for appointments**:\n\n1. **`appointments`** \u2b50 (Most directly relevant)\n   - **Description:** Scheduled appointment records\n   - **Contains:** Appointment dates and statuses\n\n2. **`encounters`** (Supporting table)\n   - **Description:** One row per patient visit or encounter\n   - **Note:** Encounters may represent actual visits that may or may not have been scheduled as appointments\n\n3. **`patients`** (Reference table)\n   - **Description:** One row per patient in the dummy catalog\n   - **Note:** Useful for joining with appointments to get patient information\n\nThe **`appointments`** table is the primary source for appointment-related data. Would you like me to show you the detailed schema for any of these tables?", "used_tools": ["search_tables"]}, "raw": {"ts": 1784214209.19551, "run_id": "09909c2ad0084b58b9437312ce22ce27", "event": "answer.ready", "answer": "Based on the search results, here are the **relevant tables for appointments**:\n\n1. **`appointments`** \u2b50 (Most directly relevant)\n   - **Description:** Scheduled appointment records\n   - **Contains:** Appointment dates and statuses\n\n2. **`encounters`** (Supporting table)\n   - **Description:** One row per patient visit or encounter\n   - **Note:** Encounters may represent actual visits that may or may not have been scheduled as appointments\n\n3. **`patients`** (Reference table)\n   - **Description:** One row per patient in the dummy catalog\n   - **Note:** Useful for joining with appointments to get patient information\n\nThe **`appointments`** table is the primary source for appointment-related data. Would you like me to show you the detailed schema for any of these tables?", "used_tools": ["search_tables"]}, "round_number": null, "tool_name": null, "model_name": null, "error": null}], "nodes": [{"id": "n0", "label": "Request Received", "node_type": "input", "status": "success", "duration": 0.0123, "summary": "(question hidden)", "event_idx": 0, "round_number": null}, {"id": "n1", "label": "Policy Gate: Allowed", "node_type": "policy_gate", "status": "success", "duration": 0.0487, "summary": "no_deterministic_verdict", "event_idx": 1, "round_number": null}, {"id": "n2", "label": "Intent Classification", "node_type": "classifier", "status": "success", "duration": 2.2511, "summary": "", "event_idx": 2, "round_number": null}, {"id": "n3", "label": "Intent: table_discovery (95%)", "node_type": "classifier", "status": "success", "duration": 0.077, "summary": "Action: search_tables", "event_idx": 3, "round_number": null}, {"id": "n4", "label": "Tools Listed (4)", "node_type": "tool_call", "status": "success", "duration": 0.0093, "summary": "", "event_idx": 4, "round_number": null}, {"id": "n5", "label": "Model Request R1", "node_type": "model_call", "status": "success", "duration": 1.0804, "summary": "", "event_idx": 5, "round_number": 1}, {"id": "n6", "label": "Model Response R1", "node_type": "model_call", "status": "success", "duration": 0.0002, "summary": "", "event_idx": 6, "round_number": 1}, {"id": "n7", "label": "Tool: search_tables R1", "node_type": "tool_call", "status": "success", "duration": 0.0092, "summary": "{\"question\": \"Which tables contain information about appointments?\"}", "event_idx": 7, "round_number": 1}, {"id": "n8", "label": "Result: search_tables", "node_type": "tool_call", "status": "success", "duration": 0.0002, "summary": "3 candidates", "event_idx": 8, "round_number": 1}, {"id": "n9", "label": "Model Request R2", "node_type": "model_call", "status": "success", "duration": 2.1223, "summary": "", "event_idx": 9, "round_number": 2}, {"id": "n10", "label": "Model Response R2", "node_type": "model_call", "status": "success", "duration": 0.0004, "summary": "", "event_idx": 10, "round_number": 2}, {"id": "n11", "label": "Answer Ready", "node_type": "output", "status": "success", "duration": null, "summary": "Based on the search results, here are the **relevant tables for appointments**:\n\n1. **`appointments`** \u2b50 (Most directly ...", "event_idx": 11, "round_number": null}], "edges": [{"source": "n0", "target": "n1", "label": "", "edge_type": "default"}, {"source": "n1", "target": "n2", "label": "allowed", "edge_type": "default"}, {"source": "n2", "target": "n3", "label": "", "edge_type": "default"}, {"source": "n3", "target": "n4", "label": "search_tables", "edge_type": "default"}, {"source": "n4", "target": "n5", "label": "", "edge_type": "default"}, {"source": "n5", "target": "n6", "label": "", "edge_type": "default"}, {"source": "n6", "target": "n7", "label": "tool_call", "edge_type": "default"}, {"source": "n7", "target": "n8", "label": "", "edge_type": "default"}, {"source": "n8", "target": "n9", "label": "continue", "edge_type": "default"}, {"source": "n9", "target": "n10", "label": "", "edge_type": "default"}, {"source": "n10", "target": "n11", "label": "complete", "edge_type": "default"}]}];</script>
+
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@18.3.1",
+    "react-dom": "https://esm.sh/react-dom@18.3.1",
+    "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+    "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime",
+    "@xyflow/react": "https://esm.sh/@xyflow/react@12.6.0?external=react,react-dom",
+    "dagre": "https://esm.sh/dagre@0.8.5"
+  }
+}
+</script>
+
+<link rel="stylesheet" href="https://esm.sh/@xyflow/react@12.6.0/dist/style.css" />
+
+<script type="module">
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { jsx, jsxs, Fragment } from 'react/jsx-runtime';
+import { ReactFlow, Background, Controls, Handle, Position, MarkerType } from '@xyflow/react';
+import dagre from 'dagre';
+
+const h = jsx;
+const hs = jsxs;
+
+const NODE_TYPE_INFO = {
+  input:       { icon: '▶', label: 'Input' },
+  policy_gate: { icon: '⚠', label: 'Policy' },
+  classifier:  { icon: '⚙', label: 'Classifier' },
+  generation:  { icon: '✎', label: 'Generation' },
+  validation:  { icon: '✓', label: 'Validation' },
+  tool_call:   { icon: '⚒', label: 'Tool' },
+  model_call:  { icon: '⬣', label: 'Model' },
+  output:      { icon: '✔', label: 'Output' },
+  error:       { icon: '✖', label: 'Error' },
+  unknown:     { icon: '?',  label: 'Unknown' },
+};
+
+function formatDuration(d) {
+  if (d == null) return '';
+  if (d < 0.001) return '<1ms';
+  if (d < 1) return (d * 1000).toFixed(0) + 'ms';
+  return d.toFixed(2) + 's';
+}
+
+function escapeHtml(s) {
+  if (typeof s !== 'string') return String(s);
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function JsonView({ data, depth = 0 }) {
+  if (data === null || data === undefined) return h('span', { className: 'json-null' }, 'null');
+  if (typeof data === 'boolean') return h('span', { className: 'json-bool' }, String(data));
+  if (typeof data === 'number') return h('span', { className: 'json-number' }, String(data));
+  if (typeof data === 'string') {
+    if (data === '[REDACTED]') return h('span', { className: 'json-string', style: { color: 'var(--red)' } }, '"[REDACTED]"');
+    const display = data.length > 300 ? data.slice(0, 300) + '...' : data;
+    return h('span', { className: 'json-string' }, '"' + escapeHtml(display) + '"');
+  }
+  if (Array.isArray(data)) {
+    if (data.length === 0) return h('span', { className: 'json-bracket' }, '[]');
+    const [open, setOpen] = React.useState(depth < 2);
+    if (!open) {
+      return h('span', { className: 'json-bracket', onClick: () => setOpen(true), style: { cursor: 'pointer' } },
+        `[...${data.length} items]`);
+    }
+    return hs('span', {}, [
+      h('span', { className: 'json-bracket', onClick: () => setOpen(false), style: { cursor: 'pointer' }, key: 'open' }, '['),
+      ...data.map((item, i) =>
+        hs('div', { key: i, style: { paddingLeft: 16 } }, [
+          h(JsonView, { data: item, depth: depth + 1 }),
+          i < data.length - 1 ? ',' : ''
+        ])
+      ),
+      h('span', { className: 'json-bracket', key: 'close' }, ']')
+    ]);
+  }
+  if (typeof data === 'object') {
+    const keys = Object.keys(data);
+    if (keys.length === 0) return h('span', { className: 'json-bracket' }, '{}');
+    const [open, setOpen] = React.useState(depth < 2);
+    if (!open) {
+      return h('span', { className: 'json-bracket', onClick: () => setOpen(true), style: { cursor: 'pointer' } },
+        `{...${keys.length} keys}`);
+    }
+    return hs('span', {}, [
+      h('span', { className: 'json-bracket', onClick: () => setOpen(false), style: { cursor: 'pointer' }, key: 'open' }, '{'),
+      ...keys.map((key, i) =>
+        hs('div', { key, style: { paddingLeft: 16 } }, [
+          h('span', { className: 'json-key' }, '"' + escapeHtml(key) + '"'),
+          ': ',
+          h(JsonView, { data: data[key], depth: depth + 1 }),
+          i < keys.length - 1 ? ',' : ''
+        ])
+      ),
+      h('span', { className: 'json-bracket', key: 'close' }, '}')
+    ]);
+  }
+  return h('span', {}, String(data));
+}
+
+function DetailSection({ title, children, defaultOpen = false }) {
+  const [open, setOpen] = React.useState(defaultOpen);
+  return hs('div', { className: 'detail-section' }, [
+    hs('div', { className: 'detail-section-header', onClick: () => setOpen(!open), key: 'header' }, [
+      h('span', {}, title),
+      h('span', {}, open ? '▼' : '▶')
+    ]),
+    open ? h('div', { className: 'detail-section-content', key: 'content' }, children) : null
+  ]);
+}
+
+function CopyButton({ text }) {
+  const [copied, setCopied] = React.useState(false);
+  return h('button', {
+    className: 'copy-btn',
+    onClick: (e) => {
+      e.stopPropagation();
+      navigator.clipboard.writeText(typeof text === 'string' ? text : JSON.stringify(text, null, 2));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
+  }, copied ? 'Copied!' : 'Copy');
+}
+
+function DetailPanel({ event, onClose }) {
+  if (!event) return null;
+  const info = NODE_TYPE_INFO[event.node_type] || NODE_TYPE_INFO.unknown;
+  return hs('div', { className: 'detail-panel open' }, [
+    hs('div', { className: 'detail-header', key: 'header' }, [
+      hs('div', {}, [
+        h('h3', {}, event.label),
+        h('div', { style: { fontSize: 11, color: 'var(--text2)', marginTop: 4 } }, info.icon + ' ' + info.label + ' • ' + event.status)
+      ]),
+      h('button', { className: 'detail-close', onClick: onClose }, '×')
+    ]),
+    h(DetailSection, { title: 'Overview', defaultOpen: true, key: 'overview' },
+      hs('div', { className: 'json-tree' }, [
+        h('div', { key: 'type' }, hs(Fragment, {}, [h('span', { className: 'json-key' }, 'Event: '), event.event_type])),
+        h('div', { key: 'status' }, hs(Fragment, {}, [h('span', { className: 'json-key' }, 'Status: '), event.status])),
+        event.duration != null ? h('div', { key: 'dur' }, hs(Fragment, {}, [h('span', { className: 'json-key' }, 'Duration: '), formatDuration(event.duration)])) : null,
+        event.round_number != null ? h('div', { key: 'round' }, hs(Fragment, {}, [h('span', { className: 'json-key' }, 'Round: '), String(event.round_number)])) : null,
+        event.tool_name ? h('div', { key: 'tool' }, hs(Fragment, {}, [h('span', { className: 'json-key' }, 'Tool: '), event.tool_name])) : null,
+        event.model_name ? h('div', { key: 'model' }, hs(Fragment, {}, [h('span', { className: 'json-key' }, 'Model: '), event.model_name])) : null,
+        event.error ? h('div', { key: 'err', style: { color: 'var(--red)' } }, hs(Fragment, {}, [h('span', { className: 'json-key' }, 'Error: '), event.error])) : null,
+      ])
+    ),
+    Object.keys(event.input_data || {}).length > 0
+      ? h(DetailSection, { title: 'Input', key: 'input' },
+          hs('div', { className: 'json-tree' }, [h(JsonView, { data: event.input_data }), h(CopyButton, { text: event.input_data, key: 'copy' })]))
+      : null,
+    Object.keys(event.output_data || {}).length > 0
+      ? h(DetailSection, { title: 'Output', defaultOpen: true, key: 'output' },
+          hs('div', { className: 'json-tree' }, [h(JsonView, { data: event.output_data }), h(CopyButton, { text: event.output_data, key: 'copy' })]))
+      : null,
+    event.summary
+      ? h(DetailSection, { title: 'Summary', key: 'summary' },
+          h('div', { style: { fontSize: 12, lineHeight: 1.6 } }, event.summary))
+      : null,
+    h(DetailSection, { title: 'Raw Trace Record', key: 'raw' },
+      hs('div', { className: 'json-tree' }, [h(JsonView, { data: event.raw }), h(CopyButton, { text: event.raw, key: 'copy' })]))
+  ]);
+}
+
+function TraceNode({ data }) {
+  const nodeData = data || {};
+  const nodeType = nodeData.node_type || 'unknown';
+  const info = NODE_TYPE_INFO[nodeType] || NODE_TYPE_INFO.unknown;
+  const stage = nodeData.stage || getStage(nodeData) || { key: 'agent', label: 'Agent Loop' };
+  const classes = ['flow-node', `ntype-${nodeType}`, `stage-${stage.key}`];
+  if (nodeData.status === 'blocked' || nodeData.status === 'error' || nodeData.status === 'refused') {
+    classes.push(`status-${nodeData.status}`);
+  }
+  if (nodeData.selected) classes.push('selected');
+
+  return hs('div', { className: classes.join(' '), onClick: () => nodeData.onSelect?.(nodeData.event_idx) }, [
+    h(Handle, { type: 'target', position: Position.Top, style: { visibility: 'hidden' }, key: 'target' }),
+    h('div', { className: 'stage-label', key: 'stage' }, stage.label),
+    hs('div', { className: 'node-header', key: 'header' }, [
+      h('span', { className: 'node-icon', key: 'icon', 'aria-label': info.label }, info.icon),
+      h('span', { className: 'node-label', key: 'label', title: nodeData.label }, nodeData.label || 'Unknown Event'),
+      h('span', { className: 'node-type-badge', key: 'badge' }, info.label),
+    ]),
+    nodeData.summary ? h('div', { className: 'node-summary', key: 'summary', title: nodeData.summary }, nodeData.summary) : null,
+    hs('div', { className: 'node-meta', key: 'meta' }, [
+      nodeData.duration != null ? h('span', { key: 'dur' }, '⏱ ' + formatDuration(nodeData.duration)) : null,
+      nodeData.round_number != null ? h('span', { key: 'round' }, 'R' + nodeData.round_number) : null,
+    ]),
+    h(Handle, { type: 'source', position: Position.Bottom, style: { visibility: 'hidden' }, key: 'source' }),
+  ]);
+}
+
+const nodeTypes = { traceNode: TraceNode };
+
+function getStage(node) {
+  const eventType = node.event_type || '';
+  const nodeType = node.node_type || '';
+  if (nodeType === 'input') return { key: 'prompt', label: 'Prompt' };
+  if (nodeType === 'policy_gate') return { key: 'policy', label: 'Policy Gate' };
+  if (nodeType === 'classifier' || eventType.startsWith('intent.')) return { key: 'intent', label: 'Intent Classifier' };
+  if (nodeType === 'output') return { key: 'final', label: 'Final Answer' };
+  return { key: 'agent', label: 'Agent Loop' };
+}
+
+function layoutGraph(nodes, edges) {
+  const g = new dagre.graphlib.Graph();
+  g.setGraph({ rankdir: 'LR', ranksep: 90, nodesep: 46 });
+  g.setDefaultEdgeLabel(() => ({}));
+  nodes.forEach(n => g.setNode(n.id, { width: 260, height: 96 }));
+  edges.forEach(e => g.setEdge(e.source, e.target));
+  dagre.layout(g);
+  return nodes.map(n => {
+    const pos = g.node(n.id);
+    return { ...n, position: { x: pos.x - 130, y: pos.y - 48 } };
+  });
+}
+
+function App() {
+  const traces = typeof TRACE_DATA !== 'undefined' ? TRACE_DATA : [];
+  const [selectedTrace, setSelectedTrace] = React.useState(traces.length > 0 ? 0 : null);
+  const [selectedEvent, setSelectedEvent] = React.useState(null);
+
+  const trace = selectedTrace != null ? traces[selectedTrace] : null;
+
+  const { flowNodes, flowEdges } = React.useMemo(() => {
+    if (!trace) return { flowNodes: [], flowEdges: [] };
+
+    const rawNodes = trace.nodes.map(n => ({
+      id: n.id,
+      type: 'traceNode',
+      data: { ...n, stage: getStage(n), onSelect: (idx) => setSelectedEvent(idx), selected: false },
+      position: { x: 0, y: 0 },
+    }));
+
+    const positioned = layoutGraph(rawNodes, trace.edges);
+
+    const fe = trace.edges.map((e, i) => ({
+      id: `e${i}`,
+      source: e.source,
+      target: e.target,
+      label: e.label || undefined,
+      type: 'smoothstep',
+      animated: e.edge_type === 'blocked' || e.edge_type === 'error',
+      style: {
+        stroke: e.edge_type === 'blocked' ? 'var(--red)' :
+                e.edge_type === 'error' ? 'var(--orange)' : 'var(--border)',
+        strokeWidth: 2,
+      },
+      labelStyle: { fontSize: 10, fill: 'var(--text2)' },
+      labelBgStyle: { fill: 'var(--surface2)', stroke: 'var(--border)' },
+      labelBgPadding: [4, 6],
+      labelBgBorderRadius: 3,
+      markerEnd: { type: MarkerType.ArrowClosed, color: e.edge_type === 'blocked' ? 'var(--red)' : 'var(--border)' },
+    }));
+
+    return { flowNodes: positioned.map(n => ({
+      ...n,
+      data: { ...n.data, selected: selectedEvent === n.data.event_idx }
+    })), flowEdges: fe };
+  }, [trace, selectedEvent]);
+
+  const eventDetail = trace && selectedEvent != null ? trace.events[selectedEvent] : null;
+
+  return hs('div', { id: 'app' }, [
+    hs('div', { className: 'trace-sidebar', key: 'sidebar' }, [
+      h('h2', { key: 'title' }, `Traces (${traces.length})`),
+      h('div', { className: 'trace-list', key: 'list' },
+        traces.map((t, i) =>
+          hs('div', {
+            key: t.run_id,
+            className: 'trace-item' + (i === selectedTrace ? ' active' : ''),
+            onClick: () => { setSelectedTrace(i); setSelectedEvent(null); }
+          }, [
+            h('div', { className: 'run-id', key: 'id' }, t.run_id.slice(0, 12) + '...'),
+            h('div', { className: 'question', key: 'q' }, t.question || '(hidden)'),
+            hs('div', { className: 'meta', key: 'meta' }, [
+              h('span', { className: `status-dot ${t.status}`, key: 'dot' }),
+              h('span', { key: 'status' }, t.status),
+              h('span', { key: 'events' }, t.events.length + ' events'),
+              t.total_duration != null ? h('span', { key: 'dur' }, formatDuration(t.total_duration)) : null,
+            ])
+          ])
+        )
+      )
+    ]),
+    hs('div', { className: 'graph-area', key: 'graph' }, [
+      trace ? hs(Fragment, {}, [
+        hs('div', { className: 'overview-bar', key: 'bar' }, [
+          hs('span', { className: 'stat', key: 'id' }, [h('span', {}, 'Run: '), h('span', { className: 'stat-value' }, trace.run_id.slice(0, 16))]),
+          hs('span', { className: 'stat', key: 'status' }, [h('span', { className: `status-dot ${trace.status}` }), h('span', { className: 'stat-value' }, ' ' + trace.status)]),
+          hs('span', { className: 'stat', key: 'events' }, [h('span', {}, 'Events: '), h('span', { className: 'stat-value' }, String(trace.events.length))]),
+          trace.total_duration != null ? hs('span', { className: 'stat', key: 'dur' }, [h('span', {}, 'Duration: '), h('span', { className: 'stat-value' }, formatDuration(trace.total_duration))]) : null,
+        ]),
+        h('div', { className: 'stage-bar', key: 'stages' }, [
+          h('span', { className: 'stage-pill prompt', key: 'prompt' }, '1 Prompt'),
+          h('span', { className: 'stage-pill policy', key: 'policy' }, '2 Policy Gate'),
+          h('span', { className: 'stage-pill intent', key: 'intent' }, '3 Intent Classifier'),
+          h('span', { className: 'stage-pill agent', key: 'agent' }, '4 Agent Loop'),
+          h('span', { className: 'stage-pill final', key: 'final' }, '5 Final Answer'),
+        ]),
+        h('div', { className: 'graph-container', key: 'flow' },
+          h(ReactFlow, {
+            nodes: flowNodes,
+            edges: flowEdges,
+            nodeTypes,
+            fitView: true,
+            minZoom: 0.3,
+            maxZoom: 2,
+            proOptions: { hideAttribution: true },
+          }, [
+            h(Background, { color: 'var(--border)', gap: 20, key: 'bg' }),
+            h(Controls, { key: 'controls', showInteractive: false }),
+          ])
+        ),
+        h('div', { className: 'legend', key: 'legend' },
+          hs(Fragment, {}, [
+            h('h4', { key: 'title' }, 'Node Types'),
+            h('div', { className: 'legend-items', key: 'items' },
+              Object.entries(NODE_TYPE_INFO).map(([type, info]) =>
+                hs('div', { className: 'legend-item', key: type }, [
+                  h('span', { className: `legend-swatch ntype-${type}`, style: { borderColor: 'currentColor' } }, info.icon),
+                  h('span', {}, info.label),
+                ])
+              )
+            )
+          ])
+        ),
+      ]) : h('div', { className: 'empty-state' }, 'Select a trace from the sidebar'),
+    ]),
+    h(DetailPanel, { event: eventDetail, onClose: () => setSelectedEvent(null), key: 'detail' }),
+  ]);
+}
+
+createRoot(document.getElementById('app')).render(h(App));
+</script>
+<script>
+window.addEventListener('error', (event) => {
+  window.__TRACE_VIEWER_ERROR__ = event.message || 'Unknown render error';
+});
+window.addEventListener('unhandledrejection', (event) => {
+  window.__TRACE_VIEWER_ERROR__ = String(event.reason || 'Unknown render error');
+});
+
+const STATIC_NODE_TYPE_INFO = {
+  input: { icon: '▶', label: 'Input' },
+  policy_gate: { icon: '⚠', label: 'Policy' },
+  classifier: { icon: '⚙', label: 'Classifier' },
+  generation: { icon: '✎', label: 'Generation' },
+  validation: { icon: '✓', label: 'Validation' },
+  tool_call: { icon: '⚒', label: 'Tool' },
+  model_call: { icon: '⬣', label: 'Model' },
+  output: { icon: '✔', label: 'Output' },
+  error: { icon: '✖', label: 'Error' },
+  unknown: { icon: '?', label: 'Unknown' },
+};
+
+function staticEscapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function renderStaticTraceViewer() {
+  const root = document.getElementById('app');
+  if (!root || root.children.length > 0) return;
+  const traces = typeof TRACE_DATA !== 'undefined' ? TRACE_DATA : [];
+  root.style.display = 'flex';
+  root.innerHTML = '';
+
+  const sidebar = document.createElement('div');
+  sidebar.className = 'trace-sidebar';
+  sidebar.innerHTML = `<h2>Traces (${traces.length})</h2><div class="trace-list"></div>`;
+
+  const graph = document.createElement('div');
+  graph.className = 'graph-area';
+  graph.style.overflow = 'auto';
+
+  const list = sidebar.querySelector('.trace-list');
+
+  function drawTrace(index) {
+    const trace = traces[index];
+    [...list.children].forEach((child, i) => child.classList.toggle('active', i === index));
+    if (!trace) {
+      graph.innerHTML = '<div class="empty-state">No trace data found.</div>';
+      return;
+    }
+
+    const warning = '';
+
+    graph.innerHTML = `
+      <div class="overview-bar">
+        <span class="stat">Run: <span class="stat-value">${staticEscapeHtml(trace.run_id.slice(0, 16))}</span></span>
+        <span class="stat"><span class="status-dot ${trace.status}"></span><span class="stat-value"> ${staticEscapeHtml(trace.status)}</span></span>
+        <span class="stat">Events: <span class="stat-value">${trace.events.length}</span></span>
+      </div>
+      ${warning}
+      <div style="padding:28px;display:flex;flex-direction:column;align-items:center;gap:12px"></div>
+    `;
+
+    const lane = graph.lastElementChild;
+    let currentStage = '';
+    trace.nodes.forEach((node, i) => {
+      const stage = getStaticStage(node);
+      if (stage.key !== currentStage) {
+        currentStage = stage.key;
+        const heading = document.createElement('div');
+        heading.className = 'static-stage-heading';
+        heading.textContent = stage.label;
+        lane.appendChild(heading);
+      }
+      const type = STATIC_NODE_TYPE_INFO[node.node_type] || STATIC_NODE_TYPE_INFO.unknown;
+      const card = document.createElement('div');
+      card.className = `flow-node ntype-${node.node_type} stage-${stage.key} status-${node.status}`;
+      card.style.width = '320px';
+      card.innerHTML = `
+        <div class="node-header">
+          <span class="node-icon">${type.icon}</span>
+          <span class="node-label" title="${staticEscapeHtml(node.label)}">${staticEscapeHtml(node.label)}</span>
+          <span class="node-type-badge">${staticEscapeHtml(type.label)}</span>
+        </div>
+        ${node.summary ? `<div class="node-summary" title="${staticEscapeHtml(node.summary)}">${staticEscapeHtml(node.summary)}</div>` : ''}
+      `;
+      card.onclick = () => {
+        const event = trace.events[node.event_idx];
+        alert(JSON.stringify(event.raw || event, null, 2));
+      };
+      lane.appendChild(card);
+
+      const edge = trace.edges[i];
+      if (edge) {
+        const arrow = document.createElement('div');
+        arrow.style.color = edge.edge_type === 'blocked' ? 'var(--red)' : 'var(--text2)';
+        arrow.style.fontSize = '12px';
+        arrow.textContent = edge.label ? `↓ ${edge.label}` : '↓';
+        lane.appendChild(arrow);
+      }
+    });
+  }
+
+  traces.forEach((trace, i) => {
+    const item = document.createElement('div');
+    item.className = 'trace-item' + (i === 0 ? ' active' : '');
+    item.innerHTML = `
+      <div class="run-id">${staticEscapeHtml(trace.run_id.slice(0, 12))}...</div>
+      <div class="question">${staticEscapeHtml(trace.question || '(hidden)')}</div>
+      <div class="meta"><span class="status-dot ${trace.status}"></span><span>${staticEscapeHtml(trace.status)}</span><span>${trace.events.length} events</span></div>
+    `;
+    item.onclick = () => drawTrace(i);
+    list.appendChild(item);
+  });
+
+  root.appendChild(sidebar);
+  root.appendChild(graph);
+  drawTrace(0);
+}
+
+function getStaticStage(node) {
+  const eventType = node.event_type || '';
+  const nodeType = node.node_type || '';
+  if (nodeType === 'input') return { key: 'prompt', label: 'Prompt' };
+  if (nodeType === 'policy_gate') return { key: 'policy', label: 'Policy Gate' };
+  if (nodeType === 'classifier' || eventType.startsWith('intent.')) return { key: 'intent', label: 'Intent Classifier' };
+  if (nodeType === 'output') return { key: 'final', label: 'Final Answer' };
+  return { key: 'agent', label: 'Agent Loop' };
+}
+
+renderStaticTraceViewer();
+</script>
+</body>
+</html>
