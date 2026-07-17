@@ -221,3 +221,302 @@ The design uses a small set of directly relevant publications:
 - Healthcare agents should be evaluated in realistic workflows with attention to tool use and downstream failure points: Mehandru et al., [Evaluating Large Language Models as Agents in the Clinic](https://doi.org/10.1038/s41746-024-01083-y), npj Digital Medicine 7, 84 (2024).
 - Healthcare evaluation requires planned human review and adjudication: Tam et al., [A Framework for Human Evaluation of Large Language Models in Healthcare Derived from Literature Review](https://doi.org/10.1038/s41746-024-01258-7), npj Digital Medicine 7, 258 (2024).
 - Evaluation and risk measurement should span the system lifecycle: Autio et al., [Artificial Intelligence Risk Management Framework: Generative Artificial Intelligence Profile](https://doi.org/10.6028/NIST.AI.600-1), NIST AI 600-1 (2024).
+
+## 18. Policy and Intent Classifier Design Audit
+
+### 18.1 Audit Scope, Evidence, and Rating Scale
+
+This audit was completed on July 16, 2026 against commit `77a82e4` on the
+`michelle` branch. It covers only the policy gate, intent classifier, and the
+host controls that make their decisions effective. It does not assess SQL
+generation, SQL validation, production Epic connectivity, or BigQuery
+execution.
+
+The audit distinguishes architectural patterns from implementation evidence.
+An architecture can be industry-aligned while its POC implementation remains
+unsuitable for production. “Industry-aligned” below means consistent with
+published practices from Anthropic, the MCP project, HHS, and agent-evaluation
+literature; it does not mean that one universal agent standard exists.
+
+| Score | Meaning |
+| ---: | --- |
+| 5 | Directly aligned with a published pattern, implemented, tested, and supported by current evidence. |
+| 4 | Strongly aligned and correctly implemented for this synthetic POC; production hardening remains. |
+| 3 | Reasonable POC choice with material limitations or incomplete evidence. |
+| 2 | Significant departure, ambiguous control semantics, or an uncalibrated safety dependency. |
+| 1 | Missing control; acceptable only because this POC uses dummy data and localhost services. |
+
+Scores are design-audit judgments, not certifications or measurements of
+HIPAA compliance, jailbreak resistance, or production readiness.
+
+### 18.2 Conceptual Model for Teams New to Agentic Systems
+
+| Concept | General meaning | Meaning in this POC | Important boundary |
+| --- | --- | --- | --- |
+| Workflow node | One observable step in a predefined code path. It may be deterministic or model-backed. | Policy and intent are both workflow nodes. | A “node” is not automatically an autonomous agent. |
+| Agentic node or loop | A model dynamically chooses its next action or tool based on observations. | The bounded catalog loop is agentic because Claude may choose a scoped tool and then react to its result. | The host, not the model, must retain execution authority. |
+| Deterministic screen/gate | Code applies explicit, reproducible rules to observable input or output. | The policy gate normalizes user input; the surface screen applies narrower checks to tool metadata, tool results, and final answers. | Deterministic means reproducible, not comprehensive or inherently secure. |
+| Semantic router | A probabilistic classifier maps natural language into a bounded route. | The intent MCP uses Claude to emit a typed intent, confidence, risk flags, action, and clarification flag. | Intent is routing metadata, not authorization or factual evidence. |
+| MCP | An open protocol for discovering and invoking schema-defined tools and resources. | FastMCP exposes the intent classifier and dummy catalog over HTTP. | MCP standardizes integration; it does not itself grant identity, authorization, sandboxing, or data safety. |
+| Host or broker | The trusted application layer that decides which model outputs may cause actions. | `agent.py` runs policy, calls intent, filters tool definitions, checks requested tool names, executes allowed calls, and records traces. | This is the effective POC enforcement point. |
+| Authorization | A decision based on authenticated identity, role, purpose, resource, action, and context. | Not implemented. The POC has workflow routing and tool-name scoping only. | A policy or intent label must never be presented as production authorization. |
+
+Anthropic distinguishes predefined **workflows** from **agents** that
+dynamically control tool use and recommends beginning with the simplest design
+that meets the need. Its routing pattern classifies an input and sends it to a
+specialized path, and its prompt-chaining pattern permits programmatic gates
+between steps. That is the closest published architectural analogue to this
+POC, rather than five independent autonomous agents. See [Anthropic, Building
+Effective Agents](https://www.anthropic.com/engineering/building-effective-agents).
+
+### 18.3 Current Control Flow and Trust Boundaries
+
+```text
+Untrusted user prompt
+  -> host records request.received
+  -> deterministic first-pass user-input policy screen
+       -> block: allowed=false, record request.blocked, stop
+       -> explicit workflow allow: continue to intent
+       -> no deterministic verdict: continue to intent
+  -> intent MCP
+       -> force exactly one emit_intent tool call
+       -> validate IntentResult
+       -> normalize intent/action contract
+       -> refuse or uncertain: stop before catalog
+       -> safe route: return routing metadata to host
+  -> host derives allowed tool names from its own ROUTE_TOOLS map
+  -> surface-screen tool metadata, then show only that subset to the main model
+  -> host checks every requested tool name against the same subset
+  -> allowed MCP tool executes against dummy data
+  -> surface-screen tool result before the next model step
+  -> model produces final answer
+  -> surface-screen final answer before returning it
+```
+
+Control ownership is deliberately split:
+
+| Decision | Owner | Current semantics |
+| --- | --- | --- |
+| Obvious prohibited content | Deterministic policy gate | A veto. Any block wins over an allow finding. |
+| Safe-workflow recognition | Deterministic policy gate | A routing hint that permits semantic classification; not a data-access grant. |
+| No lexical match | Deterministic policy gate | `allowed=true` with `reason="no_deterministic_verdict"`; operationally means “escalate to intent.” |
+| Semantic route | Intent model plus deterministic contract code | A recommendation constrained to a closed intent/action vocabulary. |
+| Tool availability | Host | Derived from `ROUTE_TOOLS`; the model sees only tools for the accepted intent. |
+| Tool execution | Host | Requested tool names are checked again immediately before MCP execution. |
+| Resource authorization | MCP server or downstream data system | Missing; dummy tools accept direct local calls without user identity or scopes. |
+
+The following code-level ordering is the most important POC invariant:
+
+```python
+blocked_response = blocked_response_if_needed(question, trace)
+if blocked_response is not None:
+    return blocked_response
+
+classification_or_response = await classify_request(question, settings, trace)
+if isinstance(classification_or_response, AskResponse):
+    return classification_or_response
+```
+
+It ensures a policy block prevents the intent model and catalog from being
+contacted. The relevant implementation is
+`src/harness_spike/agent_host/agent.py:28-47` and
+`src/harness_spike/agent_host/agent.py:414-436`.
+
+### 18.4 Deterministic Policy Gate and Surface Screen: Detailed Design Audit
+
+The policy node is a local Python workflow step, not an MCP server and not an
+agent. `policy_gate()` normalizes the prompt, runs 18 ordered checks, collects
+their findings, and consolidates them with block-over-allow precedence. Its
+output contract is only `allowed`, `reason`, and `matched_term`.
+
+| Design decision | Current implementation | Industry rationale and audit judgment | Score |
+| --- | --- | --- | ---: |
+| Run before model and tools | `answer_question()` invokes `blocked_response_if_needed()` before intent, model, or catalog setup. Tests assert zero downstream calls for blocked prompts. | Strong defense-in-depth and cost-containment pattern. It creates a reproducible first boundary and a traceable short-circuit. | 5 |
+| Separate deterministic and semantic decisions | Lexical/pattern rules remain in `policy/`; semantic classification remains in the intent node. | Aligns with Anthropic’s use of programmatic gates and specialized routing steps. It also makes false positives and false negatives attributable to a node. | 5 |
+| Modular risk categories | Checks are named by prompt injection, jailbreak, secret access, unsupported workflow, scope expansion, destructive actions, exposure, PII, small-cell risk, and workflow allow rules. | Good maintainability and evaluation granularity. Categories should eventually map to owned enterprise policy IDs rather than free-text reasons. | 4 |
+| Normalize adversarial text | NFKC normalization, case folding, invisible-character handling, punctuation compaction, leetspeak translation, boundary-aware obfuscation matching, and selected Damerau-Levenshtein checks are implemented. | Appropriate cheap preprocessing for known variants. It improves lexical coverage but cannot establish semantic safety. | 4 |
+| Block findings override allow findings | `consolidate_findings()` returns the first block even when a workflow allow rule also fires. | Correct deny-overrides behavior for a high-risk POC. The check ordering still determines which reason is reported when several blocks fire. | 4 |
+| Small positive workflow list | Metadata, safe aggregate, and narrowly described aggregate-SQL phrases can create an explicit allow finding. | A bounded positive route is preferable to relying only on a blacklist. However, these phrases do not represent user or resource authorization. | 3 |
+| Distinguish explicit allow from no verdict | Explicit allow returns `reason=null`; no match returns `reason="no_deterministic_verdict"`. | The distinction is observable and useful. Encoding both states as `allowed=true` is semantically misleading and can be misused by a future caller that ignores `reason`. Use a three-state decision such as `block`, `route`, and `no_verdict`. | 2 |
+| Permit patient-table metadata | `is_schema_metadata_request()` allows schema/column terms when row-output terms are absent; the scope and row-level modules use this exception. | Correctly fixes a demonstrated false positive and supports metadata discovery. The exception is phrase-based and must not become a substitute for column-level authorization. | 3 |
+| Allow aggregate wording | Aggregate-only analytics remain allowed, but `check_row_level_request()` now checks row-level verbs and objects before applying the aggregate exemption. | Mixed prompts such as `count` plus `list records` are blocked deterministically, while schema metadata and aggregate-only requests remain available. | 4 |
+| Prompt-injection and jailbreak blocklists | Known manipulation, persona, bypass, tool-escalation, and unbounded-retry phrases are blocked. | Useful high-precision signatures, but Anthropic explicitly treats prompt injection as unsolved and uses multiple classifier, permission, monitoring, and red-team layers. A blacklist cannot support a “jailbreak resistant” claim. | 2 |
+| Surface-aware policy screening | A reusable deterministic screen now covers user input, tool metadata, tool results, and final answers with surface-specific checks. | This closes the POC’s obvious context blind spots, but it remains lexical/structural defense in depth; it is not authorization, a complete prompt-injection defense, or a security boundary for direct MCP callers. | 3 |
+| Identity and purpose-aware authorization | No authenticated user, role, permitted purpose, resource scope, consent, or session risk enters the policy decision. | Missing by design for dummy data. HHS’s minimum-necessary guidance requires access to be limited by purpose, workforce role, data category, and conditions; lexical prompt classification cannot meet that requirement. | 1 |
+| Server-side enforcement | The catalog MCP accepts direct localhost calls independently of the host’s policy decision. | Host scoping is valuable but is not a complete security boundary. A caller that reaches the MCP server directly bypasses the host. Production tools require their own authentication and authorization. | 1 |
+| Trace privacy default | Raw prompts and model responses are hidden unless `LOG_RAW_PROMPTS` is enabled. | Correct privacy-preserving default for a POC. Production needs field-level redaction, retention, access controls, and audit of trace readers rather than only an on/off flag. | 4 |
+
+Policy implementation references:
+
+- Check registry and ordering: `src/harness_spike/policy/gates.py:21-47`.
+- Deny-overrides consolidation and no-verdict state:
+  `src/harness_spike/policy/consolidate.py:8-23` and
+  `src/harness_spike/policy/result.py:27-45`.
+- Normalization and metadata exception:
+  `src/harness_spike/policy/normalize.py:28-120`.
+- Aggregate shortcut and row-level detection:
+  `src/harness_spike/policy/modules/pii.py:229-246`.
+- Workflow allow terms:
+  `src/harness_spike/policy/modules/workflow_authorization.py:7-59`.
+
+### 18.5 Intent Classifier: Detailed Design Audit
+
+The intent node is a single-turn model-backed router exposed as one MCP tool. It
+is probabilistic, but it is not an autonomous agent: it cannot access the
+catalog, execute a route, or answer the user. The configured Claude model must
+produce one `emit_intent` tool call with this contract:
+
+```json
+{
+  "intent": "schema_lookup",
+  "confidence": 0.95,
+  "risk_flags": [],
+  "recommended_action": "get_table_schema",
+  "needs_clarification": false
+}
+```
+
+| Design decision | Current implementation | Industry rationale and audit judgment | Score |
+| --- | --- | --- | ---: |
+| Separate semantic routing call | Intent executes before catalog discovery and has no catalog tools. | Strong separation of concerns. Anthropic identifies routing as a useful workflow when inputs belong to distinct specialized categories. | 5 |
+| Forced structured model output | The Messages API receives one JSON-schema tool and `tool_choice={"type":"tool","name":"emit_intent"}`; exactly one matching `ToolUseBlock` is required. | Directly follows Anthropic’s documented forced-tool pattern and avoids parsing free-form prose. | 5 |
+| Runtime validation | Tool input is validated into `IntentResult`; the host validates the MCP result again. Intent and action values are closed `Literal` types with numeric confidence bounds. | Correct defense against malformed model or transport output. Add `extra="forbid"` to the Pydantic models because Pydantic otherwise ignores unexpected fields even though the API tool schema says `additionalProperties=false`. | 4 |
+| Versioned prompt and explicit precedence | `INTENT_PROMPT_VERSION="v3"`; the prompt prioritizes policy probes, patient-level requests, unsafe SQL, safe SQL, metadata routes, general questions, then unknown. | Explicit precedence reduces mixed-intent ambiguity and supports regression comparison. The policy and taxonomy still require a named owner and change-control process. | 4 |
+| Intent/action coherence enforcement | `EXPECTED_ACTION` and `enforce_intent_contract()` convert incoherent safe outputs to `unknown/clarify`; refusal intents are forced to `refuse`. | Strong deterministic wrapper around a probabilistic decision. The model recommends; code constrains. | 5 |
+| Low-confidence fallback | Model-reported confidence below `0.70` becomes `unknown/clarify`. | Safe direction, but the value is an uncalibrated constant and model self-confidence is not a probability of correctness. It needs threshold calibration against held-out labels by risk class. | 2 |
+| Ambiguity handling | `unknown`, low confidence, or `needs_clarification=true` stops before catalog access. | Aligns with Anthropic’s guidance that agents should pause rather than assume when user intent is unresolved. | 4 |
+| Refusal enforcement | `policy_probe`, `patient_specific_request`, and `unsupported_sql_request` force a refusal; the host returns `allowed=false` without opening the catalog. | Correct defense-in-depth. The semantic safety classifier supplements but does not replace deterministic or server authorization controls. | 4 |
+| Tool capability minimization | `ROUTE_TOOLS` maps intents to tool-name subsets; the host filters discovered tools before the main model sees them. | Strong least-capability pattern and analogous to Claude Code’s permission model at a smaller POC scale. | 4 |
+| Execution-time scope check | The host checks every `ToolUseBlock.name` against `allowed_tools` again immediately before execution and records `tool.blocked` on mismatch. | Correctly treats model output as a proposal and the host as the execution authority. | 5 |
+| General-question isolation | `general_question` calls the main model with `tools=[]` and a system instruction forbidding claims of hospital-data or external-tool access. | Good capability isolation for a harmless route. Medical factual quality is outside this router’s evaluation and must not be represented as a clinical control. | 4 |
+| Failure handling | Intent MCP exceptions, non-dictionary output, and validation errors produce `allowed=false`, `policy_reason="intent_classifier_uncertain"`, and no tool access. | Correct fail-safe behavior for operational classifier failures. | 5 |
+| Valid-unknown response semantics | A valid `unknown/clarify` result stops before catalog, but its `AskResponse` omits `allowed=false`; the schema default therefore reports `allowed=true`. | Control flow is safe, but the API state is inconsistent with the operational-failure path and can mislead metrics or callers. Introduce an explicit decision/status enum or mark this response non-routable. | 2 |
+| Unauthorized-tool response semantics | An out-of-scope tool request stops, but `unauthorized_tool_response()` also inherits `allowed=true`. | Execution is prevented, but observability and API semantics understate the block. This should be a typed policy enforcement outcome with `allowed=false`. | 2 |
+| Safety-model independence | Intent and the main agent use the same configured Claude model family and API settings; the intent layer is prompt-based rather than a purpose-trained independent safety classifier. | This is adequate for routing research but creates correlated-failure risk. Fable’s published comparator uses separate safety classifiers as one layer among access controls, safety training, and offline monitoring. | 2 |
+| Risk-flag contract | `risk_flags` is an unrestricted list of strings. | Flexible for experimentation but weak for metrics and enforcement. Replace with a versioned enum/taxonomy or treat flags as non-authoritative notes. | 2 |
+| MCP transport security | Intent runs as unauthenticated HTTP on fixed localhost port 8002. | Appropriate for a local synthetic spike. It is not acceptable for a networked enterprise service without authenticated transport, authorization, service identity, and rate limits. | 1 |
+| Evaluation corpus | `evals/intent.jsonl` contains 90 synthetic cases across baseline, injection, mixed-intent, obfuscation, false-positive, and tool-instruction categories; the runner supports repetitions and confusion metrics. | Strong evaluation structure. It matches Anthropic’s recommendation to combine code-based transcript checks with repeated, versioned regression tasks. | 4 |
+| Current live evidence | The only stored full direct-intent report is prompt v1 with 270 observations: intent accuracy `0.7222`, action accuracy `0.7815`, 16 unsafe-to-safe routes, and 6 false positives. The implementation is now v3, but no stored full v3 live report exists. | Historical misses motivated the current design but cannot validate v3. A current repeated v3 run is required before presenting classifier quality or a release threshold. | 2 |
+
+Intent and host implementation references:
+
+- Output types, route map, and action contract:
+  `src/harness_spike/mcp_servers/intent.py:13-83`.
+- Prompt precedence and examples:
+  `src/harness_spike/mcp_servers/intent.py:85-139`.
+- Deterministic contract normalization:
+  `src/harness_spike/mcp_servers/intent.py:147-190`.
+- Forced tool schema and API call:
+  `src/harness_spike/mcp_servers/intent.py:193-268`.
+- Host refusal, uncertainty, and failure paths:
+  `src/harness_spike/agent_host/agent.py:86-189`.
+- Host tool filtering and execution-time check:
+  `src/harness_spike/agent_host/agent.py:54-76` and
+  `src/harness_spike/agent_host/agent.py:451-490`.
+
+### 18.6 Industry Comparator Matrix
+
+These are concrete comparators, not claims that the POC has reproduced the
+vendors’ complete safeguards.
+
+| Published comparator | Relevant practice | Alignment in this POC | Material departure |
+| --- | --- | --- | --- |
+| [Anthropic: Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents) | Start with simple composable workflows; use routing for distinct categories; place programmatic gates between steps; keep tool interfaces clear. | Policy → intent → bounded loop is a small, understandable routed workflow. | The POC needs stronger ownership and release evidence before adding more nodes; more agent autonomy would not repair missing authorization. |
+| [Anthropic Claude Platform: Define Tools](https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools) | Tools use JSON Schema; `tool_choice` can force one named tool. | Intent forces one `emit_intent` call and validates its schema twice. | Pydantic extra fields are not explicitly forbidden at runtime, and model self-confidence remains uncalibrated. |
+| [Claude Code Security](https://code.claude.com/docs/en/security) | Read-only defaults, explicit permission for sensitive actions, sandbox and working-directory boundaries, command-injection detection, and fail-closed handling for unmatched commands. | The host narrows tool availability, blocks out-of-scope tool names, has no-tool routes, and bounds rounds. | No sandbox, authenticated principal, interactive approval, filesystem/network boundary, or deny-by-default MCP authorization exists. The comparison supports the control pattern, not production equivalence. |
+| [Anthropic: Fable 5 Safeguards](https://www.anthropic.com/news/fable-safeguards-jailbreak-framework) | Separate classifiers use risk categories and a tunable safety margin; classifiers are only one layer alongside access control, model safety training, offline monitoring, and red teaming. | The POC has a separate semantic classifier, risk precedence, deterministic blocks, tool-name scoping, and red-team corpora. | The classifier is a prompted general model, not a purpose-trained safeguard; there is no output classifier, identity/access-control layer, offline misuse monitoring, or measured safety-margin calibration. Fable is a useful defense-in-depth analogy, not proof that this hospital policy is sufficient. |
+| [Anthropic: Constitutional Classifiers](https://www.anthropic.com/news/constitutional-classifiers) | Input and output classifiers are evaluated for jailbreak robustness and over-refusal tradeoffs. | The POC now screens user input, tool metadata, tool results, and final answers with deterministic surface-aware checks. | The POC has no purpose-trained classifier, calibrated safety margin, server-side authorization, or full output/data provenance control. |
+| [Anthropic: Demystifying Evals for AI Agents](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents) | Combine code, model, and human graders; inspect transcripts and outcomes; repeat variable trials; turn mature capability cases into regression tests. | JSONL traces, deterministic policy/tool assertions, repeated intent trials, confusion metrics, and prompt versions follow this pattern. | Current v3 lacks a stored full live baseline; policy coverage is mostly test-corpus recall rather than a measured production distribution. |
+| [MCP Introduction](https://modelcontextprotocol.io/docs/getting-started/intro) and [MCP Architecture](https://modelcontextprotocol.io/docs/learn/architecture) | MCP is a standard connection layer between AI applications and external tools/data. | FastMCP creates replaceable, discoverable, schema-defined service boundaries. | MCP is being used correctly as integration plumbing, but it must not be described as a security control by itself. |
+| [MCP Authorization](https://modelcontextprotocol.io/docs/tutorials/security/authorization) and [MCP Security Best Practices](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices) | Authorization is strongly recommended for user data, enterprise access, consent, per-user audit, and rate limiting; MCP security includes OAuth-related and confused-deputy risks. | None is needed to demonstrate localhost routing over dummy data. | Before real data, every MCP resource server needs authenticated service/user context, scoped grants, server-side checks, secure transport, and audit. |
+| [HHS Minimum Necessary Guidance](https://www.hhs.gov/hipaa/for-professionals/privacy/guidance/minimum-necessary-requirement/index.html) and [HHS Security Rule Summary](https://www.hhs.gov/hipaa/for-professionals/security/laws-regulations/index.html) | Limit PHI by purpose, workforce role, data category, and conditions; implement authorization, authentication, audit, transmission security, and periodic evaluation. | Intent-based tool minimization is directionally consistent with minimum capability. | Prompt wording and intent do not establish identity, role, purpose, consent, or minimum-necessary data. The POC makes no HIPAA compliance claim. |
+
+### 18.7 Defensible Demo Claims and Claims to Avoid
+
+| Defensible for this POC | Not defensible from current evidence |
+| --- | --- |
+| “The harness separates a deterministic policy screen from probabilistic semantic routing.” | “The lexical policy gate guarantees prompt-injection or jailbreak resistance.” |
+| “A blocked policy request stops before the intent model and catalog.” | “An `allowed=true` policy result authorizes data access.” |
+| “The intent model emits a typed route; deterministic code validates and constrains it.” | “The model’s confidence of 0.95 means the route is 95% likely to be correct.” |
+| “The host shows the main model only the tools mapped to the accepted intent and checks requested tool names again before execution.” | “MCP makes the tools secure or enforces enterprise permissions.” |
+| “The system records enough observable events to grade route, tool, input, result, and final answer without hidden reasoning.” | “Passing unit tests proves current live-model safety or generalization.” |
+| “All demonstrated catalog data and schemas are dummy fixtures.” | “This architecture is approved for PHI, Epic, BigQuery, or clinical use.” |
+| “The design follows published routing, structured-tool, least-capability, defense-in-depth, and trace-evaluation patterns.” | “The POC implements the same safeguards as Claude Code or Fable 5.” |
+
+Recommended concise demo explanation:
+
+> Policy is a deterministic first-pass screen for known input boundaries and
+> a surface-aware check around model context. Intent is a model-backed
+> semantic router that can clarify or refuse but cannot authorize data. The
+> host decides which tools are visible, screens tool metadata/results and
+> final answers, and checks proposed calls before execution. MCP standardizes
+> the connection to tools. In this POC all data is synthetic; production
+> identity, authorization, output controls, and monitoring are intentionally
+> absent.
+
+### 18.8 Required Release Evidence and Production Preconditions
+
+The following items are required to call the policy/intent POC demonstrated,
+not production-ready:
+
+1. Run the complete 90-case intent v3 corpus for at least three repetitions and
+   retain the report with model ID, prompt version, confusion matrix,
+   unsafe-to-safe routes, false positives, and confidence distribution.
+2. Require zero unsafe-to-safe routes for `must_refuse` cases before using
+   intent as an enforced secondary safety layer. Report usability errors
+   separately rather than hiding them in an aggregate score.
+3. Calibrate the confidence threshold on held-out human labels by risk class;
+   until then, treat `0.70` as a conservative experiment, not a validated
+   operating point.
+4. Replace the overloaded `allowed` boolean with a typed decision such as
+   `blocked`, `explicit_route`, `no_verdict`, `clarify`, and `refused`, or at
+   minimum make valid-unknown and unauthorized-tool responses return a
+   non-routable status consistently.
+5. Add strict enums for risk flags, `extra="forbid"` model validation, policy
+   IDs, policy/prompt ownership, and change approval.
+6. Keep raw prompt/result logging disabled for ordinary runs and document the
+   synthetic-only exception used for demonstrations.
+
+Before any approved real metadata or patient-related data is introduced, the
+following are production blockers:
+
+1. Authenticate the user and service; carry role, purpose, tenant, consent,
+   and resource scope into every decision.
+2. Enforce authorization and minimum-necessary access inside each MCP server
+   and downstream data system. Do not rely only on the host or intent label.
+3. Add secure transport, credential isolation, per-tool scopes, rate limits,
+   timeouts, network boundaries, and server-side audit.
+4. Screen untrusted retrieved content and tool results before they enter the
+   acting model, and validate/filter final output for identifiers, small cells,
+   and unsupported disclosures.
+5. Add purpose-trained or independently configured safety classification for
+   high-risk input/output paths, with calibrated safety margins, monitored
+   false positives, red-team testing, and drift alerts.
+6. Add human approval for consequential or non-routine actions and keep data
+   tools read-only until separately governed write workflows exist.
+7. Define incident response, retention, trace-reader authorization, and
+   periodic security/effectiveness review consistent with enterprise and HHS
+   requirements.
+
+### 18.9 Audit Verdict
+
+| Area | Score | Verdict |
+| --- | ---: | --- |
+| High-level workflow decomposition | 4 | The small policy → intent → host design is easier to inspect and defend than a single unconstrained agent call. |
+| Deterministic policy gate as a POC screen | 3 | Good traceable coverage of known risks, but blacklist/phrase logic and `allowed=true` no-verdict semantics limit its authority. |
+| Intent structured-output and contract design | 4 | Forced typed output, action coherence, refusals, and host scoping are strong implementation decisions. |
+| Intent calibration and current live evidence | 2 | The corpus is strong, but the current v3 prompt lacks a stored repeated full-suite baseline and the confidence cutoff is uncalibrated. |
+| Tool least-capability enforcement | 4 | Tool filtering plus execution-time rechecking correctly keeps the model from granting itself capability. |
+| Prompt-injection defense in depth | 3 | User-input, tool-metadata, tool-result, and final-answer screens now provide basic deterministic coverage alongside semantic refusal; independent classifiers, server authorization, provenance, and monitoring remain absent. |
+| Production identity and authorization | 1 | Not implemented and intentionally out of scope for dummy data; mandatory before any governed data connection. |
+| Observability and evaluation architecture | 4 | Versioned traces, deterministic assertions, repeated trials, and node-localized failures are well aligned with published agent-evaluation practice. |
+
+Overall verdict: **defensible as a synthetic observability, routing, and
+evaluation POC; not defensible as a production policy enforcement or healthcare
+data-access system.** The strongest design choice is not the blacklist or the
+classifier by itself. It is the layered allocation of responsibility: cheap
+deterministic vetoes, typed semantic routing, host-owned least-capability tool
+scope, observable traces, and regression evaluation. The primary departure
+from mature industry practice is that identity, resource authorization,
+input/output safety classification, and operational monitoring do not yet
+surround those layers.

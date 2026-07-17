@@ -78,10 +78,13 @@ The system is split into **four independent components** that communicate via RE
 - `trace_logger.py`: Records every decision step for evaluation
 - `schemas.py`: Pydantic models for request/response contracts
 
-### 2. **Policy Gate** (`src/harness_spike/policy/gates.py`)
-- **First defense:** runs before model or tool routing
+### 2. **Policy Screen** (`src/harness_spike/policy/gates.py` and `policy/screen.py`)
+- **First-pass input screen:** runs before model or tool routing; it is not
+  authorization or an end-to-end security boundary
 - Lexical blocklist of identifier/PHI terms (e.g., "patient name", "ssn", "mrn")
 - Returns `{allowed: bool, reason: str | None, matched_term: str | None}`
+- Surface-aware checks in `policy/screen.py` also inspect tool metadata, tool
+  results, and final answers with narrower context-specific rules.
 - If a request is blocked, the agent host returns a refusal without calling the model
 
 **Key invariant:** Every blocked request must have zero downstream events in its trace (no intent, model, or catalog calls).

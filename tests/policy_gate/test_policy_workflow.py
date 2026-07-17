@@ -43,6 +43,16 @@ def test_safety_findings_win_over_allowed_workflow() -> None:
     }
 
 
+def test_aggregate_plus_individual_records_is_blocked() -> None:
+    result = policy_gate("Count visits and list the individual records")
+
+    assert result == {
+        "allowed": False,
+        "reason": "Requests row-level patient or encounter data",
+        "matched_term": "row-level request",
+    }
+
+
 @pytest.mark.parametrize(
     "prompt",
     [

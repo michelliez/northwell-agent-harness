@@ -11,7 +11,7 @@
 
 | Component | Location | Maturity |
 |---|---|---|
-| Deterministic policy gate | `policy/gates.py` + 5 modules | Production-ready for current scope |
+| Deterministic policy screen | `policy/gates.py` + `policy/screen.py` + policy modules | POC first-pass defense; not a production security boundary |
 | Three-layer obfuscation matching | `policy/normalize.py` | Solid: unicode → leetspeak → regex |
 | Damerau-Levenshtein fuzzy matching | `policy/modules/pii.py` | Working, per-word only |
 | Priority-ordered check chain | `policy/consolidate.py` | Works; see redesign note |
@@ -341,7 +341,7 @@ This eliminates the current architecture's most dangerous property.
 
 | Layer | Recommendation |
 |---|---|
-| L1 policy gate | Keep deterministic. No LLM. |
+| L1 policy screen | Keep deterministic. No LLM. Apply at user-input and model-context boundaries. |
 | L2 intent classification | LLM now; consider fine-tuned classifier when taxonomy stabilizes |
 | L6 SQL validation | Keep deterministic. LLM introduces non-determinism at a safety-critical layer. |
 | L8 egress regex | Keep deterministic. |

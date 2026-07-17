@@ -1,1 +1,1 @@
-"""Policy gate package."""
+"""Deterministic policy gate and surface-screen package."""

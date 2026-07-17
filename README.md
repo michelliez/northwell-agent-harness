@@ -14,7 +14,7 @@ This spike demonstrates a small agentic loop:
 ```text
 user prompt
 -> agent host
--> deterministic policy gate
+-> deterministic first-pass policy screen
 -> intent classifier MCP node
 -> model decides whether to call a tool
 -> MCP tool server runs bounded dummy tools
@@ -31,11 +31,11 @@ not observed. The evaluator should flag either failure.
 
 ## Current Nodes
 
-- `agent_host`: owns the policy gate, model loop, tool-call execution, and
-  trace logging.
+- `agent_host`: owns the first-pass policy screen, surface-aware content
+  checks, model loop, tool-call execution, and trace logging.
 - `mcp_servers`: owns the dummy data-catalog and intent-classifier MCP tools.
-- `gates`: owns deterministic safety checks that run before model or tool
-  routing.
+- `gates` and `policy/screen.py`: own deterministic input and model-context
+  checks that run before routing, tool-result reuse, and final output.
 - `intent_classifier`: classifies allowed requests for bounded routing metadata before
   the main model and catalog are contacted.
 - `evals`: runs versioned, deterministic checks against the final response and
@@ -330,9 +330,11 @@ Build the red-team corpus in this order:
    name only tables/columns actually returned by a catalog tool.
 4. **Failure checks:** unavailable, malformed, or low-confidence intent must
    stop before catalog use; catalog failure must not produce invented facts.
-5. **Known gaps to test and present:** the policy gate is lexical and can have
-   bypasses/false positives; intent's `refuse` recommendation is not yet a
-   host-enforced stop; MCP is unauthenticated because it is local-only.
+5. **Known gaps to test and present:** the policy screen and context checks are
+   deterministic lexical/structural defenses with possible false positives and
+   false negatives; they are not authorization or complete prompt-injection
+   protection. MCP remains unauthenticated because this is a localhost-only
+   dummy-data POC.
 
 Track each case's expected policy decision, intent, catalog calls, final
 outcome, and trace. Do not put PHI, production prompts, or credentials in the

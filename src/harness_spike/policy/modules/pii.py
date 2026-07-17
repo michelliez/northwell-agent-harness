@@ -160,6 +160,19 @@ AGGREGATE_KEYWORDS = {
     "compare",
 }
 
+MIXED_ROW_LEVEL_MARKERS = {
+    "row",
+    "rows",
+    "record",
+    "records",
+    "raw",
+    "individual",
+    "each",
+    "every",
+    "person",
+    "people",
+}
+
 FUZZY_HIGH_RISK_TERMS: dict[str, str] = {
     "patient": "Likely typo for patient-identifying information",
     "patients": "Likely typo for patient-identifying information",
@@ -233,15 +246,24 @@ def check_row_level_request(q: str) -> PolicyGateResult | None:
     has_aggregate_keyword = any(
         contains_phrase(q, term) for term in AGGREGATE_KEYWORDS
     )
-
-    if has_aggregate_keyword:
-        return None
-
     has_unsafe_verb = any(contains_phrase(q, term) for term in ROW_LEVEL_VERBS)
     has_row_object = any(contains_phrase(q, term) for term in ROW_LEVEL_OBJECTS)
+    has_explicit_row_level_marker = any(
+        contains_phrase(q, term) for term in MIXED_ROW_LEVEL_MARKERS
+    )
 
-    if has_unsafe_verb and has_row_object:
+    # Aggregate metrics commonly mention patients (for example, "average
+    # length of stay for patients").  Require an explicit row-level marker
+    # before treating a mixed aggregate request as disclosure-oriented.
+    if has_unsafe_verb and has_row_object and (
+        not has_aggregate_keyword or has_explicit_row_level_marker
+    ):
         return blocked("Requests row-level patient or encounter data", "row-level request")
+
+    # Aggregate wording does not make a mixed request safe.  Check for the
+    # stronger row-level request first, then allow aggregate-only analytics.
+    if has_aggregate_keyword:
+        return None
 
     return None
 
