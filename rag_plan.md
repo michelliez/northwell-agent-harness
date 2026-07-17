@@ -47,6 +47,18 @@ Why this stack:
 
 ## References Behind The Design
 
+- AWS describes RAG as a way to make an LLM reference an authoritative
+  knowledge base outside its training data before generating a response. The
+  same article emphasizes source attribution, developer control over knowledge
+  sources, retrieval of relevant external data, prompt augmentation, and
+  keeping external data current:
+  https://aws.amazon.com/what-is/retrieval-augmented-generation/
+- Databricks describes an end-to-end RAG workflow as a five-stage pipeline:
+  ingestion, embedding, retrieval, augmentation, and generation. It also
+  recommends treating retrieval quality and generation faithfulness as separate
+  evaluation targets, and calls out hybrid search, chunking, governance, and
+  continuous updates as production concerns:
+  https://www.databricks.com/blog/rag-workflow
 - BeautifulSoup parses HTML into a navigable tree and supports text extraction
   via `get_text()` / `stripped_strings`. Its docs recommend specifying a parser
   to avoid environment-dependent parsing differences:
@@ -70,6 +82,47 @@ Why this stack:
 - FAISS is a library for efficient similarity search over dense vectors and can
   return the top-k nearest vectors for a query vector:
   https://faiss.ai/
+- LangChain's Deep Agents docs are useful as an architectural comparison point:
+  they describe agents as tool-using systems with explicit execution
+  environments, context management, MCP support, permissions, summarization,
+  and context offloading. This project should borrow those engineering ideas
+  without adopting LangChain as a dependency for the MVP:
+  https://docs.langchain.com/oss/python/deepagents/overview
+- LangChain's Deep Agents RAG documentation is a relevant future reference for
+  agentic retrieval patterns:
+  https://docs.langchain.com/oss/python/deepagents/rag
+
+## How These Sources Shape This Plan
+
+The cited RAG sources point to the same core workflow:
+
+```text
+ingest source documents
+-> chunk and index them
+-> retrieve relevant context for each query
+-> augment the model prompt
+-> generate a grounded answer
+-> evaluate retrieval and answer faithfulness separately
+```
+
+This project adds one extra requirement: every step must be traceable and safe
+enough for the harness. That means retrieval is not just a helper function. It
+is a node with explicit inputs, outputs, scores, source IDs, citations, and
+evaluation checks.
+
+Engineering implications:
+
+- Keep retrieval over an approved external knowledge base, not over arbitrary
+  local files.
+- Return source attribution with every retrieved chunk.
+- Treat retrieved text as untrusted reference material, not instructions.
+- Evaluate retrieval recall separately from final-answer quality.
+- Version the corpus, chunker, embedding model, retriever, and prompt.
+- Support batch re-indexing so documentation can be refreshed without changing
+  the model.
+- Keep the MVP framework-light. Use explicit Python, SQLite, and MCP nodes
+  first; consider LangChain only if orchestration complexity later outweighs
+  the value of local transparency.
 
 ## Non-Goals For The First RAG MVP
 
@@ -814,4 +867,3 @@ The documentation RAG MVP is complete when:
 - Blocked policy prompts do not reach retrieval.
 - Ambiguous documentation questions ask for clarification.
 - No answer cites a chunk that was not retrieved.
-
