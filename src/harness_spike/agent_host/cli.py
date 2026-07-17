@@ -76,7 +76,7 @@ def render_trace_viewer(result: dict[str, Any]) -> Path:
     if not traces:
         raise RuntimeError(f"No trace data found in {trace_file}")
 
-    output = Path(f"trace_view_{result['run_id']}.html")
+    output = Path("logs") / "trace_views" / f"trace_view_{result['run_id']}.html"
     render_html(traces, output)
 
     for warning in warnings:

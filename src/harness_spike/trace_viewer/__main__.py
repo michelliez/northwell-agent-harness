@@ -12,7 +12,12 @@ from .renderer import render_html
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate an interactive trace diagram from JSONL trace files.")
     parser.add_argument("input", nargs="+", help="JSONL file(s) or directory of JSONL files")
-    parser.add_argument("-o", "--output", default="trace_view.html", help="Output HTML path (default: trace_view.html)")
+    parser.add_argument(
+        "-o",
+        "--output",
+        default="logs/trace_views/trace_view.html",
+        help="Output HTML path (default: logs/trace_views/trace_view.html)",
+    )
     parser.add_argument("--no-open", action="store_true", help="Don't open the browser automatically")
     args = parser.parse_args()
 

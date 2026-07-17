@@ -124,7 +124,8 @@ uv run --no-editable nh-spike-agent "What data would I need to answer how many p
 ```
 
 The CLI prints the normal answer, the JSONL trace path, and a local
-`file://...` viewer URL. To generate the HTML without opening a browser, use:
+`file://...` viewer URL. Trace viewer HTML files are written under
+`logs/trace_views/`. To generate the HTML without opening a browser, use:
 
 ```powershell
 uv run --no-editable nh-spike-agent "What data would I need to answer how many patients had visits last month?" --viewer --no-open-viewer
@@ -133,8 +134,11 @@ uv run --no-editable nh-spike-agent "What data would I need to answer how many p
 You can also render an existing trace file later:
 
 ```powershell
-uv run --no-editable nh-spike-traces logs/runs/<run_id>.jsonl -o trace_view.html
+uv run --no-editable nh-spike-traces logs/runs/<run_id>.jsonl
 ```
+
+By default, this writes `logs/trace_views/trace_view.html`. Use `-o` to choose a
+different output path.
 
 Expected tool pattern for the data-catalog spike:
 

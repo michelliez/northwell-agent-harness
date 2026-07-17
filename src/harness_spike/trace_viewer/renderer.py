@@ -29,5 +29,6 @@ def render_html(traces: list[TraceRun], output_path: Path) -> Path:
     template = TEMPLATE_PATH.read_text(encoding="utf-8")
     trace_json = _serialize_traces(traces)
     html = template.replace("/*__TRACE_DATA__*/", f"const TRACE_DATA = {trace_json};")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(html, encoding="utf-8")
     return output_path
