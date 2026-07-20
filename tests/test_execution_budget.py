@@ -7,9 +7,10 @@ from types import SimpleNamespace
 import pytest
 from anthropic.types import TextBlock, ToolUseBlock
 
-from harness_spike.agent_host import agent
 from harness_spike.agent_host.budget import BudgetExceeded, ExecutionBudget
+from harness_spike.agent_host.model_runtime import run_agent_loop
 from harness_spike.agent_host.trace_logger import TraceLogger
+from harness_spike.agent_host.workflows.legacy_mock import fetch_candidate_schemas
 
 
 def test_budget_caps_total_and_per_tool_calls() -> None:
@@ -19,6 +20,24 @@ def test_budget_caps_total_and_per_tool_calls() -> None:
 
     with pytest.raises(BudgetExceeded, match="max_tool_calls"):
         budget.reserve_tool_call("search_tables", {"question": "again"})
+
+
+def test_budget_exclusively_owns_payload_size_limits() -> None:
+    budget = ExecutionBudget(
+        max_input_bytes=32,
+        max_tool_result_bytes=32,
+        max_context_bytes=32,
+    )
+    oversized = {"value": "x" * 100}
+
+    with pytest.raises(BudgetExceeded, match="max_input_bytes"):
+        budget.reserve_tool_call("search_tables", oversized)
+
+    with pytest.raises(BudgetExceeded, match="max_tool_result_bytes"):
+        budget.accept_tool_result(oversized)
+
+    with pytest.raises(BudgetExceeded, match="max_context_bytes"):
+        budget.check_context(oversized)
 
 
 def test_budget_caps_candidate_schema_fanout(tmp_path: Path) -> None:
@@ -33,7 +52,7 @@ def test_budget_caps_candidate_schema_fanout(tmp_path: Path) -> None:
     budget = ExecutionBudget(max_candidate_schemas=1)
 
     schemas = asyncio.run(
-        agent.fetch_candidate_schemas(
+        fetch_candidate_schemas(
             catalog,  # type: ignore[arg-type]
             {
                 "candidates": [
@@ -115,7 +134,7 @@ async def test_multiple_tool_uses_obey_total_call_budget(tmp_path: Path) -> None
     settings = _settings(str(tmp_path))
     budget = ExecutionBudget(max_tool_calls=1, max_calls_per_tool=2)
 
-    result = await agent.run_agent_loop(
+    result = await run_agent_loop(
         question="Which tables are relevant?",
         client=client,  # type: ignore[arg-type]
         model="test-model",
@@ -148,7 +167,7 @@ async def test_explicit_model_stop_states_fail_closed(
         stop_reason=stop_reason,
     )
     client = _ModelClient(response)
-    result = await agent.run_agent_loop(
+    result = await run_agent_loop(
         question="Which tables are relevant?",
         client=client,  # type: ignore[arg-type]
         model="test-model",
@@ -158,6 +177,7 @@ async def test_explicit_model_stop_states_fail_closed(
         trace=TraceLogger(str(tmp_path)),
         system="",
         allowed_tools=frozenset(),
+        budget=ExecutionBudget(),
     )
 
     assert result.allowed is False

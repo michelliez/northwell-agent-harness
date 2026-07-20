@@ -1,6 +1,6 @@
 from anthropic.types import TextBlock, ToolUseBlock
 
-from harness_spike.agent_host.agent import assistant_content
+from harness_spike.agent_host.model_runtime import assistant_content
 
 
 def test_assistant_content_replays_only_api_fields() -> None:

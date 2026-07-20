@@ -1,11 +1,15 @@
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from anthropic.types import TextBlock
 
 from harness_spike.agent_host import agent
+from harness_spike.agent_host.budget import ExecutionBudget
 from harness_spike.agent_host.tool_registry import canonical_tools_for_server
+from harness_spike.agent_host.trace_logger import TraceLogger
+from harness_spike.agent_host.workflows import general as general_workflow
 
 
 class FakeBridge:
@@ -161,6 +165,29 @@ def _settings(trace_dir: str) -> SimpleNamespace:
 
 
 @pytest.mark.asyncio
+async def test_unregistered_workflow_fails_closed(tmp_path: Path) -> None:
+    classification = agent.IntentResult.model_construct(
+        intent=cast(Any, "documentation_lookup"),
+        confidence=0.95,
+        risk_flags=[],
+        recommended_action=cast(Any, "search_docs"),
+        needs_clarification=False,
+    )
+
+    result = await agent.dispatch_workflow(
+        "What does appointment status mean?",
+        classification,
+        cast(Any, _settings(str(tmp_path))),
+        TraceLogger(str(tmp_path)),
+        budget=ExecutionBudget(),
+    )
+
+    assert result.allowed is False
+    assert result.policy_reason == "workflow_unavailable"
+    assert result.used_tools == []
+
+
+@pytest.mark.asyncio
 async def test_allowed_request_classifies_before_catalog(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -245,7 +272,7 @@ async def test_general_question_answers_without_catalog_tools(
     client = FakeClient()
     monkeypatch.setattr(agent, "get_settings", lambda: _settings(str(tmp_path)))
     monkeypatch.setattr(agent, "MCPToolBridge", FakeBridge)
-    monkeypatch.setattr(agent, "build_model_client", lambda _: client)
+    monkeypatch.setattr(general_workflow, "build_model_client", lambda _: client)
 
     result = await agent.answer_question("What color is the sky?")
 
