@@ -7,8 +7,7 @@ from harness_spike.mcp_servers.sql_validation import validate_sql
     ("sql", "tables"),
     [
         (
-            "SELECT status, COUNT(*) AS appointment_count "
-            "FROM appointments GROUP BY status",
+            "SELECT status, COUNT(*) AS appointment_count FROM appointments GROUP BY status",
             ["appointments"],
         ),
         (
@@ -35,9 +34,7 @@ from harness_spike.mcp_servers.sql_validation import validate_sql
         ),
     ],
 )
-def test_valid_aggregate_bigquery_sql_is_allowed(
-    sql: str, tables: list[str]
-) -> None:
+def test_valid_aggregate_bigquery_sql_is_allowed(sql: str, tables: list[str]) -> None:
     result = validate_sql(sql, tables)
 
     assert result["allowed"] is True
@@ -118,9 +115,7 @@ def test_valid_aggregate_bigquery_sql_is_allowed(
         ),
     ],
 )
-def test_unsafe_or_invalid_sql_is_blocked(
-    sql: str, tables: list[str], reason: str
-) -> None:
+def test_unsafe_or_invalid_sql_is_blocked(sql: str, tables: list[str], reason: str) -> None:
     result = validate_sql(sql, tables)
 
     assert result["allowed"] is False

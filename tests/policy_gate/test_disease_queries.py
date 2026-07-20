@@ -68,9 +68,7 @@ class TestDiseaseRelatedQueries:
             ),
         ],
     )
-    def test_disease_sql_with_identifiers_blocked(
-        self, prompt: str, risk_description: str
-    ) -> None:
+    def test_disease_sql_with_identifiers_blocked(self, prompt: str, risk_description: str) -> None:
         """Test that SQL generation combining disease filters with patient identifiers is blocked."""
         result = policy_gate(prompt)
 
@@ -115,9 +113,7 @@ class TestDiseaseRelatedQueries:
             ),
         ],
     )
-    def test_disease_aggregate_and_metadata_allowed(
-        self, prompt: str, description: str
-    ) -> None:
+    def test_disease_aggregate_and_metadata_allowed(self, prompt: str, description: str) -> None:
         """Test that safe aggregate and metadata questions about diseases are allowed."""
         result = policy_gate(prompt)
 

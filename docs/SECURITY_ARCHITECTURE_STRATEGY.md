@@ -16,7 +16,7 @@
 | Damerau-Levenshtein fuzzy matching | `policy/modules/pii.py` | Working, per-word only |
 | Priority-ordered check chain | `policy/consolidate.py` | Works; see redesign note |
 | LLM intent classifier (9 intents, 6 actions) | `mcp_servers/intent.py` | Working; confidence floor 0.70 |
-| Bounded agent loop (MAX_TOOL_ROUNDS) | `agent_host/agent.py` | Working |
+| Bounded agent loop and execution budget | `agent_host/agent.py`, `agent_host/budget.py` | Working; rounds, calls, bytes, fan-out, and timeouts are bounded |
 | Deterministic SQL validation (21 forbidden terms) | `mcp_servers/sql_validation.py` | Working for known-bad patterns |
 | JSONL trace logger | `agent_host/trace_logger.py` | Working |
 | Eval harness (115 cases across 3 suites) | `evals/` | Good foundation |
@@ -113,7 +113,7 @@ USER
 │  LAYER 2 — SEMANTIC INGRESS GUARD  [PARTIAL]     │
 │  LLM intent classifier, closed tool schema       │
 │  Confidence floor 0.70. Fails closed.            │
-│  MISSING: enforce refuse in agent.py             │
+│  Refusal and uncertainty stop before catalog.    │
 └──────────────────────────────────────────────────┘
   │ intent + recommended_action
   ▼
@@ -204,7 +204,7 @@ Each node is built, tested, and signed off before the next begins.
 - Runs after L1 passes. One LLM call (~200–400ms).
 - Uses closed tool schema (`emit_intent`, `additionalProperties: False`).
 - Confidence floor 0.70 — fails closed on low confidence.
-- **Critical fix needed:** When `recommended_action == "refuse"` (intents: `policy_probe`, `patient_specific_request`, `unsupported_sql_request`), `agent.py` must block immediately. Currently it does not enforce this.
+- `recommended_action == "refuse"` (intents: `policy_probe`, `patient_specific_request`, `unsupported_sql_request`) blocks before catalog access.
 - Unknown / low-confidence → clarification request, never allow execution.
 
 ### Layer 3 — Retrieval Permission Gate *(missing)*
@@ -217,16 +217,21 @@ Each node is built, tested, and signed off before the next begins.
 ### Layer 4 — Agent LLM *(exists)*
 
 - Only tools authorized by L3 are exposed via MCP.
-- `MAX_TOOL_ROUNDS` enforced.
+- `MAX_TOOL_ROUNDS` plus total/per-tool calls, byte limits, schema fan-out,
+  timeouts, and explicit model stop states are enforced.
 - No direct database access — all data access goes through L5.
 - System prompt must not contain secrets, credentials, or production schema.
 - Provider safety (Claude Constitutional AI) acts as a residual backstop only — not a primary control.
 
-### Layer 5 — Tool Execution Gate *(missing)*
+### Layer 5 — Tool Execution Gate *(host implementation; server authorization pending)*
 
 - Runs on every tool call before it reaches the MCP server.
 - Validates: (a) tool name is in the authorized set from L3; (b) parameters contain no injection payloads.
-- Implementation path: thin wrapper in `mcp_bridge.py` checking tool name before forwarding.
+- The host-owned `ToolContract` registry checks tool names, canonical schemas,
+  arguments, results, and execution limits before forwarding.
+- MCP servers require the configured local service token in this POC; server-side
+  identity, principal/resource authorization, and rate limits are still required
+  before real data.
 
 ### Layer 6 — SQL Validation + Dry-Run *(partial)*
 
@@ -311,10 +316,9 @@ policy_modules_triggered  — list of module names that produced a verdict
 
 ### What never enters the log
 
-- Raw user prompt (unless `LOG_RAW_PROMPTS=true`, which must default false)
-- SQL query results
-- Tool call parameters
-- Final response text
+- Raw user prompt, SQL query results, tool call parameters, and final response
+  text in the default `TRACE_CONTENT_MODE=metadata`
+- Metadata-only HMAC digests and byte/item counts may be retained for correlation
 - API keys, environment variables, credentials
 - Any field that may contain PHI
 

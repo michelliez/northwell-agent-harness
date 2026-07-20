@@ -82,8 +82,8 @@ untrusted request
   -> deterministic user-input policy screen
        -> block: fail closed; no intent, model, or catalog call
        -> continue: call the read-only intent classifier
-  -> validate intent and map it to an allowlisted tool set
-  -> discover and screen tool metadata
+  -> validate intent and derive scope from the host-owned tool contracts
+  -> confirm MCP inventory and expose canonical tool metadata
   -> main model proposes a bounded tool call or answer
   -> host rechecks the proposed tool name and executes it
   -> screen the tool result before it re-enters model context
@@ -110,12 +110,13 @@ untrusted request
 - Intent output is structured and runtime-validated. `unknown`, low confidence,
   refusal, malformed output, or classifier failure is non-routable and stops
   before catalog access.
-- The host maps accepted intent to a closed tool-name allowlist, filters what
-  the main model can see, and checks every requested tool again immediately
-  before execution.
+- The host derives a closed tool-name allowlist from one tool-contract registry,
+  validates the MCP inventory against it, filters what the main model can see,
+  and checks every requested tool again immediately before execution.
 - Tool results are screened before being recorded as reusable model context;
   final answers are screened before being returned.
-- Tool loops are bounded by `MAX_TOOL_ROUNDS` and all stop paths are observable.
+- Tool loops are bounded by rounds, total/per-tool calls, input/result/context
+  sizes, candidate fan-out, and wall-clock time; all stop paths are observable.
 
 ### Evaluation contracts
 
@@ -222,7 +223,8 @@ incident response, and trace-reader authorization.
 ## Current Nodes
 
 - `agent_host`: owns the first-pass policy screen, surface-aware content
-  checks, model loop, tool-call execution, and trace logging.
+  checks, host-owned tool contracts, execution budgets, model loop, tool-call
+  execution, and trace logging.
 - `mcp_servers`: owns the dummy data-catalog and intent-classifier MCP tools.
 - `gates` and `policy/screen.py`: own deterministic input and model-context
   checks that run before routing, tool-result reuse, and final output.
@@ -233,6 +235,13 @@ incident response, and trace-reader authorization.
 
 Keep model decisions and deterministic checks separate. The model may request an
 action; the host decides what is allowed to run.
+
+The host-owned tool registry is the single source of truth for executable tool
+names, canonical model-facing schemas, route membership, result validation, and
+limits. MCP discovery is used to verify compatibility; live descriptions do
+not grant capability. Each request also receives an execution budget covering
+rounds, total/per-tool calls, candidate schema fan-out, byte limits, timeouts,
+and model stop states.
 
 ## Setup
 
@@ -280,9 +289,12 @@ and does not answer questions or access catalog data.
 
 ## Run The Mock SQL MCP Servers
 
-Safe aggregate SQL requests use a separate probabilistic generator followed by a
-deterministic SQLGlot validator. Both operate only on the checked-in dummy catalog;
-they do not connect to or execute against BigQuery.
+Aggregate SQL requests use a separate probabilistic generator followed by a
+deterministic SQLGlot structural validator. The validator proves only that a
+candidate matches the mock catalog and aggregate-shape rules; it does not grant
+authorization, estimate cost, execute SQL, enforce minimum cell sizes, or certify
+the result as disclosure-safe. Both nodes operate only on the checked-in dummy
+catalog.
 
 Terminals 3 and 4:
 
@@ -527,8 +539,11 @@ Build the red-team corpus in this order:
 5. **Known gaps to test and present:** the policy screen and context checks are
    deterministic lexical/structural defenses with possible false positives and
    false negatives; they are not authorization or complete prompt-injection
-   protection. MCP remains unauthenticated because this is a localhost-only
-   dummy-data POC.
+   protection. MCP calls now require the configured local service token, but
+   production still needs identity-aware authorization and resource checks at
+   each server. Trace metadata mode redacts content by default; debug mode is
+   local-only. SQL validation is structural only and does not certify analytics
+   disclosure safety.
 
 Track each case's expected policy decision, intent, catalog calls, final
 outcome, and trace. Do not put PHI, production prompts, or credentials in the

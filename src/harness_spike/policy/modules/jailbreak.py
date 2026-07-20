@@ -3,7 +3,6 @@ from __future__ import annotations
 from harness_spike.policy.normalize import matches_blocked_term
 from harness_spike.policy.result import PolicyGateResult, blocked
 
-
 # Persona-switch and fictional-framing attacks not covered by prompt_injection.
 # "pretend" variants are already in POLICY_MANIPULATION_TERMS — no duplication here.
 JAILBREAK_TERMS: dict[str, str] = {

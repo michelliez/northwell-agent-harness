@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 import unicodedata
 
-
 ZERO_WIDTH_CHARS = {
     "\u200b",
     "\u200c",
@@ -13,16 +12,18 @@ ZERO_WIDTH_CHARS = {
     "\u00a0",
 }
 
-LEETSPEAK_TRANSLATION = str.maketrans({
-    "0": "o",
-    "1": "i",
-    "3": "e",
-    "4": "a",
-    "5": "s",
-    "7": "t",
-    "@": "a",
-    "$": "s",
-})
+LEETSPEAK_TRANSLATION = str.maketrans(
+    {
+        "0": "o",
+        "1": "i",
+        "3": "e",
+        "4": "a",
+        "5": "s",
+        "7": "t",
+        "@": "a",
+        "$": "s",
+    }
+)
 
 
 def normalize_prompt(text: str) -> str:
@@ -82,12 +83,8 @@ ROW_LEVEL_OUTPUT_TERMS = (
 
 def is_schema_metadata_request(q: str) -> bool:
     """Return whether the request asks for metadata rather than patient rows."""
-    asks_about_schema = any(
-        contains_phrase(q, term) for term in SCHEMA_METADATA_TERMS
-    )
-    asks_for_rows = any(
-        contains_phrase(q, term) for term in ROW_LEVEL_OUTPUT_TERMS
-    )
+    asks_about_schema = any(contains_phrase(q, term) for term in SCHEMA_METADATA_TERMS)
+    asks_for_rows = any(contains_phrase(q, term) for term in ROW_LEVEL_OUTPUT_TERMS)
     return asks_about_schema and not asks_for_rows
 
 

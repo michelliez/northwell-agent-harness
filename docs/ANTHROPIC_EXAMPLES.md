@@ -89,10 +89,10 @@ This maps cleanly to Anthropic's terminology:
 | --- | --- | --- | --- |
 | Policy gate | Runs first; deterministic checks are separate from model routing; block wins over allow. The host now applies a reusable surface-aware screen at model-context crossings. | **Implementation gap:** the checks remain lexical/structural defense in depth, not authorization or an end-to-end security boundary. Direct MCP callers can still bypass the host. | Useful first-pass screen plus context checks, not authorization. |
 | Intent classifier | Forced typed tool output; closed intent/action vocabulary; fail-safe on malformed/unavailable results; refusal is now host-enforced. | **Implementation gap:** model-reported confidence is uncalibrated; extra fields are silently accepted by Pydantic; risk flags have no controlled taxonomy. | Good router for a synthetic POC, not an independent safety system. |
-| Host and agent loop | Host filters tools by route, screens tool metadata/results/final answers, checks names again before execution, and bounds rounds. | **Implementation gap:** no explicit handling of all `stop_reason` states, per-tool/total-call budgets, typed result contracts, timeouts, or egress control. | Strong control ownership and basic context coverage; incomplete resilience and safety envelope. |
-| Data catalog MCP | Small, static tool surface; clear dummy-data disclosure; tool arguments are typed at the server. | **Deliberate POC departure:** localhost-only, unauthenticated tools and no principal/resource authorization. **Implementation gap:** a direct caller bypasses the host. | Suitable only for checked-in dummy data. |
+| Host and agent loop | Host derives route scope from one pinned tool-contract registry, screens metadata/results/final answers, validates tool inputs/results, checks names again before execution, and enforces operational budgets and model stop states. | **Implementation gap:** no egress control, provider-dollar cost enforcement, or production identity propagation. | Stronger POC containment; still not a production security boundary. |
+| Data catalog MCP | Small, static tool surface; host-mediated calls use a configured service token and server-side token verification. | **Deliberate POC departure:** the token is coarse service authentication, not principal/resource authorization or mTLS/OAuth. | Suitable only for checked-in dummy data. |
 | SQL generation and validation | Fixed orchestration; forced structured candidate; AST-based read-only/schema/identifier checks; no query execution. | **Deliberate POC departure:** no BigQuery execution or dry run. **Implementation gap:** no result suppression/minimum-cell control, data-cost limit, or server-side authorization. | Strong mock SQL safety experiment, not a governed analytics path. |
-| Trace logging | Per-run ordered JSONL records make trajectory checks possible. | **Implementation gap:** `LOG_RAW_PROMPTS=false` does not redact tool inputs, tool results, or final answers; trace lacks the version, redaction, completeness, latency, token, and cost fields required by the PRD. | Useful debug trace, not a production audit log. |
+| Trace logging | Per-run ordered JSONL records make trajectory checks possible; metadata mode centrally redacts content and retains sizes/digests. | **Implementation gap:** retention, access control, completeness, latency, token, and cost fields still need production treatment; debug mode must remain local-only. | Useful evaluation trace, not a production audit log. |
 | Evaluation harness | Deterministic trace assertions, an intent corpus of 90 synthetic cases, and repeated direct intent trials. | **PRD/documentation drift:** no normalized `RunTrace`, replay path, semantic judge/human calibration, host-level repeated trials, baseline comparison, or release thresholds. Only 26 end-to-end JSONL cases are present. | A valuable start, not yet the PRD's evaluation foundation. |
 
 ## Explicit deliberate POC departures
@@ -104,16 +104,16 @@ repository documentation; none should be presented as a production safeguard.
 | --- | --- | --- | --- |
 | **DP-01** | Synthetic data only | The PRD excludes Northwell/Epic data and requires synthetic or approved metadata. `data_catalog.py` returns checked-in dummy fixtures. | Do not introduce real schemas, prompts, logs, or extracts into this repository. |
 | **DP-02** | No SQL execution | The PRD explicitly excludes production BigQuery generation/execution. The SQL workflow returns mock SQL after local validation and has no execution tool. | Keep the path non-executing until a separately approved governed-execution design exists. |
-| **DP-03** | No identity, consent, role, or resource authorization | The servers bind to localhost and the README describes MCP as unauthenticated because it is local-only. This reduces POC build scope, not risk. | Do not expose a server beyond the local synthetic environment or attach any protected resource. |
+| **DP-03** | No principal, consent, role, or resource authorization | The servers now require a shared local service token, but that token authenticates the host process rather than an end user or resource grant. | Do not expose a server beyond the local synthetic environment or attach any protected resource. |
 | **DP-04** | No human approval step | All current actions are read-only and operate over static dummy data. Omitting approval is reasonable at this stage. | Add explicit approval/plan review before any consequential, write, external-communication, or real-data action. |
 | **DP-05** | No multi-agent design or durable memory | The task is narrow and the host bounds the loop to three rounds. Anthropic advises beginning with simple workflows rather than adding orchestration prematurely. | Reconsider only if evidence shows a longer or genuinely decomposable task needs it. |
-| **DP-06** | Static, tiny catalog results | Returning all current candidate schemas is harmless at three dummy tables and makes the example understandable. | Replace with scoped, permission-filtered, token-bounded discovery before a real catalog is used. |
+| **DP-06** | Static, tiny catalog results | Candidate schema loading is now capped by a host-owned fan-out budget and remains limited to dummy data. | Add authorization-aware ranking/filtering and stronger result minimization before a real catalog is used. |
 
 The following omissions are sometimes described informally as "POC-only," but
 they are not sufficiently documented as an intentional design decision and
 should be treated as **gaps**: comprehensive output/result controls beyond the
-basic surface-aware screen, trace redaction, stop-state handling,
-model-confidence calibration, and the missing PRD evaluation contracts.
+basic surface-aware screen, trace redaction, model-confidence calibration, and
+the missing PRD evaluation contracts.
 
 ## Detailed findings
 
@@ -197,44 +197,40 @@ before treating intent as a safety layer.
 
 ### 3. Host, tool boundary, and agent loop
 
-**Aligned.** The host owns the capability map (`ROUTE_TOOLS`), exposes only a
-route's tools to the model, and rejects a tool name outside that subset just
-before execution (`agent_host/agent.py:54-76`, `451-490`). This follows
+**Aligned.** The host owns a single `ToolContract` registry, derives a route's
+tools from it, exposes canonical definitions to the model, and rejects a tool
+name outside that subset just before execution. This follows
 Anthropic's core tool-use contract: the model proposes a structured request;
-the application executes only what it permits. The three-round cap is a useful
-initial containment mechanism.
+the application executes only what it permits.
 
-**Implementation gap — bounded rounds are not bounded actions.** A single
-model response may contain several tool calls, and `MAX_TOOL_ROUNDS` counts
-rounds rather than calls (`agent_host/agent.py:467-499`). There are no total
-call limits, per-tool limits, input-size limits, timeouts, cost/token budgets,
-or circuit breakers. Add these before tools perform expensive or consequential
-work.
+**Current POC containment.** A per-run budget now limits total/per-tool calls,
+input/result/context bytes, schema fan-out, wall time, MCP timeouts, and model
+output limits. Provider-dollar accounting, egress control, and server-side
+authorization remain production prerequisites.
 
-**Implementation gap — stop states are not handled explicitly.** The loop
-continues whenever it finds a `ToolUseBlock`, but otherwise treats a response
-as final (`agent_host/agent.py:467-476`). Anthropic's canonical client-tool
-loop is keyed on `stop_reason` and distinguishes `end_turn`, `max_tokens`,
-`stop_sequence`, and `refusal`. Handle incomplete/refused model responses
-explicitly; do not emit a blank or partial answer as a successful completion.
+**Current stop-state handling.** `max_tokens` and refusal responses now produce
+explicit fail-closed trace events instead of being treated as ordinary answers.
+Unknown or malformed model responses remain failure paths. The loop continues
+only when it finds a validated `ToolUseBlock` and the budget permits it;
+otherwise it treats a response as final only after the explicit stop-state
+check. This keeps incomplete/refused responses from becoming successful
+completions.
 
-**Implementation gap — dynamic tool discovery is not a trust boundary.**
-`MCPToolBridge.list_anthropic_tools()` forwards a live MCP tool's name,
-description, and input schema to Claude (`agent_host/mcp_bridge.py:28-51`).
-Anthropic notes that tool definitions become part of the model's constructed
-system prompt. Filtering only on the name means a compromised or changed MCP
-server can alter the description/schema of an allowed tool. Before remote or
-real-data use, authenticate the server and pin/version approved tool manifests,
-schemas, and response contracts; then enforce resource checks at the server.
+**Current POC contract boundary.** The host now uses one pinned
+`ToolContract` registry to derive route scopes, validate live MCP input schemas,
+and pass canonical descriptions/schemas to Claude. A missing or drifted
+required tool fails closed. Before remote or real-data use, authenticate the
+server and enforce resource checks at the server; host pinning is not a
+replacement for server-side authorization.
 
-**Partial implementation — tool results now receive a reusable deterministic
-screen before reuse.** Results are still JSON-serialized into the next model
-turn (`agent_host/agent.py:647-686`), but the host first checks for obvious
-instruction injection, row-shaped exposure, and the screen size limit. Keeping
-untrusted content inside `tool_result` blocks is correct API formatting, but it
-does not neutralize indirect prompt injection. Add typed result schemas,
-provenance, filtering/summarization, and an independently evaluated safety
-classifier for retrieved or third-party content before real data use.
+**Partial implementation — tool results are contract-validated and screened
+before reuse.** Results are still JSON-serialized into the next model turn,
+but the host now applies typed shape checks, byte limits, provenance-free
+dummy handling, and the reusable surface screen. Keeping untrusted content
+inside `tool_result` blocks is correct API formatting, but it does not
+neutralize indirect prompt injection. Add richer provenance/filtering and an
+independently evaluated safety classifier for retrieved or third-party content
+before real data use.
 
 ### 4. Data-catalog MCP node
 
@@ -298,21 +294,14 @@ tables by authorization and rank/select them before loading schemas.
 events rather than hidden chain-of-thought. That is a good foundation for
 trajectory evaluation.
 
-**Implementation gap — the privacy switch is incomplete.**
-`LOG_RAW_PROMPTS` hides `request.received` and model request/response payloads,
-but it does not redact the following records:
+**Fixed regression — trace content is redacted centrally.**
+`TRACE_CONTENT_MODE=metadata` is now the default. `TraceLogger` redacts
+request, model, tool, SQL, result, and answer fields before serialization while
+retaining event structure, sizes, item counts, and keyed digests:
 
-- `tool.selected` writes its full input, including the user's question for
-  `search_tables` (`agent_host/agent.py:344-347`, `565-575`).
-- `tool.result` writes the full result.
-- `answer.ready` writes the full final answer (`agent_host/agent.py:229`,
-  `395`, `590`, `603`).
-
-`TraceLogger` simply serializes every supplied field to disk
-(`agent_host/trace_logger.py:41-57`). Consequently, `LOG_RAW_PROMPTS=false`
-does **not** mean raw-content-free tracing. The current dummy-only setup limits
-the impact, but a real-data migration must add field-level redaction before
-persistence, retention/access policy, and trace-reader audit.
+`TRACE_CONTENT_MODE=debug` remains an explicit local-development escape hatch;
+it must not be enabled for sensitive content. Retention/access policy and
+trace-reader audit are still production requirements.
 
 **PRD delivery gap.** The trace does not capture scenario ID, model/prompt/
 tool/policy/evaluator versions, latency, token usage, cost, redaction metadata,

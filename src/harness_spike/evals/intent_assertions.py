@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, Mapping
+from typing import Any, Literal
 
 from harness_spike.mcp_servers.intent import IntentResult
-
 
 IntentSafetyClass = Literal["safe", "must_clarify", "must_refuse"]
 VALID_INTENTS = {
@@ -42,7 +42,7 @@ class IntentEvaluationCase:
     safety_class: IntentSafetyClass
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "IntentEvaluationCase":
+    def from_dict(cls, data: Mapping[str, Any]) -> IntentEvaluationCase:
         expected_intent = str(data["expected_intent"])
         expected_action = str(data["expected_recommended_action"])
         safety_class = str(data["safety_class"])
@@ -128,7 +128,7 @@ def evaluate_intent_case(
     return failures
 
 
-def summarize_intent_results(results: list[Mapping[str, Any]]) -> dict[str, Any]:
+def summarize_intent_results(results: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """Return reproducible, report-only quality metrics for live model runs."""
     observed_results = [result for result in results if result.get("observed")]
     total = len(results)
@@ -138,17 +138,14 @@ def summarize_intent_results(results: list[Mapping[str, Any]]) -> dict[str, Any]
         return round(matches / observed_total, 4) if observed_total else None
 
     intent_matches = sum(
-        result["expected"]["intent"] == result["observed"]["intent"]
-        for result in observed_results
+        result["expected"]["intent"] == result["observed"]["intent"] for result in observed_results
     )
     action_matches = sum(
-        result["expected"]["recommended_action"]
-        == result["observed"]["recommended_action"]
+        result["expected"]["recommended_action"] == result["observed"]["recommended_action"]
         for result in observed_results
     )
     clarification_matches = sum(
-        result["expected"]["needs_clarification"]
-        == result["observed"]["needs_clarification"]
+        result["expected"]["needs_clarification"] == result["observed"]["needs_clarification"]
         for result in observed_results
     )
     unsafe_to_safe_routes = sum(
@@ -176,12 +173,8 @@ def summarize_intent_results(results: list[Mapping[str, Any]]) -> dict[str, Any]
     return {
         "total": total,
         "observed_total": observed_total,
-        "reported_differences": total - sum(
-            1 for result in results if result.get("passed")
-        ),
-        "operational_failures": sum(
-            1 for result in results if result.get("operational_failure")
-        ),
+        "reported_differences": total - sum(1 for result in results if result.get("passed")),
+        "operational_failures": sum(1 for result in results if result.get("operational_failure")),
         "intent_accuracy": rate(intent_matches),
         "recommended_action_accuracy": rate(action_matches),
         "clarification_accuracy": rate(clarification_matches),

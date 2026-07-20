@@ -5,14 +5,13 @@ from harness_spike.policy.normalize import normalize_prompt
 
 
 def _modules(prompt: str) -> set[str]:
-    return {
-        finding.module
-        for finding in collect_findings(prompt, normalize_prompt(prompt))
-    }
+    return {finding.module for finding in collect_findings(prompt, normalize_prompt(prompt))}
 
 
 def test_workflow_module_marks_safe_sql_generation_workflow() -> None:
-    assert "workflow_authorization.allowed" in _modules("Write SQL to count appointments by status.")
+    assert "workflow_authorization.allowed" in _modules(
+        "Write SQL to count appointments by status."
+    )
 
 
 def test_workflow_module_does_not_allow_generic_sql_generation() -> None:

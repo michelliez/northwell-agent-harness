@@ -284,7 +284,7 @@ Untrusted user prompt
        -> normalize intent/action contract
        -> refuse or uncertain: stop before catalog
        -> safe route: return routing metadata to host
-  -> host derives allowed tool names from its own ROUTE_TOOLS map
+  -> host derives allowed tool names from its own ToolContract registry
   -> surface-screen tool metadata, then show only that subset to the main model
   -> host checks every requested tool name against the same subset
   -> allowed MCP tool executes against dummy data
@@ -301,7 +301,7 @@ Control ownership is deliberately split:
 | Safe-workflow recognition | Deterministic policy gate | A routing hint that permits semantic classification; not a data-access grant. |
 | No lexical match | Deterministic policy gate | `allowed=true` with `reason="no_deterministic_verdict"`; operationally means “escalate to intent.” |
 | Semantic route | Intent model plus deterministic contract code | A recommendation constrained to a closed intent/action vocabulary. |
-| Tool availability | Host | Derived from `ROUTE_TOOLS`; the model sees only tools for the accepted intent. |
+| Tool availability | Host | Derived from `ToolContract`; the model sees only canonical tools for the accepted intent. |
 | Tool execution | Host | Requested tool names are checked again immediately before MCP execution. |
 | Resource authorization | MCP server or downstream data system | Missing; dummy tools accept direct local calls without user identity or scopes. |
 
@@ -343,8 +343,8 @@ output contract is only `allowed`, `reason`, and `matched_term`.
 | Prompt-injection and jailbreak blocklists | Known manipulation, persona, bypass, tool-escalation, and unbounded-retry phrases are blocked. | Useful high-precision signatures, but Anthropic explicitly treats prompt injection as unsolved and uses multiple classifier, permission, monitoring, and red-team layers. A blacklist cannot support a “jailbreak resistant” claim. | 2 |
 | Surface-aware policy screening | A reusable deterministic screen now covers user input, tool metadata, tool results, and final answers with surface-specific checks. | This closes the POC’s obvious context blind spots, but it remains lexical/structural defense in depth; it is not authorization, a complete prompt-injection defense, or a security boundary for direct MCP callers. | 3 |
 | Identity and purpose-aware authorization | No authenticated user, role, permitted purpose, resource scope, consent, or session risk enters the policy decision. | Missing by design for dummy data. HHS’s minimum-necessary guidance requires access to be limited by purpose, workforce role, data category, and conditions; lexical prompt classification cannot meet that requirement. | 1 |
-| Server-side enforcement | The catalog MCP accepts direct localhost calls independently of the host’s policy decision. | Host scoping is valuable but is not a complete security boundary. A caller that reaches the MCP server directly bypasses the host. Production tools require their own authentication and authorization. | 1 |
-| Trace privacy default | Raw prompts and model responses are hidden unless `LOG_RAW_PROMPTS` is enabled. | Correct privacy-preserving default for a POC. Production needs field-level redaction, retention, access controls, and audit of trace readers rather than only an on/off flag. | 4 |
+| Server-side enforcement | MCP servers require the configured local service token; the host still pins tool contracts and scopes routes. | This prevents unauthenticated direct calls, but the shared POC token is not principal/resource authorization. Production tools require identity-aware authentication, authorization, and audit. | 2 |
+| Trace privacy default | `TRACE_CONTENT_MODE=metadata` centrally redacts prompt, tool, SQL, result, and answer content while retaining structural metadata and keyed digests. | Stronger than an on/off prompt switch. Production still needs retention, access controls, trace-reader audit, and encrypted storage. | 4 |
 
 Policy implementation references:
 
@@ -386,22 +386,26 @@ produce one `emit_intent` tool call with this contract:
 | Low-confidence fallback | Model-reported confidence below `0.70` becomes `unknown/clarify`. | Safe direction, but the value is an uncalibrated constant and model self-confidence is not a probability of correctness. It needs threshold calibration against held-out labels by risk class. | 2 |
 | Ambiguity handling | `unknown`, low confidence, or `needs_clarification=true` stops before catalog access. | Aligns with Anthropic’s guidance that agents should pause rather than assume when user intent is unresolved. | 4 |
 | Refusal enforcement | `policy_probe`, `patient_specific_request`, and `unsupported_sql_request` force a refusal; the host returns `allowed=false` without opening the catalog. | Correct defense-in-depth. The semantic safety classifier supplements but does not replace deterministic or server authorization controls. | 4 |
-| Tool capability minimization | `ROUTE_TOOLS` maps intents to tool-name subsets; the host filters discovered tools before the main model sees them. | Strong least-capability pattern and analogous to Claude Code’s permission model at a smaller POC scale. | 4 |
+| Tool capability minimization | A single host-owned `ToolContract` registry derives intent-to-tool scopes, canonical model-facing schemas, result validators, and per-tool limits; live MCP inventory is checked against it. | Strong least-capability pattern and clearer ownership: intent recommends a route, while the host grants capability. | 4 |
 | Execution-time scope check | The host checks every `ToolUseBlock.name` against `allowed_tools` again immediately before execution and records `tool.blocked` on mismatch. | Correctly treats model output as a proposal and the host as the execution authority. | 5 |
+| MCP contract validation | The host fails closed when a required MCP tool is missing or its live input schema differs from the pinned contract; canonical host definitions are passed to the model. | Reduces trust in mutable tool metadata, but does not authenticate direct MCP callers or replace server-side authorization. | 3 |
+| Execution budgets and stop states | A per-run budget now limits rounds, model/tool calls, per-tool calls, schema fan-out, bytes, wall time, MCP timeouts, and node `max_tokens`; `max_tokens` and refusal responses become explicit stop events. | Simple operational containment aligned with bounded tool-use practice. Provider-dollar accounting and independent server controls remain future work. | 3 |
 | General-question isolation | `general_question` calls the main model with `tools=[]` and a system instruction forbidding claims of hospital-data or external-tool access. | Good capability isolation for a harmless route. Medical factual quality is outside this router’s evaluation and must not be represented as a clinical control. | 4 |
 | Failure handling | Intent MCP exceptions, non-dictionary output, and validation errors produce `allowed=false`, `policy_reason="intent_classifier_uncertain"`, and no tool access. | Correct fail-safe behavior for operational classifier failures. | 5 |
 | Valid-unknown response semantics | A valid `unknown/clarify` result stops before catalog, but its `AskResponse` omits `allowed=false`; the schema default therefore reports `allowed=true`. | Control flow is safe, but the API state is inconsistent with the operational-failure path and can mislead metrics or callers. Introduce an explicit decision/status enum or mark this response non-routable. | 2 |
 | Unauthorized-tool response semantics | An out-of-scope tool request stops, but `unauthorized_tool_response()` also inherits `allowed=true`. | Execution is prevented, but observability and API semantics understate the block. This should be a typed policy enforcement outcome with `allowed=false`. | 2 |
 | Safety-model independence | Intent and the main agent use the same configured Claude model family and API settings; the intent layer is prompt-based rather than a purpose-trained independent safety classifier. | This is adequate for routing research but creates correlated-failure risk. Fable’s published comparator uses separate safety classifiers as one layer among access controls, safety training, and offline monitoring. | 2 |
 | Risk-flag contract | `risk_flags` is an unrestricted list of strings. | Flexible for experimentation but weak for metrics and enforcement. Replace with a versioned enum/taxonomy or treat flags as non-authoritative notes. | 2 |
-| MCP transport security | Intent runs as unauthenticated HTTP on fixed localhost port 8002. | Appropriate for a local synthetic spike. It is not acceptable for a networked enterprise service without authenticated transport, authorization, service identity, and rate limits. | 1 |
+| MCP transport security | MCP services require the configured local bearer token on fixed localhost endpoints. | Appropriate as a coarse POC service-authentication seam. It is not enterprise authorization; production still needs service identity, user/resource scopes, secure transport, and rate limits. | 2 |
 | Evaluation corpus | `evals/intent.jsonl` contains 90 synthetic cases across baseline, injection, mixed-intent, obfuscation, false-positive, and tool-instruction categories; the runner supports repetitions and confusion metrics. | Strong evaluation structure. It matches Anthropic’s recommendation to combine code-based transcript checks with repeated, versioned regression tasks. | 4 |
 | Current live evidence | The only stored full direct-intent report is prompt v1 with 270 observations: intent accuracy `0.7222`, action accuracy `0.7815`, 16 unsafe-to-safe routes, and 6 false positives. The implementation is now v3, but no stored full v3 live report exists. | Historical misses motivated the current design but cannot validate v3. A current repeated v3 run is required before presenting classifier quality or a release threshold. | 2 |
 
 Intent and host implementation references:
 
-- Output types, route map, and action contract:
-  `src/harness_spike/mcp_servers/intent.py:13-83`.
+- Output types and action contract:
+  `src/harness_spike/mcp_servers/intent.py:13-68`.
+- Host-owned tool contracts and route-derived scope:
+  `src/harness_spike/agent_host/tool_registry.py`.
 - Prompt precedence and examples:
   `src/harness_spike/mcp_servers/intent.py:85-139`.
 - Deterministic contract normalization:
@@ -507,7 +511,7 @@ following are production blockers:
 | Intent structured-output and contract design | 4 | Forced typed output, action coherence, refusals, and host scoping are strong implementation decisions. |
 | Intent calibration and current live evidence | 2 | The corpus is strong, but the current v3 prompt lacks a stored repeated full-suite baseline and the confidence cutoff is uncalibrated. |
 | Tool least-capability enforcement | 4 | Tool filtering plus execution-time rechecking correctly keeps the model from granting itself capability. |
-| Prompt-injection defense in depth | 3 | User-input, tool-metadata, tool-result, and final-answer screens now provide basic deterministic coverage alongside semantic refusal; independent classifiers, server authorization, provenance, and monitoring remain absent. |
+| Prompt-injection defense in depth | 3 | User-input, pinned tool-contract metadata, typed/bounded tool results, and final-answer screens now provide basic deterministic coverage alongside semantic refusal; independent classifiers, server authorization, provenance, and monitoring remain absent. |
 | Production identity and authorization | 1 | Not implemented and intentionally out of scope for dummy data; mandatory before any governed data connection. |
 | Observability and evaluation architecture | 4 | Versioned traces, deterministic assertions, repeated trials, and node-localized failures are well aligned with published agent-evaluation practice. |
 

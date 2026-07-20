@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 class AskRequest(BaseModel):
     question: str = Field(min_length=1)
 
+
 class AskResponse(BaseModel):
     answer: str
     used_tools: list[str]
@@ -16,3 +17,4 @@ class AskResponse(BaseModel):
     matched_term: str | None = None
     intent: str | None = None
     intent_confidence: float | None = None
+    disclosure_status: str | None = None

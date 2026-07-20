@@ -12,16 +12,18 @@ TEMPLATE_PATH = Path(__file__).parent / "static" / "template.html"
 def _serialize_traces(traces: list[TraceRun]) -> str:
     data = []
     for t in traces:
-        data.append({
-            "run_id": t.run_id,
-            "question": t.question,
-            "status": t.status,
-            "total_duration": t.total_duration,
-            "warnings": t.warnings,
-            "events": [dataclasses.asdict(e) for e in t.events],
-            "nodes": [dataclasses.asdict(n) for n in t.nodes],
-            "edges": [dataclasses.asdict(e) for e in t.edges],
-        })
+        data.append(
+            {
+                "run_id": t.run_id,
+                "question": t.question,
+                "status": t.status,
+                "total_duration": t.total_duration,
+                "warnings": t.warnings,
+                "events": [dataclasses.asdict(e) for e in t.events],
+                "nodes": [dataclasses.asdict(n) for n in t.nodes],
+                "edges": [dataclasses.asdict(e) for e in t.edges],
+            }
+        )
     return json.dumps(data, ensure_ascii=True, indent=None)
 
 

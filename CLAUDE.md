@@ -45,8 +45,8 @@ request
   -> deterministic user-input policy screen
        -> block: fail closed; no intent, model, or catalog call
        -> continue: read-only intent classification
-  -> validate intent and map to an allowlisted tool set
-  -> discover and screen tool metadata
+  -> validate intent and derive scope from host-owned tool contracts
+  -> confirm MCP inventory and expose canonical tool metadata
   -> main model proposes a bounded tool call or answer
   -> host rechecks the requested tool name before execution
   -> screen tool results before they re-enter model context
@@ -64,10 +64,12 @@ Policy and intent invariants:
 - Intent output is structured and runtime-validated. `unknown`, low confidence,
   refusal, malformed output, or classifier failure is non-routable and stops
   before catalog access.
-- The host filters the model-visible tools and checks every proposed tool call
-  again immediately before execution.
-- Every stop path and context-screen decision is observable, and tool loops are
-  bounded by `MAX_TOOL_ROUNDS`.
+- The host derives route scope from one tool-contract registry, filters the
+  model-visible tools, and checks every proposed tool call again immediately
+  before execution.
+- Every stop path and context-screen decision is observable. Tool loops are
+  bounded by rounds, total/per-tool calls, byte limits, candidate fan-out,
+  timeouts, and explicit model stop states.
 
 ### Evaluation contracts
 
@@ -170,6 +172,20 @@ uv run --no-editable nh-spike-eval --suite red_team
 uv run --no-editable nh-spike-eval --suite intent --repetitions 3
 ```
 
+### Full check (format + lint + types + tests)
+
+Run all static checks and the unit test suite in one shot — mirrors what CI runs:
+
+```bash
+uv run ruff format --check src tests && uv run ruff check src tests && uv run pyright && uv run pytest -q
+```
+
+To auto-fix formatting and lint issues before checking:
+
+```bash
+uv run ruff format src tests && uv run ruff check --fix src tests
+```
+
 ## Architecture
 
 The system is split into **five logical components** that communicate via REST/HTTP at fixed localhost ports:
@@ -186,6 +202,8 @@ The system is split into **five logical components** that communicate via REST/H
 - `agent.py`: Main logic—`answer_question()` orchestrates policy → intent → agent loop
 - `cli.py`: CLI entrypoint, also used by the evaluator
 - `mcp_bridge.py`: Async HTTP client to query MCP servers
+- `tool_registry.py`: Host-owned tool contracts and route-derived capability scopes
+- `budget.py`: Per-request call, byte, fan-out, timeout, and stop-state budget
 - `trace_logger.py`: Records every decision step for evaluation
 - `schemas.py`: Pydantic models for request/response contracts
 
@@ -262,6 +280,11 @@ This separation ensures:
 - Intent classification is focused and cacheable
 - Tool calls are bounded by the model's decision and the host's enforcement
 
+The host-owned tool registry is the only capability registry. Intent returns a
+route recommendation; it does not own tool permissions. MCP discovery confirms
+that a configured server matches the host contract, while canonical host
+descriptions and schemas are what the model receives.
+
 ### Trace Logging
 
 Every request produces a trace file at `logs/runs/<uuid>.jsonl`. Each line is a JSON event:
@@ -298,9 +321,20 @@ Settings are loaded from `.env` (see `.env.example`):
 - `CLAUDE_MODEL` — model to use (default: `claude-haiku-4-5-20251001`)
 - `MCP_SERVER_URL` — data catalog server address (default: `http://localhost:8000/mcp`)
 - `INTENT_MCP_URL` — intent classifier server address (default: `http://localhost:8002/mcp`)
-- `MAX_TOOL_ROUNDS` — max iterations of the agent loop (default: 3)
+- `MAX_TOOL_ROUNDS` — max tool rounds (default: 3)
+- `MAX_MODEL_CALLS`, `MAX_TOOL_CALLS`, `MAX_CALLS_PER_TOOL` — total execution limits
+- `MAX_CANDIDATE_SCHEMAS` — SQL schema fan-out limit (default: 5)
+- `MAX_INPUT_BYTES`, `MAX_TOOL_RESULT_BYTES`, `MAX_CONTEXT_BYTES` — size limits
+- `MAX_WALL_SECONDS`, `MCP_CALL_TIMEOUT_SECONDS`, `MODEL_CALL_TIMEOUT_SECONDS` — time limits
+- `MODEL_MAX_TOKENS`, `INTENT_MAX_TOKENS`, `SQL_GENERATION_MAX_TOKENS` — node output limits
+- `INTENT_MIN_CONFIDENCE` — configurable but uncalibrated routing threshold
 - `TRACE_DIR` — where to write trace JSONLs (default: `logs/runs`)
-- `LOG_RAW_PROMPTS` — log full prompts to trace (default: false, for privacy)
+- `LOG_RAW_PROMPTS` — legacy model-payload logging switch; it does not disable
+  centralized trace redaction
+- `TRACE_CONTENT_MODE` — `metadata` (default) redacts user/tool/SQL/answer
+  content; `debug` is an explicit local-only mode
+- `TRACE_HASH_KEY` — optional keyed HMAC secret for correlating redacted content
+- `MCP_AUTH_TOKEN` — shared local service token required by the POC MCP servers
 
 ## Development Guidelines
 
@@ -308,8 +342,9 @@ Settings are loaded from `.env` (see `.env.example`):
 
 1. Add a function with `@mcp.tool` decorator in one of the `mcp_servers/*.py` files
 2. Write a clear docstring explaining when the model should use this tool
-3. If adding a new MCP server, register a script entry in `pyproject.toml` under `[project.scripts]`
-4. Add synthetic test cases to `evals/red_team.jsonl` or `tests/policy_gate/policy_gate_test.py`
+3. Add one `ToolContract` to `agent_host/tool_registry.py`, including its server, canonical schema, route membership, result validator, and limits
+4. If adding a new MCP server, register a script entry in `pyproject.toml` under `[project.scripts]`
+5. Add synthetic test cases to `evals/red_team.jsonl` or `tests/policy_gate/policy_gate_test.py`
 
 ### Adding a Policy Rule
 
@@ -341,6 +376,7 @@ Settings are loaded from `.env` (see `.env.example`):
 This is a proof-of-concept on localhost with dummy data. It demonstrates:
 
 - ✅ Safe request routing with policy gates
+- ✅ Host-owned tool contracts and bounded execution budgets
 - ✅ Observable tool usage via traces
 - ✅ Deterministic evaluation of agent behavior
 
@@ -374,3 +410,13 @@ controls must continue to expand.
 - **Production integration:** Add authenticated identity, server-side
   authorization, secure transport, network isolation, audit, output filtering,
   and human approval before any real data or consequential action.
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+Rules:
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
