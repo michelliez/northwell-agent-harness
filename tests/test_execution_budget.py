@@ -7,10 +7,10 @@ from types import SimpleNamespace
 import pytest
 from anthropic.types import TextBlock, ToolUseBlock
 
-from harness_spike.agent_host.budget import BudgetExceeded, ExecutionBudget
-from harness_spike.agent_host.model_runtime import run_agent_loop
-from harness_spike.agent_host.trace_logger import TraceLogger
-from harness_spike.agent_host.workflows.legacy_mock import fetch_candidate_schemas
+from agent_host.budget import BudgetExceeded, ExecutionBudget
+from agent_host.model_runtime import run_agent_loop
+from agent_host.trace_logger import TraceLogger
+from agent_host.workflows.legacy_mock import fetch_candidate_schemas
 
 
 def test_budget_caps_total_and_per_tool_calls() -> None:

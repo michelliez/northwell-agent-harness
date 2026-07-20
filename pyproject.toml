@@ -1,7 +1,7 @@
 [project]
-name = "nw-harness"
+name = "agent-harness"
 version = "0.1.0"
-description = "Add your description here"
+description = "Policy-gated agent workflows with retrieval, SQL planning, and evaluation"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
@@ -15,22 +15,29 @@ dependencies = [
 ]
 
 [project.scripts]
-nh-spike-agent = "harness_spike.agent_host.cli:main"
-nh-spike-data-catalog = "harness_spike.mcp_servers.data_catalog:main"
-nh-spike-intent = "harness_spike.mcp_servers.intent:main"
-nh-spike-sql-generation = "harness_spike.mcp_servers.sql_generation:main"
-nh-spike-sql-validation = "harness_spike.mcp_servers.sql_validation:main"
-nh-spike-eval = "harness_spike.evals.runner:main"
-nh-spike-traces = "harness_spike.trace_viewer.__main__:main"
-nh-spike-rag = "harness_spike.mcp_servers.rag_retrieval:main"
-nh-spike-rag-index = "harness_spike.rag_index:main"
+agent-harness = "agent_host.cli:main"
+agent-harness-data-catalog = "mcp_servers.data_catalog:main"
+agent-harness-intent = "mcp_servers.intent:main"
+agent-harness-sql-generation = "mcp_servers.sql_generation:main"
+agent-harness-sql-validation = "mcp_servers.sql_validation:main"
+agent-harness-eval = "evals.runner:main"
+agent-harness-traces = "trace_viewer.__main__:main"
+agent-harness-rag = "retrieval.mcp_server:main"
+agent-harness-rag-index = "retrieval.indexer:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/harness_spike"]
+packages = [
+    "src/agent_host",
+    "src/evals",
+    "src/mcp_servers",
+    "src/policy",
+    "src/retrieval",
+    "src/trace_viewer",
+]
 
 [tool.hatch.build.targets.sdist]
 include = [

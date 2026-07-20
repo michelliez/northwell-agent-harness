@@ -6,12 +6,12 @@ from types import SimpleNamespace
 import pytest
 from anthropic.types import TextBlock, ToolUseBlock
 
-from harness_spike.agent_host import agent
-from harness_spike.agent_host.budget import ExecutionBudget
-from harness_spike.agent_host.model_runtime import run_agent_loop
-from harness_spike.agent_host.responses import final_answer_response
-from harness_spike.agent_host.trace_logger import TraceLogger
-from harness_spike.policy.screen import ContentSurface, screen_content
+from agent_host import agent
+from agent_host.budget import ExecutionBudget
+from agent_host.model_runtime import run_agent_loop
+from agent_host.responses import final_answer_response
+from agent_host.trace_logger import TraceLogger
+from policy.screen import ContentSurface, screen_content
 
 
 def test_surface_screen_keeps_schema_metadata_available() -> None:

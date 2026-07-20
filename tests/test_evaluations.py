@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from harness_spike.evals.assertions import EvaluationCase, evaluate_case
-from harness_spike.evals.runner import load_cases
+from evals.assertions import EvaluationCase, evaluate_case
+from evals.runner import load_cases
 
 
 def test_smoke_suite_loads() -> None:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from harness_spike.mcp_servers.sql_validation import validate_sql
+from mcp_servers.sql_validation import validate_sql
 
 
 def test_structural_sql_approval_is_not_disclosure_approval() -> None:

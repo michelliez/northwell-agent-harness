@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from harness_spike.mcp_servers.sql_validation import validate_sql
+from mcp_servers.sql_validation import validate_sql
 
 MALICIOUS_SQL_CASES = [
     # DDL, DML, scripting, permissions, and export operations.

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from harness_spike.agent_host.trace_logger import TraceLogger
+from agent_host.trace_logger import TraceLogger
 
 
 def test_metadata_trace_redacts_all_content_fields(tmp_path: Path) -> None:

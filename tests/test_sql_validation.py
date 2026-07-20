@@ -1,6 +1,6 @@
 import pytest
 
-from harness_spike.mcp_servers.sql_validation import validate_sql
+from mcp_servers.sql_validation import validate_sql
 
 
 @pytest.mark.parametrize(

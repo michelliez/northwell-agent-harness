@@ -1,5 +1,5 @@
-from harness_spike.policy.consolidate import consolidate_findings
-from harness_spike.policy.result import PolicyFinding, blocked
+from policy.consolidate import consolidate_findings
+from policy.result import PolicyFinding, blocked
 
 
 def test_consolidation_returns_first_blocking_finding() -> None:

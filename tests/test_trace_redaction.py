@@ -1,4 +1,4 @@
-from harness_spike.trace_viewer.redaction import redact
+from trace_viewer.redaction import redact
 
 
 def test_redacts_sensitive_keys():

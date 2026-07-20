@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from anthropic.types import Message, TextBlock, Usage
 
-from harness_spike.agent_host.agent import answer_question
+from agent_host.agent import answer_question
 
 
 def _fake_settings(tmp_path):
@@ -64,11 +64,11 @@ async def test_refuse_intent_blocks_response(
     bridge = _fake_bridge(intent_result)
 
     monkeypatch.setattr(
-        "harness_spike.agent_host.agent.get_settings",
+        "agent_host.agent.get_settings",
         lambda: _fake_settings(tmp_path),
     )
 
-    with patch("harness_spike.agent_host.agent.MCPToolBridge", return_value=bridge):
+    with patch("agent_host.agent.MCPToolBridge", return_value=bridge):
         result = await answer_question(SAFE_PROMPT)
 
     assert result.allowed is False
@@ -93,11 +93,11 @@ async def test_refuse_intent_makes_no_catalog_calls(
     bridge = _fake_bridge(intent_result)
 
     monkeypatch.setattr(
-        "harness_spike.agent_host.agent.get_settings",
+        "agent_host.agent.get_settings",
         lambda: _fake_settings(tmp_path),
     )
 
-    with patch("harness_spike.agent_host.agent.MCPToolBridge", return_value=bridge) as MockBridge:
+    with patch("agent_host.agent.MCPToolBridge", return_value=bridge) as MockBridge:
         await answer_question(SAFE_PROMPT)
 
     # MCPToolBridge should be constructed exactly once (for the intent classifier).
@@ -123,11 +123,11 @@ async def test_refuse_intent_records_blocked_trace_event(
     bridge = _fake_bridge(intent_result)
 
     monkeypatch.setattr(
-        "harness_spike.agent_host.agent.get_settings",
+        "agent_host.agent.get_settings",
         lambda: _fake_settings(tmp_path),
     )
 
-    with patch("harness_spike.agent_host.agent.MCPToolBridge", return_value=bridge):
+    with patch("agent_host.agent.MCPToolBridge", return_value=bridge):
         result = await answer_question(SAFE_PROMPT)
 
     trace_path = result.trace_file
@@ -174,15 +174,15 @@ async def test_safe_intent_is_not_refused(
     fake_client.messages = fake_messages
 
     monkeypatch.setattr(
-        "harness_spike.agent_host.agent.get_settings",
+        "agent_host.agent.get_settings",
         lambda: _fake_settings(tmp_path),
     )
     monkeypatch.setattr(
-        "harness_spike.agent_host.model_call.Anthropic",
+        "agent_host.model_call.Anthropic",
         lambda **_: fake_client,
     )
 
-    with patch("harness_spike.agent_host.agent.MCPToolBridge", return_value=bridge):
+    with patch("agent_host.agent.MCPToolBridge", return_value=bridge):
         result = await answer_question(SAFE_PROMPT)
 
     assert result.allowed is True

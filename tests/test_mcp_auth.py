@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from harness_spike.mcp_servers.auth import StaticServiceTokenAuth
+from mcp_servers.auth import StaticServiceTokenAuth
 
 
 @pytest.mark.asyncio
@@ -20,8 +20,8 @@ async def test_mcp_service_auth_returns_scoped_host_identity() -> None:
     token = await auth.verify_token("local-secret")
 
     assert token is not None
-    assert token.client_id == "nw-harness-host"
-    assert token.subject == "nw-harness-host"
+    assert token.client_id == "agent-harness-host"
+    assert token.subject == "agent-harness-host"
     assert token.scopes == ["mcp:catalog"]
     assert token.claims["service"] == "catalog"
 

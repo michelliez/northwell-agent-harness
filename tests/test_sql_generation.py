@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from harness_spike.mcp_servers import sql_generation
+from mcp_servers import sql_generation
 
 
 @pytest.mark.parametrize(

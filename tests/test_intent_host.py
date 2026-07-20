@@ -5,12 +5,12 @@ from typing import Any, cast
 import pytest
 from anthropic.types import TextBlock
 
-from harness_spike.agent_host import agent
-from harness_spike.agent_host.budget import ExecutionBudget
-from harness_spike.agent_host.schemas import AskResponse
-from harness_spike.agent_host.tool_registry import canonical_tools_for_server
-from harness_spike.agent_host.trace_logger import TraceLogger
-from harness_spike.agent_host.workflows import general as general_workflow
+from agent_host import agent
+from agent_host.budget import ExecutionBudget
+from agent_host.schemas import AskResponse
+from agent_host.tool_registry import canonical_tools_for_server
+from agent_host.trace_logger import TraceLogger
+from agent_host.workflows import general as general_workflow
 
 
 class FakeBridge:

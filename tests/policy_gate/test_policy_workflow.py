@@ -1,7 +1,7 @@
 import pytest
 
-from harness_spike.policy.gates import collect_findings, policy_gate
-from harness_spike.policy.normalize import normalize_prompt
+from policy.gates import collect_findings, policy_gate
+from policy.normalize import normalize_prompt
 
 
 def _modules(prompt: str) -> set[str]:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from harness_spike.policy.gates import policy_gate
+from policy.gates import policy_gate
 
 
 class TestDiseaseRelatedQueries:

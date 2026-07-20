@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from harness_spike.evals import runner
-from harness_spike.evals.intent_assertions import (
+from evals import runner
+from evals.intent_assertions import (
     IntentEvaluationCase,
     evaluate_intent_case,
     summarize_intent_results,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from harness_spike.trace_viewer.parser import load_traces, parse_file
+from trace_viewer.parser import load_traces, parse_file
 
 FIXTURES = Path(__file__).parent / "fixtures" / "synthetic_traces"
 

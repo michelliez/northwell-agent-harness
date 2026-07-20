@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from harness_spike.agent_host.tool_registry import (
+from agent_host.tool_registry import (
     ToolContractError,
     canonical_tools_for_server,
     contract_for_tool,

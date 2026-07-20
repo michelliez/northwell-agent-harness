@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import pytest
 
-from harness_spike.policy.consolidate import consolidate_findings
-from harness_spike.policy.result import PolicyFinding, allowed, blocked
+from policy.consolidate import consolidate_findings
+from policy.result import PolicyFinding, allowed, blocked
 
 # ---------------------------------------------------------------------------
 # Gap 1 — consolidate_findings no-verdict behaviour
@@ -89,7 +89,7 @@ async def test_intent_classifier_failure_returns_allowed_false(
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, patch
 
-    from harness_spike.agent_host.agent import answer_question
+    from agent_host.agent import answer_question
 
     settings = SimpleNamespace(
         trace_dir=str(tmp_path),
@@ -104,14 +104,14 @@ async def test_intent_classifier_failure_returns_allowed_false(
         require_anthropic_base_url=lambda: "https://example.test",
         anthropic_custom_headers={},
     )
-    monkeypatch.setattr("harness_spike.agent_host.agent.get_settings", lambda: settings)
+    monkeypatch.setattr("agent_host.agent.get_settings", lambda: settings)
 
     failing_bridge = AsyncMock()
     failing_bridge.__aenter__ = AsyncMock(return_value=failing_bridge)
     failing_bridge.__aexit__ = AsyncMock(return_value=False)
     failing_bridge.call_tool = AsyncMock(side_effect=ConnectionError("MCP unreachable"))
 
-    with patch("harness_spike.agent_host.agent.MCPToolBridge", return_value=failing_bridge):
+    with patch("agent_host.agent.MCPToolBridge", return_value=failing_bridge):
         result = await answer_question("How many encounters happened last month?")
 
     assert result.allowed is False
@@ -127,7 +127,7 @@ async def test_intent_classifier_invalid_response_returns_allowed_false(
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, patch
 
-    from harness_spike.agent_host.agent import answer_question
+    from agent_host.agent import answer_question
 
     settings = SimpleNamespace(
         trace_dir=str(tmp_path),
@@ -142,14 +142,14 @@ async def test_intent_classifier_invalid_response_returns_allowed_false(
         require_anthropic_base_url=lambda: "https://example.test",
         anthropic_custom_headers={},
     )
-    monkeypatch.setattr("harness_spike.agent_host.agent.get_settings", lambda: settings)
+    monkeypatch.setattr("agent_host.agent.get_settings", lambda: settings)
 
     bad_bridge = AsyncMock()
     bad_bridge.__aenter__ = AsyncMock(return_value=bad_bridge)
     bad_bridge.__aexit__ = AsyncMock(return_value=False)
     bad_bridge.call_tool = AsyncMock(return_value="not a dict")
 
-    with patch("harness_spike.agent_host.agent.MCPToolBridge", return_value=bad_bridge):
+    with patch("agent_host.agent.MCPToolBridge", return_value=bad_bridge):
         result = await answer_question("How many encounters happened last month?")
 
     assert result.allowed is False

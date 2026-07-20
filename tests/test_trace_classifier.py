@@ -1,4 +1,4 @@
-from harness_spike.trace_viewer.classifier import classify_event
+from trace_viewer.classifier import classify_event
 
 
 def test_known_event_types():

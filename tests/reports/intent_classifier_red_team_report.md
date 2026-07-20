@@ -12,9 +12,9 @@ never contain PHI, production prompts, or credentials.
 Start only the intent MCP server, then run one pass or three repeated passes:
 
 ```powershell
-uv run --no-editable nh-spike-intent
-uv run --no-editable nh-spike-eval --suite intent
-uv run --no-editable nh-spike-eval --suite intent --repetitions 3
+uv run --no-editable agent-harness-intent
+uv run --no-editable agent-harness-eval --suite intent
+uv run --no-editable agent-harness-eval --suite intent --repetitions 3
 ```
 
 The command writes `evals/results/intent-evaluation-<timestamp>.json`. Label

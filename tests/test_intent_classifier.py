@@ -3,8 +3,8 @@ from types import SimpleNamespace
 import pytest
 from anthropic.types import ToolUseBlock
 
-from harness_spike.agent_host.tool_registry import tools_for_intent
-from harness_spike.mcp_servers import intent
+from agent_host.tool_registry import tools_for_intent
+from mcp_servers import intent
 
 
 def _response(payload: dict[str, object]) -> SimpleNamespace:
