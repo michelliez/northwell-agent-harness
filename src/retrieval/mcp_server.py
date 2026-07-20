@@ -14,6 +14,30 @@ mcp = FastMCP("rag_retrieval", auth=build_service_auth("rag"))
 
 DEFAULT_RAG_DB_PATH = Path(__file__).resolve().parents[3] / "var" / "rag" / "index.sqlite"
 
+STOPWORDS = {
+    "a",
+    "about",
+    "an",
+    "and",
+    "are",
+    "can",
+    "does",
+    "documentation",
+    "find",
+    "for",
+    "is",
+    "me",
+    "of",
+    "on",
+    "say",
+    "says",
+    "show",
+    "tell",
+    "the",
+    "to",
+    "what",
+}
+
 
 class SearchDocsArgs(BaseModel):
     query: str = Field(min_length=1)
@@ -34,8 +58,15 @@ def get_rag_connection() -> sqlite3.Connection:
 
 
 def escape_fts5(query: str) -> str:
-    """Convert user text to a literal token conjunction for FTS5."""
-    return " AND ".join(f'"{token}"*' for token in re.findall(r"\w+", query))
+    """Convert user text to a forgiving literal-token FTS5 query."""
+    tokens = [
+        token.lower()
+        for token in re.findall(r"\w+", query)
+        if token.lower() not in STOPWORDS
+    ]
+    if not tokens:
+        tokens = [token.lower() for token in re.findall(r"\w+", query)]
+    return " OR ".join(f'"{token}"*' for token in tokens)
 
 
 def get_index_version(conn: sqlite3.Connection) -> str:

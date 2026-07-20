@@ -135,7 +135,7 @@ def create_schema(conn: sqlite3.Connection) -> None:
         );
 
         CREATE VIRTUAL TABLE chunks_fts USING fts5(
-            chunk_id, title, category, heading_path, text
+            chunk_id, source_path, title, category, heading_path, text
         );
         """
     )
@@ -186,9 +186,16 @@ def index_one_document(
 
         conn.execute(
             """INSERT INTO chunks_fts
-               (chunk_id, title, category, heading_path, text)
-               VALUES (?, ?, ?, ?, ?)""",
-            (chunk_id, title, chunk.category, chunk.heading_path, chunk.text),
+               (chunk_id, source_path, title, category, heading_path, text)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                chunk_id,
+                source_path,
+                title,
+                chunk.category,
+                chunk.heading_path,
+                chunk.text,
+            ),
         )
 
     return source_hash, len(chunks)
