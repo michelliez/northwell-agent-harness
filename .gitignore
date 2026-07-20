@@ -26,3 +26,8 @@ pytest-cache-files-*/
 # Proprietary Clarity data — never commit
 ClarityDictionaryHTML-full*
 data/ClarityDictionaryHTML-full*
+
+
+var/rag/*.sqlite
+rag/*.sqlite
+*.sqlite
