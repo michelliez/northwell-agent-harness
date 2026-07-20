@@ -23,154 +23,154 @@ class GetTableInfoArgs(BaseModel):
     table_name: str = Field(min_length=1)
 
 
-TABLES: dict[str, dict[str, object]] = {
-    "encounters": {
-        "description": "One row per patient visit or encounter.",
-        "columns": [
-            {
-                "name": "encounter_id",
-                "type": "string",
-                "description": "Internal visit identifier.",
-                "safety_label": "identifier",
-            },
-            {
-                "name": "patient_id",
-                "type": "string",
-                "description": "Internal patient identifier.",
-                "safety_label": "identifier",
-            },
-            {
-                "name": "encounter_date",
-                "type": "date",
-                "description": "Date when the visit occurred.",
-                "safety_label": "safe_aggregate",
-            },
-            {
-                "name": "department",
-                "type": "string",
-                "description": "Department where the visit occurred.",
-                "safety_label": "safe_aggregate",
-            },
-        ],
-    },
-    "patients": {
-        "description": "One row per patient in the dummy catalog.",
-        "columns": [
-            {
-                "name": "patient_id",
-                "type": "string",
-                "description": "Internal patient identifier.",
-                "safety_label": "identifier",
-            },
-            {
-                "name": "birth_year",
-                "type": "integer",
-                "description": "Patient birth year, not full date of birth.",
-                "safety_label": "safe_aggregate",
-            },
-            {
-                "name": "zip3",
-                "type": "string",
-                "description": "First three digits of patient ZIP code.",
-                "safety_label": "sensitive",
-            },
-        ],
-    },
-    "appointments": {
-        "description": "Scheduled appointment records.",
-        "columns": [
-            {
-                "name": "appointment_id",
-                "type": "string",
-                "description": "Internal appointment identifier.",
-                "safety_label": "identifier",
-            },
-            {
-                "name": "appointment_date",
-                "type": "date",
-                "description": "Scheduled appointment date.",
-                "safety_label": "safe_aggregate",
-            },
-            {
-                "name": "status",
-                "type": "string",
-                "description": "Scheduled, completed, cancelled, or no-show.",
-                "safety_label": "safe_aggregate",
-            },
-        ],
-    },
-}
+# TABLES: dict[str, dict[str, object]] = {
+#     "encounters": {
+#         "description": "One row per patient visit or encounter.",
+#         "columns": [
+#             {
+#                 "name": "encounter_id",
+#                 "type": "string",
+#                 "description": "Internal visit identifier.",
+#                 "safety_label": "identifier",
+#             },
+#             {
+#                 "name": "patient_id",
+#                 "type": "string",
+#                 "description": "Internal patient identifier.",
+#                 "safety_label": "identifier",
+#             },
+#             {
+#                 "name": "encounter_date",
+#                 "type": "date",
+#                 "description": "Date when the visit occurred.",
+#                 "safety_label": "safe_aggregate",
+#             },
+#             {
+#                 "name": "department",
+#                 "type": "string",
+#                 "description": "Department where the visit occurred.",
+#                 "safety_label": "safe_aggregate",
+#             },
+#         ],
+#     },
+#     "patients": {
+#         "description": "One row per patient in the dummy catalog.",
+#         "columns": [
+#             {
+#                 "name": "patient_id",
+#                 "type": "string",
+#                 "description": "Internal patient identifier.",
+#                 "safety_label": "identifier",
+#             },
+#             {
+#                 "name": "birth_year",
+#                 "type": "integer",
+#                 "description": "Patient birth year, not full date of birth.",
+#                 "safety_label": "safe_aggregate",
+#             },
+#             {
+#                 "name": "zip3",
+#                 "type": "string",
+#                 "description": "First three digits of patient ZIP code.",
+#                 "safety_label": "sensitive",
+#             },
+#         ],
+#     },
+#     "appointments": {
+#         "description": "Scheduled appointment records.",
+#         "columns": [
+#             {
+#                 "name": "appointment_id",
+#                 "type": "string",
+#                 "description": "Internal appointment identifier.",
+#                 "safety_label": "identifier",
+#             },
+#             {
+#                 "name": "appointment_date",
+#                 "type": "date",
+#                 "description": "Scheduled appointment date.",
+#                 "safety_label": "safe_aggregate",
+#             },
+#             {
+#                 "name": "status",
+#                 "type": "string",
+#                 "description": "Scheduled, completed, cancelled, or no-show.",
+#                 "safety_label": "safe_aggregate",
+#             },
+#         ],
+#     },
+# }
 
 
-DOCS: list[dict[str, str]] = [
-    {
-        "name": "encounters",
-        "description": (
-            "Contains admission, discharge, department, and encounter date "
-            "information for dummy hospital visits."
-        ),
-    },
-    {
-        "name": "diagnoses",
-        "description": (
-            "Contains diagnosis codes and diagnosis descriptions for dummy "
-            "clinical metadata exploration."
-        ),
-    },
-    {
-        "name": "departments",
-        "description": (
-            "Contains department names and department metadata for dummy "
-            "operational analytics."
-        ),
-    },
-]
+# DOCS: list[dict[str, str]] = [
+#     {
+#         "name": "encounters",
+#         "description": (
+#             "Contains admission, discharge, department, and encounter date "
+#             "information for dummy hospital visits."
+#         ),
+#     },
+#     {
+#         "name": "diagnoses",
+#         "description": (
+#             "Contains diagnosis codes and diagnosis descriptions for dummy "
+#             "clinical metadata exploration."
+#         ),
+#     },
+#     {
+#         "name": "departments",
+#         "description": (
+#             "Contains department names and department metadata for dummy "
+#             "operational analytics."
+#         ),
+#     },
+# ]
 
 
-TABLE_INFO: dict[str, dict[str, str]] = {
-    "encounters": {
-        "table": "encounters",
-        "primary_key": "encounter_id",
-        "description": (
-            "Contains admission, discharge, department, and encounter date "
-            "information."
-        ),
-    },
-    "diagnoses": {
-        "table": "diagnoses",
-        "primary_key": "diagnosis_id",
-        "description": "Contains diagnosis codes and diagnosis descriptions.",
-    },
-    "departments": {
-        "table": "departments",
-        "primary_key": "department_id",
-        "description": "Contains department names and department metadata.",
-    },
-}
+# TABLE_INFO: dict[str, dict[str, str]] = {
+#     "encounters": {
+#         "table": "encounters",
+#         "primary_key": "encounter_id",
+#         "description": (
+#             "Contains admission, discharge, department, and encounter date "
+#             "information."
+#         ),
+#     },
+#     "diagnoses": {
+#         "table": "diagnoses",
+#         "primary_key": "diagnosis_id",
+#         "description": "Contains diagnosis codes and diagnosis descriptions.",
+#     },
+#     "departments": {
+#         "table": "departments",
+#         "primary_key": "department_id",
+#         "description": "Contains department names and department metadata.",
+#     },
+# }
 
 
-@mcp.tool
-def search_docs(query: str) -> list[dict[str, str]]:
-    """Search tiny hospital documentation for relevant dummy tables."""
-    args = SearchDocsArgs(query=query.strip())
-    q = args.query.lower()
-    return [
-        doc
-        for doc in DOCS
-        if q in f"{doc['name']} {doc['description']}".lower()
-    ]
+# @mcp.tool
+# def search_docs(query: str) -> list[dict[str, str]]:
+#     """Search tiny hospital documentation for relevant dummy tables."""
+#     args = SearchDocsArgs(query=query.strip())
+#     q = args.query.lower()
+#     return [
+#         doc
+#         for doc in DOCS
+#         if q in f"{doc['name']} {doc['description']}".lower()
+#     ]
 
 
-@mcp.tool
-def get_table_info(table_name: str) -> dict[str, str]:
-    """Return metadata about a mock hospital table."""
-    args = GetTableInfoArgs(table_name=table_name.strip())
-    table = TABLE_INFO.get(args.table_name.lower())
-    if table is None:
-        return {
-            "error": f"Unknown table: {args.table_name}",
-        }
-    return table
+# @mcp.tool
+# def get_table_info(table_name: str) -> dict[str, str]:
+#     """Return metadata about a mock hospital table."""
+#     args = GetTableInfoArgs(table_name=table_name.strip())
+#     table = TABLE_INFO.get(args.table_name.lower())
+#     if table is None:
+#         return {
+#             "error": f"Unknown table: {args.table_name}",
+#         }
+#     return table
 
 
 @mcp.tool

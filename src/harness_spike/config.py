@@ -30,9 +30,11 @@ class Settings:
     intent_mcp_url: str = "http://localhost:8002/mcp"
     sql_generation_mcp_url: str = "http://localhost:8003/mcp"
     sql_validation_mcp_url: str = "http://localhost:8004/mcp"
+    rag_mcp_url: str = "http://localhost:8005/mcp"
     max_tool_rounds: int = 3
     trace_dir: str = "logs/runs"
     log_raw_prompts: bool = False
+
 
     def require_anthropic_api_key(self) -> str:
         if not self.anthropic_api_key:
@@ -80,6 +82,7 @@ def get_settings() -> Settings:
         sql_validation_mcp_url=(
             os.getenv("SQL_VALIDATION_MCP_URL") or "http://localhost:8004/mcp"
         ),
+        rag_mcp_url=os.getenv("RAG_MCP_URL") or "http://localhost:8005/mcp",
         max_tool_rounds=max_tool_rounds,
         trace_dir=os.getenv("TRACE_DIR", "logs/runs"),
         log_raw_prompts=_bool_env("LOG_RAW_PROMPTS", False),
