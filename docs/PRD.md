@@ -207,7 +207,7 @@ Every new probabilistic node must define its inputs, observable outputs, failure
 
 - Which approved Epic documentation subset will be the first Phase 2 corpus?
 - Which approved model will serve as the semantic judge, and who owns calibration labels?
-- Where should enterprise traces, baselines, and reports live outside this spike repository?
+- Where should enterprise traces, baselines, and reports live outside this repository?
 - Which risk-tier thresholds and approvers will govern later BigQuery execution workflows?
 
 ## 17. Research Basis
@@ -319,8 +319,8 @@ if isinstance(classification_or_response, AskResponse):
 
 It ensures a policy block prevents the intent model and catalog from being
 contacted. The relevant implementation is
-`src/harness_spike/agent_host/agent.py:28-47` and
-`src/harness_spike/agent_host/agent.py:414-436`.
+`src/agent_host/agent.py:28-47` and
+`src/agent_host/agent.py:414-436`.
 
 ### 18.4 Deterministic Policy Gate and Surface Screen: Detailed Design Audit
 
@@ -348,16 +348,16 @@ output contract is only `allowed`, `reason`, and `matched_term`.
 
 Policy implementation references:
 
-- Check registry and ordering: `src/harness_spike/policy/gates.py:21-47`.
+- Check registry and ordering: `src/policy/gates.py:21-47`.
 - Deny-overrides consolidation and no-verdict state:
-  `src/harness_spike/policy/consolidate.py:8-23` and
-  `src/harness_spike/policy/result.py:27-45`.
+  `src/policy/consolidate.py:8-23` and
+  `src/policy/result.py:27-45`.
 - Normalization and metadata exception:
-  `src/harness_spike/policy/normalize.py:28-120`.
+  `src/policy/normalize.py:28-120`.
 - Aggregate shortcut and row-level detection:
-  `src/harness_spike/policy/modules/pii.py:229-246`.
+  `src/policy/modules/pii.py:229-246`.
 - Workflow allow terms:
-  `src/harness_spike/policy/modules/workflow_authorization.py:7-59`.
+  `src/policy/modules/workflow_authorization.py:7-59`.
 
 ### 18.5 Intent Classifier: Detailed Design Audit
 
@@ -403,20 +403,20 @@ produce one `emit_intent` tool call with this contract:
 Intent and host implementation references:
 
 - Output types and action contract:
-  `src/harness_spike/mcp_servers/intent.py:13-68`.
+  `src/mcp_servers/intent.py:13-68`.
 - Host-owned tool contracts and route-derived scope:
-  `src/harness_spike/agent_host/tool_registry.py`.
+  `src/agent_host/tool_registry.py`.
 - Prompt precedence and examples:
-  `src/harness_spike/mcp_servers/intent.py:85-139`.
+  `src/mcp_servers/intent.py:85-139`.
 - Deterministic contract normalization:
-  `src/harness_spike/mcp_servers/intent.py:147-190`.
+  `src/mcp_servers/intent.py:147-190`.
 - Forced tool schema and API call:
-  `src/harness_spike/mcp_servers/intent.py:193-268`.
+  `src/mcp_servers/intent.py:193-268`.
 - Host refusal, uncertainty, and failure paths:
-  `src/harness_spike/agent_host/agent.py:86-189`.
+  `src/agent_host/agent.py:86-189`.
 - Host tool filtering and execution-time check:
-  `src/harness_spike/agent_host/agent.py:54-76` and
-  `src/harness_spike/agent_host/agent.py:451-490`.
+  `src/agent_host/agent.py:54-76` and
+  `src/agent_host/agent.py:451-490`.
 
 ### 18.6 Industry Comparator Matrix
 

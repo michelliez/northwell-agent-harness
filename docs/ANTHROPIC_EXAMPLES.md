@@ -1,9 +1,13 @@
 # Anthropic Agent-Architecture Audit
 
+> **Status:** Historical reference snapshot. This document is noncanonical and
+> may be stale. Current requirements live in `docs/PRD.md`; contributor
+> instructions live in `CLAUDE.md`.
+
 **Audit date:** July 16, 2026  
 **Scope:** Current checked-out implementation of the synthetic harness. This
 document intentionally does not modify the uncommitted design-audit draft in
-`PRD.md`.
+`docs/PRD.md`.
 
 ## Executive conclusion
 

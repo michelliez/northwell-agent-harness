@@ -1,422 +1,133 @@
-# CLAUDE.md
+# Repository Context
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This is the entrypoint for contributors and coding agents working in the agent
+harness repository. Read this file first, then load only the canonical document
+needed for the task.
 
-## Project Overview
+## Purpose And Safety
 
-This is an **agent evaluation harness spike** — a proof-of-concept for a multi-component agentic system that routes user requests through policy gates, intent classification, and bounded tool calls. The goal is to validate safe, observable agent routing before production integration with Epic and BigQuery.
+The project evaluates observable, policy-gated agent workflows before any
+production Epic or BigQuery integration. It currently uses localhost services,
+synthetic fixtures, and approved local documentation.
 
-**Do not commit proprietary data, credentials, PHI, schema exports, or logs containing prompts to this repo.** It is a non-enterprise POC designed to be copyable into an enterprise environment later.
+Never commit credentials, PHI, proprietary schemas, production prompts,
+sensitive traces, or real data extracts. Passing this repository's tests does
+not establish HIPAA compliance, production authorization, or complete
+prompt-injection resistance.
 
-## Canonical Product Specification
+## Canonical Context
 
-The full product requirements are in `PRD.md`; this file turns them into
-working instructions for code changes. The target is an evaluation harness for
-observable agent behavior, not a production healthcare data-access system.
+- [`README.md`](README.md): setup, commands, package map, and short architecture
+  overview.
+- [`docs/PRD.md`](docs/PRD.md): product requirements, scope, contracts, and
+  acceptance criteria.
+- [`docs/RAG.md`](docs/RAG.md): retrieval design, implementation phases, risks,
+  and definition of done.
+- Small ADRs under `docs/adr/`, if present: accepted decisions and their
+  rationale.
 
-### Product rule
+Other files under `docs/`, generated graph reports, and test reports are
+supporting evidence rather than current instructions. Do not load them by
+default or treat them as authoritative when they conflict with the files above.
 
-The harness must determine whether an agent understood a request, selected the
-right route and tools, supplied valid inputs, used tool results without
-inventing facts, and returned a safe grounded answer with an auditable trace.
+## Non-Negotiable Invariants
 
-> Evaluate every observable probabilistic decision; enforce every hard boundary
-> with deterministic code.
+- Evaluate observable probabilistic decisions; enforce hard boundaries with
+  deterministic code.
+- The host owns execution authority. Model output, intent labels, confidence,
+  and MCP discovery do not grant permission.
+- Policy-blocked input must stop before intent, model, retrieval, or tool calls.
+- Unknown, low-confidence, refused, malformed, or failed intent results must
+  fail closed before workflow tools run.
+- `agent_host/tool_registry.py` owns executable tool contracts and route scope.
+  `agent_host/budget.py` owns execution limits.
+- Screen untrusted tool content before model reuse and screen final output
+  before returning it.
+- Preserve an auditable trace for every stop path and executed action without
+  exposing sensitive content by default.
 
-The model may recommend an action, but the host owns execution authority. Do
-not treat model confidence, an intent label, or an MCP connection as
-authorization.
+The full behavioral and acceptance contracts live in `docs/PRD.md`; do not
+duplicate them here.
 
-### Scope and non-goals
-
-The current milestone uses only localhost services and checked-in dummy
-metadata. Do not add PHI, proprietary schemas, credentials, production Epic or
-BigQuery connections, real SQL execution, writes, clinical decisions, or
-autonomous consequential actions. Hidden chain-of-thought is not an evaluation
-input. Passing tests proves synthetic routing, observability, and regression
-behavior only; it is not evidence of HIPAA compliance, jailbreak resistance,
-or production readiness.
-
-### Required control flow
+## Repository Map
 
 ```text
-request
-  -> host records request.received
-  -> deterministic user-input policy screen
-       -> block: fail closed; no intent, model, or catalog call
-       -> continue: read-only intent classification
-  -> validate intent and derive scope from host-owned tool contracts
-  -> confirm MCP inventory and expose canonical tool metadata
-  -> main model proposes a bounded tool call or answer
-  -> host rechecks the requested tool name before execution
-  -> screen tool results before they re-enter model context
-  -> repeat only within MAX_TOOL_ROUNDS
-  -> screen final answer and return answer plus trace
+src/
+  agent_host/     request lifecycle, authority, budgets, workflows, traces
+  policy/         deterministic policy and content screening
+  retrieval/      indexing, retrieval client/contracts, retrieval MCP server
+  mcp_servers/    intent plus temporary mock catalog/SQL services
+  evals/          deterministic evaluation code
+  trace_viewer/   trace inspection and rendering
+tests/            deterministic unit and integration tests
+evals/            versioned synthetic evaluation cases
+docs/             canonical specifications and noncanonical references
+var/              ignored generated runtime state
 ```
 
-Policy and intent invariants:
+The fake data catalog and its SQL workflow are temporary fixtures. Do not build
+new architecture around their fabricated schemas. Retrieval-backed schema
+evidence and SQL behavior are specified in `docs/RAG.md` and `docs/PRD.md`.
 
-- The policy screen is deterministic defense in depth across user input, tool
-  metadata, tool results, and final answers. It is not complete injection
-  protection, identity authorization, or a direct-MCP security boundary.
-- Blocked input produces `allowed=false`, no tools, and no downstream intent or
-  model events.
-- Intent output is structured and runtime-validated. `unknown`, low confidence,
-  refusal, malformed output, or classifier failure is non-routable and stops
-  before catalog access.
-- The host derives route scope from one tool-contract registry, filters the
-  model-visible tools, and checks every proposed tool call again immediately
-  before execution.
-- Every stop path and context-screen decision is observable. Tool loops are
-  bounded by rounds, total/per-tool calls, byte limits, candidate fan-out,
-  timeouts, and explicit model stop states.
+## Working Rules
 
-### Evaluation contracts
-
-Keep these contracts versioned and framework-neutral:
-
-- **`ScenarioSpec`**: ID/version, owner, domain/risk tags, request, available
-  tools or mocks, expected/forbidden outcomes, tool and ordering constraints,
-  reference facts, grading method, severity, and threshold.
-- **`RunTrace`**: run/scenario IDs, model/prompt/tool/policy/evaluator versions,
-  ordered observable events, route/tool decisions, arguments/results, retries,
-  final answer, operational metadata, and redaction/completeness status.
-- **`EvalResult`**: pass/fail/abstain, node, criterion, severity, score,
-  evaluator type, supporting trace evidence, expected behavior, failure reason,
-  and rubric version. Aggregates include critical-policy status, repeated-trial
-  reliability, and baseline comparison.
-
-Evaluation must cover routing, tool selection and inputs, trajectory/order,
-grounding, outcome, safety, and reliability/efficiency. Run deterministic
-graders first; use a semantic judge only for unresolved criteria. A semantic
-judge may not override a hard failure.
-
-Required functional behavior:
-
-| ID | Requirement |
-| --- | --- |
-| FR1 | Run a versioned scenario live or replay a stored JSONL trace. |
-| FR2 | Normalize source events into `RunTrace` and fail explicitly on missing required events. |
-| FR3 | Assert routes, required/forbidden tools, arguments, ordering, call counts, policy, facts, citations, and budgets deterministically. |
-| FR4 | Return typed semantic rubric scores with evidence, confidence, and `abstain` where semantic judgment is required. |
-| FR5 | Repeat stochastic cases and report pass rate, all-trials-pass reliability, variance, and critical failures. |
-| FR6 | Compare model, prompt, tool, and policy versions by scenario, node, criterion, and severity. |
-| FR7 | Emit JSON and concise Markdown reports with a nonzero exit code on release-threshold failure. |
-| FR8 | Default to synthetic fixtures, redact configured fields, exclude secrets, and keep raw prompt/result logging opt-in. |
-| FR9 | Add domains with scenarios, mocks, and optional trace adapters without changing core graders. |
-
-The MVP target is at least 30 versioned synthetic scenarios, 100% recall on
-seeded deterministic failures, explicit node-localized evidence for failures,
-repeated-trial reliability for stochastic cases, zero critical safety passes
-when any trial violates a hard boundary, and no unapproved data in repository
-or evaluation artifacts.
-
-### Roadmap and production gate
-
-Build in this order: evaluation foundation; approved Epic metadata discovery;
-structured BigQuery planning and validation; then governed read-only execution.
-Before any real data, add authenticated identity and server-side authorization,
-secure transport, credential isolation, per-tool scopes, rate limits, output
-filtering, independent high-risk input/output classification, monitoring,
-incident response, and trace-reader authorization.
+- Keep changes small and reviewable; avoid broad rewrites unrelated to the
+  requested behavior.
+- Put code in the package that owns the responsibility. Do not add a project-
+  name wrapper beneath `src/`.
+- Keep workflows explicit under `agent_host/workflows/`; shared mechanics
+  belong in focused host modules.
+- Add or update tests whenever behavior, routing, policy, contracts, or limits
+  change.
+- Use synthetic fixtures only. Real schemas and documentation must not be
+  checked in without explicit approval and an appropriate data boundary.
+- Update one canonical document when a contract changes, then link to it from
+  other documents instead of copying the text.
+- Treat generated files under `logs/`, `var/`, `dist/`, `.pytest_cache/`, and
+  `graphify-out/` as artifacts, not source.
 
 ## Commands
 
-### Setup
+Setup:
 
-```bash
+```powershell
 uv sync
-cp .env.example .env
-# Fill in .env with Anthropic API keys and AI Hub config
+Copy-Item .env.example .env
 ```
 
-**Important:** Use `uv run --no-editable` for all spike commands. On Python 3.14/macOS, editable installs can be marked hidden, causing `ModuleNotFoundError`.
+Full local verification:
 
-### Running the System
-
-The system has multiple components that run in parallel. **Start each in its own terminal:**
-
-**Terminal 1 — Data catalog MCP server** (provides dummy table metadata):
-```bash
-uv run --no-editable nh-spike-data-catalog
-# Starts at http://localhost:8000/mcp
+```powershell
+uv run ruff format --check src tests
+uv run ruff check src tests
+uv run pyright
+uv run pytest
 ```
 
-**Terminal 2 — Intent classifier MCP server** (routes requests to tool categories):
-```bash
-uv run --no-editable nh-spike-intent
-# Starts at http://localhost:8002/mcp
+Apply Python formatting and safe lint fixes:
+
+```powershell
+uv run ruff format src tests
+uv run ruff check src tests --fix
 ```
 
-**Terminal 3 — Agent CLI** (orchestrates the full pipeline):
-```bash
-uv run --no-editable nh-spike-agent "What data would I need to answer how many patients had visits last month?" --json
+Run one test:
+
+```powershell
+uv run pytest tests/test_tool_registry.py -q
 ```
 
-### Testing
+Use `uv run --no-editable` for installed project commands. Model-backed agent
+and evaluation commands may incur API usage; run them only when approved. The
+complete process commands are kept in `README.md`.
 
-Run unit tests (no MCP servers or AI Hub calls required):
-```bash
-uv run --no-editable pytest -q
-```
+## Change Checklist
 
-Run a single test:
-```bash
-uv run --no-editable pytest tests/policy_gate/policy_gate_test.py::test_blocked_by_identifier -xvs
-```
+Before handing off a code change:
 
-Run evaluations (requires both MCP servers running):
-```bash
-uv run --no-editable nh-spike-eval --suite smoke
-uv run --no-editable nh-spike-eval --suite red_team
-uv run --no-editable nh-spike-eval --suite intent --repetitions 3
-```
-
-### Full check (format + lint + types + tests)
-
-Run all static checks and the unit test suite in one shot — mirrors what CI runs:
-
-```bash
-uv run ruff format --check src tests && uv run ruff check src tests && uv run pyright && uv run pytest -q
-```
-
-To auto-fix formatting and lint issues before checking:
-
-```bash
-uv run ruff format src tests && uv run ruff check --fix src tests
-```
-
-## Architecture
-
-The system is split into **five logical components** that communicate via REST/HTTP at fixed localhost ports:
-
-### 1. **Agent Host** (`src/harness_spike/agent_host/`)
-- **Central orchestrator** for the request→response loop
-- Runs the first-pass policy screen and surface-aware context checks
-- Calls the Anthropic model via the Anthropic SDK
-- Bridges the model to MCP tool servers
-- Fails closed on blocked or malformed content and logs observable decisions to
-  `logs/runs/<run_id>.jsonl`
-
-**Key files:**
-- `agent.py`: Main logic—`answer_question()` orchestrates policy → intent → agent loop
-- `cli.py`: CLI entrypoint, also used by the evaluator
-- `mcp_bridge.py`: Async HTTP client to query MCP servers
-- `tool_registry.py`: Host-owned tool contracts and route-derived capability scopes
-- `budget.py`: Per-request call, byte, fan-out, timeout, and stop-state budget
-- `trace_logger.py`: Records every decision step for evaluation
-- `schemas.py`: Pydantic models for request/response contracts
-
-### 2. **Policy Screen** (`src/harness_spike/policy/gates.py` and `policy/screen.py`)
-- **First-pass input screen:** runs before model or tool routing; it is not
-  authorization or an end-to-end security boundary
-- Lexical blocklist of identifier/PHI terms (e.g., "patient name", "ssn", "mrn")
-- Returns `{allowed: bool, reason: str | None, matched_term: str | None}` for
-  the user-input decision.
-- Surface-aware checks in `policy/screen.py` also inspect tool metadata, tool
-  results, and final answers with narrower context-specific rules.
-- If a request is blocked, the agent host returns a refusal without calling the model
-
-**Key invariant:** Every blocked request must have zero downstream events in its trace (no intent, model, or catalog calls).
-
-### 3. **Intent Classifier** (`src/harness_spike/mcp_servers/intent.py`)
-- **Lightweight router:** classifies user intent into categories before catalog access
-- Returns structured routing metadata: `intent`, `confidence`, `risk_flags`,
-  `recommended_action`, and `needs_clarification`.
-- Uses the configured Anthropic model to classify but does not answer questions or access catalog
-- Intended intents include `"table_discovery"`, `"schema_lookup"`,
-  `"safe_sql_generation"`, `"general_question"`, `"unknown"`, and refusal
-  classes.
-- Low confidence, clarification, refusal, malformed output, or classifier
-  failure stops before catalog access; the host enforces this fail-closed path.
-
-**Key invariant:** Intent classification is always read-only and does not call the data catalog.
-
-### 4. **MCP Tool Servers** (`src/harness_spike/mcp_servers/`)
-- Implement the Model Context Protocol (MCP) — a standard for exposing tools to LLM agents
-- Each runs as a standalone FastMCP HTTP server on its own port
-- The agent host discovers tools from MCP, the model decides which to call, the host executes them
-
-**Current servers:**
-- **`data_catalog.py`** (port 8000): Dummy tools — `search_tables()`, `get_table_schema()`, `search_docs()`, `get_table_info()`
-- **`intent.py`** (port 8002): Intent classification service
-- **`sql_generation.py`** (port 8003): Placeholder for future SQL generation validation
-- **`sql_validation.py`** (port 8004): Placeholder for future SQL validation
-
-Adding a new tool: Add a function with `@mcp.tool` decorator in `src/harness_spike/mcp_servers/`, then register a script entry point in `pyproject.toml`.
-
-### 5. **Evaluation Harness** (`src/harness_spike/evals/`)
-- Runs **deterministic test suites** against the agent host
-- Reads JSONL case files under `evals/`; each case specifies expected behavior
-- Runs the full request→response pipeline and asserts on:
-  - Policy decision (allowed/blocked)
-  - Intent classification accuracy
-  - Which catalog tools were called
-  - Claims made in the final answer (grounding checks)
-- Reports are written to `evals/results/` (git-ignored)
-
-**Key files:**
-- `runner.py`: CLI entrypoint, loads cases, runs the agent, evaluates assertions
-- `assertions.py`: Deterministic checks on response traces
-- `intent_assertions.py`: Specialized checks for intent classifier accuracy
-
-**Suites:**
-- `smoke`: Small regression suite; should pass in seconds
-- `red_team`: Broader adversarial suite; includes PHI bypass attempts, prompt injection, intent misrouting
-- `intent`: Direct testing of the intent classifier (no agent host)
-
-## Key Design Patterns
-
-### Policy → Intent → Agent
-
-Every request follows this sequence:
-
-1. **Policy gate** (deterministic, no model) — blocks requests matching PHI/identifier terms
-2. **Intent classification** (model call, no catalog) — categorizes the request to guide tool selection
-3. **Agent loop** (model + tools) — the model decides which tools to call based on intent; the host executes and loops
-
-This separation ensures:
-- Policy decisions are fast and predictable
-- Intent classification is focused and cacheable
-- Tool calls are bounded by the model's decision and the host's enforcement
-
-The host-owned tool registry is the only capability registry. Intent returns a
-route recommendation; it does not own tool permissions. MCP discovery confirms
-that a configured server matches the host contract, while canonical host
-descriptions and schemas are what the model receives.
-
-### Trace Logging
-
-Every request produces a trace file at `logs/runs/<uuid>.jsonl`. Each line is a JSON event:
-
-```json
-{"event": "request.received", "question": "..."}
-{"event": "policy_gate.checked", "result": {"allowed": true, "matched_term": null}}
-{"event": "intent.classification.request", "mcp_url": "http://localhost:8002/mcp"}
-{"event": "intent.classification.result", "result": {"intent": "schema_lookup", "recommended_action": "get_table_schema"}}
-{"event": "mcp.tools.listed", "tools": ["search_tables", "get_table_schema"]}
-{"event": "mcp.tools.scoped", "allowed_tools": ["get_table_schema"]}
-{"event": "model.response", "tool_calls": [...]}
-{"event": "tool.result", "tool": "get_table_schema", "result": {...}}
-{"event": "answer.ready", "answer": "..."}
-```
-
-The evaluator reads these traces to verify behavior without re-running the model or tools.
-
-### Red-Team Corpus Structure
-
-Two complementary test collections:
-
-- **`tests/policy_gate/policy_gate_test.py`** — fast, deterministic unit tests. Exhaustive variants of blocked requests: direct identifiers, typos, leetspeak, zero-width characters, punctuation. No MCP servers or API calls.
-- **`evals/red_team.jsonl`** — small end-to-end JSONL corpus (typically 12–18 cases). Representative scenarios that verify policy blocks before intent/catalog, and safe requests route correctly. Requires both MCP servers and Anthropic API.
-
-Each JSONL case names its expected policy decision, intent, catalog calls, and final outcome. All cases use synthetic prompts (no PHI or production data).
-
-## Configuration
-
-Settings are loaded from `.env` (see `.env.example`):
-
-- `ANTHROPIC_API_KEY` or `AI_HUB_API_KEY` — authentication
-- `ANTHROPIC_BASE_URL` — AI Hub endpoint (optional, defaults to Anthropic's public API)
-- `CLAUDE_MODEL` — model to use (default: `claude-haiku-4-5-20251001`)
-- `MCP_SERVER_URL` — data catalog server address (default: `http://localhost:8000/mcp`)
-- `INTENT_MCP_URL` — intent classifier server address (default: `http://localhost:8002/mcp`)
-- `MAX_TOOL_ROUNDS` — max tool rounds (default: 3)
-- `MAX_MODEL_CALLS`, `MAX_TOOL_CALLS`, `MAX_CALLS_PER_TOOL` — total execution limits
-- `MAX_CANDIDATE_SCHEMAS` — SQL schema fan-out limit (default: 5)
-- `MAX_INPUT_BYTES`, `MAX_TOOL_RESULT_BYTES`, `MAX_CONTEXT_BYTES` — size limits
-- `MAX_WALL_SECONDS`, `MCP_CALL_TIMEOUT_SECONDS`, `MODEL_CALL_TIMEOUT_SECONDS` — time limits
-- `MODEL_MAX_TOKENS`, `INTENT_MAX_TOKENS`, `SQL_GENERATION_MAX_TOKENS` — node output limits
-- `INTENT_MIN_CONFIDENCE` — configurable but uncalibrated routing threshold
-- `TRACE_DIR` — where to write trace JSONLs (default: `logs/runs`)
-- `LOG_RAW_PROMPTS` — legacy model-payload logging switch; it does not disable
-  centralized trace redaction
-- `TRACE_CONTENT_MODE` — `metadata` (default) redacts user/tool/SQL/answer
-  content; `debug` is an explicit local-only mode
-- `TRACE_HASH_KEY` — optional keyed HMAC secret for correlating redacted content
-- `MCP_AUTH_TOKEN` — shared local service token required by the POC MCP servers
-
-## Development Guidelines
-
-### Adding a New Tool
-
-1. Add a function with `@mcp.tool` decorator in one of the `mcp_servers/*.py` files
-2. Write a clear docstring explaining when the model should use this tool
-3. Add one `ToolContract` to `agent_host/tool_registry.py`, including its server, canonical schema, route membership, result validator, and limits
-4. If adding a new MCP server, register a script entry in `pyproject.toml` under `[project.scripts]`
-5. Add synthetic test cases to `evals/red_team.jsonl` or `tests/policy_gate/policy_gate_test.py`
-
-### Adding a Policy Rule
-
-1. Edit `src/harness_spike/policy/gates.py` — add terms to `IDENTIFIER_TERMS` or implement a new rule
-2. Add test cases to `tests/policy_gate/policy_gate_test.py` covering:
-   - Direct match (e.g., "patient name")
-   - Typos, punctuation, leetspeak variants
-   - False positives you want to allow
-3. After editing `gates.py`, rebuild the non-editable package before testing:
-   ```bash
-   uv sync --reinstall-package nw-harness
-   ```
-
-### Adding an Evaluation Case
-
-1. Create a JSONL case under `evals/` with fields: `id`, `category`, `prompt`, `expected_policy`, `expected_intent`, `expected_catalog_calls`, `required_claims`, `expected_outcome`
-2. Run the evaluator to see if your case passes: `uv run --no-editable nh-spike-eval --suite red_team`
-3. If evaluation fails, check the report under `evals/results/` for assertion details
-
-### Testing a Single Component
-
-- **Policy gate only:** `pytest tests/policy_gate/policy_gate_test.py` (no MCP servers needed)
-- **Intent classifier only:** Start only `nh-spike-intent`, then `pytest tests/test_intent_classifier.py`
-- **Agent host:** Start both `nh-spike-data-catalog` and `nh-spike-intent`, then `pytest tests/test_agent_messages.py`
-- **Evaluations:** Start both MCP servers, then `uv run --no-editable nh-spike-eval --suite smoke`
-
-## Known Limitations
-
-This is a proof-of-concept on localhost with dummy data. It demonstrates:
-
-- ✅ Safe request routing with policy gates
-- ✅ Host-owned tool contracts and bounded execution budgets
-- ✅ Observable tool usage via traces
-- ✅ Deterministic evaluation of agent behavior
-
-It does **not** demonstrate:
-
-- ❌ Production authorization or database access controls
-- ❌ Real SQL execution or BigQuery integration
-- ❌ Network isolation or encrypted inter-process communication
-- ❌ PHI protection or encryption at rest
-
-The host enforces refusal, clarification, low-confidence, malformed-output, and
-classifier-failure stop paths before catalog access. The remaining limitation
-is that deterministic surface screening is not complete prompt-injection
-protection or production authorization; grounding assertions and server-side
-controls must continue to expand.
-
-## Next Steps
-
-- **Confidence calibration:** Measure the intent threshold against held-out
-  labels by risk class; do not treat model-reported confidence as calibrated
-  probability.
-- **Typed decisions:** Replace overloaded booleans with explicit blocked,
-  routed, clarify, refused, and failed statuses where callers need to
-  distinguish outcomes.
-- **Grounding expansion:** Add more synthetic cases testing table/column claim
-  verification and tool-result-to-answer support.
-- **Evaluation maturity:** Add replay, repeated-trial reliability,
-  baseline/regression comparison, and calibrated semantic graders.
-- **Safe SQL workflow:** Keep SQL generation, AST validation, dry-run, cost,
-  and result-safety controls deterministic and separately governed.
-- **Production integration:** Add authenticated identity, server-side
-  authorization, secure transport, network isolation, audit, output filtering,
-  and human approval before any real data or consequential action.
-
-## graphify
-
-This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
-
-Rules:
-- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
-- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
-- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
-- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+1. Confirm the implementation preserves the invariants above.
+2. Update focused tests and any canonical contract that actually changed.
+3. Run formatting, lint, type checks, and the relevant tests.
+4. Run the complete test suite for cross-cutting changes.
+5. Report what changed, what was verified, and what remains intentionally
+   temporary or unimplemented.

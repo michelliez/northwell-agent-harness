@@ -2,6 +2,7 @@
 
 > **Status:** Planning only. Nodes are built and tested one at a time.
 > No implementation should begin without explicit approval per node.
+> This document is noncanonical; current requirements live in `docs/PRD.md`.
 
 ---
 

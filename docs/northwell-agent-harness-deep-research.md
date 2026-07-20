@@ -1,5 +1,8 @@
 # Agentic Architectures for Epic to BigQuery Migration and Operations at Northwell Health
 
+> **Status:** Research reference. This document is noncanonical and may be
+> stale. Current requirements live in `docs/PRD.md`.
+
 ## Executive summary
 
 For Northwell Health, an Epic-to-BigQuery program is not just a one-time database migration problem. It is a long-lived operating model problem: how to discover and normalize heterogeneous Epic data, preserve lineage, validate data quality, enforce PHI controls, and continuously evolve downstream analytics and AI products without making every change a bespoke engineering effort. Public evidence already shows that Northwell uses Google Cloud Healthcare APIs and BigQuery for clinical interoperability and AI use cases, and that Google Cloud remains an active healthcare platform for agentic systems and governed data access. That makes a BigQuery-centered modernization strategy plausible for Northwell even though public materials do **not** describe a full Northwell Epic-to-BigQuery migration program end to end. citeturn11view0turn10view0turn32search6turn31search5

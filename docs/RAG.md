@@ -174,7 +174,7 @@ It is not for patient data access or SQL execution.
 Use one local SQLite database:
 
 ```text
-data/rag/rag_index.sqlite
+var/rag/index.sqlite
 ```
 
 Recommended tables:
@@ -282,7 +282,7 @@ Every retrieval result must include:
 Create an offline indexing script later, conceptually:
 
 ```text
-src/harness_spike/rag/index_docs.py
+src/retrieval/indexer.py
 ```
 
 Parser responsibilities:
@@ -536,7 +536,7 @@ If embeddings are unavailable, return FTS-only results.
 Add a new MCP server later:
 
 ```text
-src/harness_spike/mcp_servers/document_retrieval.py
+src/retrieval/mcp_server.py
 ```
 
 Expose:
