@@ -37,6 +37,21 @@ class TableSchemaResult(_PermissiveModel):
     columns: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class DocumentationSearchResult(_PermissiveModel):
+    query: str
+    results: list[dict[str, Any]] = Field(default_factory=list)
+    index_version: str
+
+
+class DocumentationChunkResult(_PermissiveModel):
+    chunk_id: str
+    doc_id: str
+    title: str
+    heading_path: str | None = None
+    source_path: str
+    text: str
+
+
 class SqlGenerationResult(_PermissiveModel):
     sql: str | None = None
     tables: list[str] = Field(default_factory=list)
@@ -146,13 +161,42 @@ def _model_result(model: type[BaseModel], result: Any) -> Any:
     return model.model_validate(result).model_dump()
 
 
-def _dict_result(result: Any) -> Any:
-    if not isinstance(result, dict):
-        raise TypeError("tool result must be an object")
-    return result
+def _documentation_chunk_result(result: Any) -> Any:
+    if isinstance(result, dict) and result.get("error") == "chunk_not_found":
+        return result
+    return _model_result(DocumentationChunkResult, result)
 
 
 TOOL_CONTRACTS: dict[str, ToolContract] = {
+    "search_docs": ToolContract(
+        name="search_docs",
+        server="rag",
+        description="Search approved indexed HTML documentation for relevant chunks.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "top_k": {"type": "integer"},
+            },
+            "required": ["query", "top_k"],
+            "additionalProperties": False,
+        },
+        routes=frozenset({"documentation_lookup"}),
+        result_validator=lambda result: _model_result(DocumentationSearchResult, result),
+    ),
+    "get_doc_chunk": ToolContract(
+        name="get_doc_chunk",
+        server="rag",
+        description="Fetch one full documentation chunk selected by retrieval.",
+        input_schema={
+            "type": "object",
+            "properties": {"chunk_id": {"type": "string"}},
+            "required": ["chunk_id"],
+            "additionalProperties": False,
+        },
+        routes=frozenset({"documentation_lookup"}),
+        result_validator=_documentation_chunk_result,
+    ),
     "search_tables": ToolContract(
         name="search_tables",
         server="catalog",

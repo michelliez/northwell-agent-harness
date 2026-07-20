@@ -135,6 +135,36 @@ def test_classify_intent_accepts_general_question(
     assert result["recommended_action"] == "answer_without_tools"
 
 
+def test_classify_intent_accepts_documentation_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = _response(
+        {
+            "intent": "documentation_lookup",
+            "confidence": 0.94,
+            "risk_flags": [],
+            "recommended_action": "retrieve_documentation",
+            "needs_clarification": False,
+        }
+    )
+    monkeypatch.setattr(intent, "Anthropic", lambda **_: FakeClient(response))
+    monkeypatch.setattr(
+        intent,
+        "get_settings",
+        lambda: SimpleNamespace(
+            require_anthropic_api_key=lambda: "test-key",
+            require_anthropic_base_url=lambda: "https://example.test",
+            anthropic_custom_headers={},
+            require_claude_model=lambda: "test-model",
+        ),
+    )
+
+    result = intent.classify_intent("What do the docs say about appointment status?")
+
+    assert result["intent"] == "documentation_lookup"
+    assert result["recommended_action"] == "retrieve_documentation"
+
+
 def test_classify_intent_forces_refusal_action_for_sensitive_intent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -199,6 +229,7 @@ def test_classify_intent_fails_closed_on_incoherent_safe_action(
 def test_route_tool_scope_is_host_owned() -> None:
     assert tools_for_intent("schema_lookup") == {"get_table_schema"}
     assert tools_for_intent("patient_specific_request") == set()
+    assert tools_for_intent("documentation_lookup") == {"search_docs", "get_doc_chunk"}
 
 
 def test_classify_intent_rejects_missing_or_duplicate_tool_results(
@@ -218,7 +249,7 @@ def test_classify_intent_rejects_missing_or_duplicate_tool_results(
 
 
 def test_intent_tool_contract_is_closed_and_versioned() -> None:
-    assert intent.INTENT_PROMPT_VERSION == "v3"
+    assert intent.INTENT_PROMPT_VERSION == "v4"
     assert intent.INTENT_TOOL["name"] == "emit_intent"
     assert intent.INTENT_TOOL["input_schema"]["additionalProperties"] is False
     assert set(intent.INTENT_TOOL["input_schema"]["required"]) == {

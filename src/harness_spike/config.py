@@ -30,12 +30,14 @@ class Settings:
     intent_mcp_url: str = "http://localhost:8002/mcp"
     sql_generation_mcp_url: str = "http://localhost:8003/mcp"
     sql_validation_mcp_url: str = "http://localhost:8004/mcp"
+    rag_mcp_url: str = "http://localhost:8005/mcp"
     mcp_auth_token: str | None = None
     max_tool_rounds: int = 3
     max_model_calls: int = 4
     max_tool_calls: int = 12
     max_calls_per_tool: int = 6
     max_candidate_schemas: int = 5
+    max_retrieved_chunks: int = 5
     max_input_bytes: int = 16_000
     max_tool_result_bytes: int = 32_000
     max_context_bytes: int = 128_000
@@ -77,6 +79,7 @@ def get_settings() -> Settings:
         "max_tool_calls": ("MAX_TOOL_CALLS", 12),
         "max_calls_per_tool": ("MAX_CALLS_PER_TOOL", 6),
         "max_candidate_schemas": ("MAX_CANDIDATE_SCHEMAS", 5),
+        "max_retrieved_chunks": ("MAX_RETRIEVED_CHUNKS", 5),
         "max_input_bytes": ("MAX_INPUT_BYTES", 16_000),
         "max_tool_result_bytes": ("MAX_TOOL_RESULT_BYTES", 32_000),
         "max_context_bytes": ("MAX_CONTEXT_BYTES", 128_000),
@@ -121,12 +124,14 @@ def get_settings() -> Settings:
         intent_mcp_url=os.getenv("INTENT_MCP_URL") or "http://localhost:8002/mcp",
         sql_generation_mcp_url=(os.getenv("SQL_GENERATION_MCP_URL") or "http://localhost:8003/mcp"),
         sql_validation_mcp_url=(os.getenv("SQL_VALIDATION_MCP_URL") or "http://localhost:8004/mcp"),
+        rag_mcp_url=os.getenv("RAG_MCP_URL") or "http://localhost:8005/mcp",
         mcp_auth_token=os.getenv("MCP_AUTH_TOKEN") or None,
         max_tool_rounds=parsed_ints["max_tool_rounds"],
         max_model_calls=parsed_ints["max_model_calls"],
         max_tool_calls=parsed_ints["max_tool_calls"],
         max_calls_per_tool=parsed_ints["max_calls_per_tool"],
         max_candidate_schemas=parsed_ints["max_candidate_schemas"],
+        max_retrieved_chunks=parsed_ints["max_retrieved_chunks"],
         max_input_bytes=parsed_ints["max_input_bytes"],
         max_tool_result_bytes=parsed_ints["max_tool_result_bytes"],
         max_context_bytes=parsed_ints["max_context_bytes"],

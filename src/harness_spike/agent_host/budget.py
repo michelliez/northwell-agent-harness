@@ -32,6 +32,7 @@ class ExecutionBudget:
     max_tool_calls: int = 12
     max_calls_per_tool: int = 6
     max_candidate_schemas: int = 5
+    max_retrieved_chunks: int = 5
     max_input_bytes: int = 16_000
     max_tool_result_bytes: int = 32_000
     max_context_bytes: int = 128_000
@@ -81,6 +82,15 @@ class ExecutionBudget:
             raise BudgetExceeded("max_rounds")
         self.rounds_used += 1
 
+    def bound_retrieval_count(self, requested: int) -> int:
+        """Apply the host-owned retrieval breadth limit."""
+        self.check_wall()
+        if requested < 1:
+            raise ValueError("requested retrieval count must be at least 1")
+        if self.max_retrieved_chunks < 1:
+            raise BudgetExceeded("max_retrieved_chunks")
+        return min(requested, self.max_retrieved_chunks)
+
     def check_context(self, messages: Any) -> None:
         self.check_wall()
         self._check_bytes(messages, self.max_context_bytes, "max_context_bytes")
@@ -107,6 +117,7 @@ def budget_from_settings(settings: Any) -> ExecutionBudget:
         max_tool_calls=get("max_tool_calls", 12),
         max_calls_per_tool=get("max_calls_per_tool", 6),
         max_candidate_schemas=get("max_candidate_schemas", 5),
+        max_retrieved_chunks=get("max_retrieved_chunks", 5),
         max_input_bytes=get("max_input_bytes", 16_000),
         max_tool_result_bytes=get("max_tool_result_bytes", 32_000),
         max_context_bytes=get("max_context_bytes", 128_000),

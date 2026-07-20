@@ -225,7 +225,7 @@ incident response, and trace-reader authorization.
 - `agent_host`: owns the first-pass policy screen, surface-aware content
   checks, host-owned tool contracts, execution budgets, model loop, tool-call
   execution, and trace logging.
-- `mcp_servers`: owns the dummy data-catalog and intent-classifier MCP tools.
+- `mcp_servers`: owns the dummy data-catalog, intent-classifier, SQL, and RAG MCP tools.
 - `gates` and `policy/screen.py`: own deterministic input and model-context
   checks that run before routing, tool-result reuse, and final output.
 - `intent_classifier`: classifies allowed requests for bounded routing metadata before
@@ -307,9 +307,24 @@ The validator parses BigQuery SQL, derives tables and columns from its AST,
 checks them against the mock catalog, enforces aggregate-only and identifier-use
 rules, and fails closed before SQL is returned.
 
+## Build And Run The Documentation RAG Index
+
+Build a local SQLite FTS index from one approved HTML documentation file. The
+generated database is ignored by Git and must not contain proprietary or patient
+data in this proof-of-concept repository.
+
+```powershell
+uv run --no-editable nh-spike-rag-index path\to\approved-doc.html
+uv run --no-editable nh-spike-rag
+```
+
+The RAG MCP server listens at `http://localhost:8005/mcp`, uses the same
+`MCP_AUTH_TOKEN` boundary as the other services, and opens the generated index
+read-only. Set `RAG_DB_PATH` to use a non-default index location.
+
 ## Run The Agent CLI
 
-Terminal 5:
+Terminal 6:
 
 ```powershell
 uv run --no-editable nh-spike-agent "What data would I need to answer how many patients had visits last month?" --json

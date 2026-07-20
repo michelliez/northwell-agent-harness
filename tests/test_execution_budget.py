@@ -40,6 +40,15 @@ def test_budget_exclusively_owns_payload_size_limits() -> None:
         budget.check_context(oversized)
 
 
+def test_budget_owns_retrieval_breadth_limit() -> None:
+    budget = ExecutionBudget(max_retrieved_chunks=3)
+
+    assert budget.bound_retrieval_count(10) == 3
+
+    with pytest.raises(BudgetExceeded, match="max_retrieved_chunks"):
+        ExecutionBudget(max_retrieved_chunks=0).bound_retrieval_count(1)
+
+
 def test_budget_caps_candidate_schema_fanout(tmp_path: Path) -> None:
     class Catalog:
         calls: list[str] = []

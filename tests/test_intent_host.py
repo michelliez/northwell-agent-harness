@@ -7,6 +7,7 @@ from anthropic.types import TextBlock
 
 from harness_spike.agent_host import agent
 from harness_spike.agent_host.budget import ExecutionBudget
+from harness_spike.agent_host.schemas import AskResponse
 from harness_spike.agent_host.tool_registry import canonical_tools_for_server
 from harness_spike.agent_host.trace_logger import TraceLogger
 from harness_spike.agent_host.workflows import general as general_workflow
@@ -165,14 +166,27 @@ def _settings(trace_dir: str) -> SimpleNamespace:
 
 
 @pytest.mark.asyncio
-async def test_unregistered_workflow_fails_closed(tmp_path: Path) -> None:
+async def test_documentation_lookup_dispatches_registered_workflow(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     classification = agent.IntentResult.model_construct(
         intent=cast(Any, "documentation_lookup"),
         confidence=0.95,
         risk_flags=[],
-        recommended_action=cast(Any, "search_docs"),
+        recommended_action=cast(Any, "retrieve_documentation"),
         needs_clarification=False,
     )
+
+    async def fake_workflow(*_: object, **__: object) -> AskResponse:
+        return AskResponse(
+            answer="retrieved documentation",
+            used_tools=["search_docs", "get_doc_chunk"],
+            run_id="run",
+            trace_file="trace",
+            intent="documentation_lookup",
+        )
+
+    monkeypatch.setattr(agent, "run_documentation_workflow", fake_workflow)
 
     result = await agent.dispatch_workflow(
         "What does appointment status mean?",
@@ -182,9 +196,9 @@ async def test_unregistered_workflow_fails_closed(tmp_path: Path) -> None:
         budget=ExecutionBudget(),
     )
 
-    assert result.allowed is False
-    assert result.policy_reason == "workflow_unavailable"
-    assert result.used_tools == []
+    assert result.allowed is True
+    assert result.answer == "retrieved documentation"
+    assert result.used_tools == ["search_docs", "get_doc_chunk"]
 
 
 @pytest.mark.asyncio

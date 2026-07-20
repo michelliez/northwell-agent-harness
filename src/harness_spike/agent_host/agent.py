@@ -25,6 +25,7 @@ from harness_spike.agent_host.responses import (
 from harness_spike.agent_host.schemas import AskResponse
 from harness_spike.agent_host.tool_registry import ToolContractError
 from harness_spike.agent_host.trace_logger import TraceLogger
+from harness_spike.agent_host.workflows.documentation import run_documentation_workflow
 from harness_spike.agent_host.workflows.general import run_general_workflow
 from harness_spike.agent_host.workflows.legacy_mock import (
     run_legacy_catalog_workflow,
@@ -103,6 +104,22 @@ async def dispatch_workflow(
             trace,
             budget=budget,
         )
+
+    if classification.intent == "documentation_lookup":
+        try:
+            return await run_documentation_workflow(
+                question,
+                classification,
+                settings,
+                trace,
+                budget=budget,
+            )
+        except ContentScreenBlocked as exc:
+            return content_blocked_response(trace, exc)
+        except ToolContractError as exc:
+            return tool_contract_error_response(trace, exc)
+        except BudgetExceeded as exc:
+            return budget_exceeded_response(trace, exc)
 
     if classification.intent == "safe_sql_generation":
         try:

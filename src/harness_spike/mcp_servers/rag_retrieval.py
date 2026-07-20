@@ -1,20 +1,23 @@
 from __future__ import annotations
 
+import os
+import re
 import sqlite3
 from pathlib import Path
 
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
+from harness_spike.mcp_servers.auth import build_service_auth
 
-mcp = FastMCP("rag_retrieval")
+mcp = FastMCP("rag_retrieval", auth=build_service_auth("rag"))
 
-RAG_DB_PATH = Path(__file__).resolve().parents[3] / "rag" / "one_file_rag.sqlite"
+DEFAULT_RAG_DB_PATH = Path(__file__).resolve().parents[3] / "rag" / "rag_index.sqlite"
 
 
 class SearchDocsArgs(BaseModel):
     query: str = Field(min_length=1)
-    top_k: int = Field(default=5, ge=1, le=20)
+    top_k: int = Field(ge=1)
 
 
 class GetDocChunkArgs(BaseModel):
@@ -22,21 +25,31 @@ class GetDocChunkArgs(BaseModel):
 
 
 def get_rag_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(RAG_DB_PATH)
+    db_path = Path(os.getenv("RAG_DB_PATH") or DEFAULT_RAG_DB_PATH).resolve()
+    if not db_path.is_file():
+        raise RuntimeError(f"RAG index does not exist: {db_path}")
+    conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     return conn
 
 
 def escape_fts5(query: str) -> str:
-    special_chars = '()+-*:"'
-    for char in special_chars:
-        query = query.replace(char, " ")
-    return " ".join(query.split())
+    """Convert user text to a literal token conjunction for FTS5."""
+    return " AND ".join(f'"{token}"*' for token in re.findall(r"\w+", query))
+
+
+def get_index_version(conn: sqlite3.Connection) -> str:
+    row = conn.execute(
+        "SELECT value FROM index_metadata WHERE key = 'index_version' LIMIT 1"
+    ).fetchone()
+    if row is None or not row["value"]:
+        raise RuntimeError("RAG index is missing index_version metadata")
+    return str(row["value"])
 
 
 # Retrieval tool
 @mcp.tool
-def search_docs(query: str, top_k: int = 5) -> dict[str, object]:
+def search_docs(query: str, top_k: int) -> dict[str, object]:
     """Search indexed HTML documentation chunks."""
     args = SearchDocsArgs(query=query.strip(), top_k=top_k)
     conn = get_rag_connection()
@@ -44,6 +57,12 @@ def search_docs(query: str, top_k: int = 5) -> dict[str, object]:
 
     try:
         fts_query = escape_fts5(args.query)
+        if not fts_query:
+            return {
+                "query": args.query,
+                "results": [],
+                "index_version": get_index_version(conn),
+            }
         cur.execute(
             """
             SELECT
@@ -73,7 +92,7 @@ def search_docs(query: str, top_k: int = 5) -> dict[str, object]:
                 }
                 for row in rows
             ],
-            "source": "rag_index",
+            "index_version": get_index_version(conn),
         }
     finally:
         conn.close()

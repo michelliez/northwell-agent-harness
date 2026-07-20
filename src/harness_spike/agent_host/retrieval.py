@@ -3,6 +3,8 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from harness_spike.agent_host.budget import ExecutionBudget
+from harness_spike.agent_host.mcp_bridge import MCPToolBridge
+from harness_spike.agent_host.tool_execution import call_workflow_tool
 from harness_spike.agent_host.trace_logger import TraceLogger
 from harness_spike.config import Settings
 
@@ -50,13 +52,59 @@ async def retrieve_documentation(
     budget: ExecutionBudget,
     top_k: int = 5,
 ) -> RetrievalResult:
-    """Retrieve documentation chunks relevant to a query.
+    """Search the RAG MCP service and fetch bounded, fully cited chunks."""
+    if top_k < 1:
+        raise ValueError("top_k must be at least 1")
+    bounded_top_k = budget.bound_retrieval_count(top_k)
+    used_tools: list[str] = []
 
-    Not yet implemented — requires the RAG index integration branch.
-    """
-    if not 1 <= top_k <= 20:
-        raise ValueError("top_k must be between 1 and 20")
-    raise NotImplementedError("retrieve_documentation requires the RAG index branch")
+    async with MCPToolBridge(
+        settings.rag_mcp_url,
+        auth_token=getattr(settings, "mcp_auth_token", None),
+    ) as rag_mcp:
+        search_result = await call_workflow_tool(
+            rag_mcp,
+            "search_docs",
+            {"query": query, "top_k": bounded_top_k},
+            trace,
+            used_tools,
+            budget=budget,
+            server="rag",
+        )
+        candidates = search_result.get("results", [])
+        chunks: list[RetrievedChunk] = []
+        for rank, candidate in enumerate(candidates[:bounded_top_k], start=1):
+            chunk_id = candidate.get("chunk_id") if isinstance(candidate, dict) else None
+            if not isinstance(chunk_id, str) or not chunk_id:
+                continue
+            chunk = await call_workflow_tool(
+                rag_mcp,
+                "get_doc_chunk",
+                {"chunk_id": chunk_id},
+                trace,
+                used_tools,
+                budget=budget,
+                server="rag",
+            )
+            if chunk.get("error"):
+                continue
+            chunks.append(
+                RetrievedChunk(
+                    chunk_id=chunk["chunk_id"],
+                    document_id=chunk["doc_id"],
+                    source_path=chunk["source_path"],
+                    heading_path=chunk.get("heading_path"),
+                    text=chunk["text"],
+                    rank=rank,
+                    score=candidate.get("score"),
+                )
+            )
+
+    return RetrievalResult(
+        query=query,
+        chunks=chunks,
+        index_version=search_result["index_version"],
+    )
 
 
 def resolve_schema_evidence(retrieval: RetrievalResult) -> SchemaSnapshot:
