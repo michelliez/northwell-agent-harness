@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 from anthropic.types import ToolUseBlock
 
+from harness_spike.agent_host.tool_registry import tools_for_intent
 from harness_spike.mcp_servers import intent
 
 
@@ -66,9 +67,7 @@ def test_classify_intent_returns_validated_result(monkeypatch: pytest.MonkeyPatc
         "type": "tool",
         "name": "emit_intent",
     }
-    assert "aggregate_definition, search_tables" in str(
-        client.messages.kwargs["system"]
-    )
+    assert "aggregate_definition, search_tables" in str(client.messages.kwargs["system"])
 
 
 def test_classify_intent_fails_closed_on_low_confidence(
@@ -198,8 +197,8 @@ def test_classify_intent_fails_closed_on_incoherent_safe_action(
 
 
 def test_route_tool_scope_is_host_owned() -> None:
-    assert intent.allowed_tools_for("schema_lookup") == {"get_table_schema"}
-    assert intent.allowed_tools_for("patient_specific_request") == set()
+    assert tools_for_intent("schema_lookup") == {"get_table_schema"}
+    assert tools_for_intent("patient_specific_request") == set()
 
 
 def test_classify_intent_rejects_missing_or_duplicate_tool_results(
@@ -238,7 +237,10 @@ async def test_intent_mcp_exposes_only_classifier_tool() -> None:
 
 
 def test_v2_prompt_covers_observed_adversarial_failure_modes() -> None:
-    assert "Apply this order when a request contains more than one intent" in intent.CLASSIFIER_SYSTEM_PROMPT
+    assert (
+        "Apply this order when a request contains more than one intent"
+        in intent.CLASSIFIER_SYSTEM_PROMPT
+    )
     assert "force an intent label" in intent.CLASSIFIER_SYSTEM_PROMPT
     assert "metadata with patient-level output" in intent.CLASSIFIER_SYSTEM_PROMPT
     assert "safe_sql_generation" in intent.CLASSIFIER_SYSTEM_PROMPT

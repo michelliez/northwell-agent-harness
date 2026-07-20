@@ -5,15 +5,17 @@ import pytest
 from anthropic.types import TextBlock
 
 from harness_spike.agent_host import agent
+from harness_spike.agent_host.tool_registry import canonical_tools_for_server
 
 
 class FakeBridge:
     events: list[str] = []
 
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, *, auth_token: str | None = None) -> None:
         self.url = url
+        self.auth_token = auth_token
 
-    async def __aenter__(self) -> "FakeBridge":
+    async def __aenter__(self) -> FakeBridge:
         return self
 
     async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
@@ -21,7 +23,7 @@ class FakeBridge:
 
     async def list_anthropic_tools(self) -> list[dict[str, object]]:
         self.events.append("catalog:list")
-        return []
+        return canonical_tools_for_server("catalog")
 
     async def call_tool(self, name: str, arguments: object) -> dict[str, object]:
         if "intent" in self.url:
@@ -134,9 +136,7 @@ class FakeMessages:
     def create(self, **kwargs: object) -> SimpleNamespace:
         self.kwargs = kwargs
         FakeBridge.events.append("model:create")
-        return SimpleNamespace(
-            content=[TextBlock(type="text", text="catalog answer")]
-        )
+        return SimpleNamespace(content=[TextBlock(type="text", text="catalog answer")])
 
 
 class FakeClient:
@@ -182,9 +182,11 @@ async def test_allowed_request_classifies_before_catalog(
         line.split('"event": "', 1)[1].split('"', 1)[0]
         for line in (tmp_path / f"{result.run_id}.jsonl").read_text().splitlines()
     ]
-    assert events.index("policy_gate.checked") < events.index(
-        "intent.classification.request"
-    ) < events.index("mcp.tools.listed")
+    assert (
+        events.index("policy_gate.checked")
+        < events.index("intent.classification.request")
+        < events.index("mcp.tools.listed")
+    )
 
 
 @pytest.mark.asyncio
@@ -194,7 +196,7 @@ async def test_blocked_request_does_not_call_intent_node(
     monkeypatch.setattr(agent, "get_settings", lambda: _settings(str(tmp_path)))
 
     class UnexpectedBridge:
-        def __init__(self, _: str) -> None:
+        def __init__(self, _: str, *, auth_token: str | None = None) -> None:
             raise AssertionError("blocked requests must not open an MCP bridge")
 
     monkeypatch.setattr(agent, "MCPToolBridge", UnexpectedBridge)
@@ -211,7 +213,7 @@ async def test_refusing_intent_does_not_call_catalog(
 ) -> None:
     monkeypatch.setattr(agent, "get_settings", lambda: _settings(str(tmp_path)))
 
-    async def fake_classify_request(*_: object) -> agent.IntentResult:
+    async def fake_classify_request(*_: object, **__: object) -> agent.IntentResult:
         return agent.IntentResult(
             intent="patient_specific_request",
             confidence=0.95,
@@ -223,7 +225,7 @@ async def test_refusing_intent_does_not_call_catalog(
     monkeypatch.setattr(agent, "classify_request", fake_classify_request)
 
     class UnexpectedBridge:
-        def __init__(self, _: str) -> None:
+        def __init__(self, _: str, *, auth_token: str | None = None) -> None:
             raise AssertionError("refused intents must not open a catalog bridge")
 
     monkeypatch.setattr(agent, "MCPToolBridge", UnexpectedBridge)

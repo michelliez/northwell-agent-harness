@@ -14,12 +14,12 @@ from __future__ import annotations
 import pytest
 
 from harness_spike.policy.consolidate import consolidate_findings
-from harness_spike.policy.result import PolicyFinding, PolicyGateResult, blocked, allowed
-
+from harness_spike.policy.result import PolicyFinding, allowed, blocked
 
 # ---------------------------------------------------------------------------
 # Gap 1 — consolidate_findings no-verdict behaviour
 # ---------------------------------------------------------------------------
+
 
 def test_no_findings_returns_no_deterministic_verdict() -> None:
     """Empty findings list must yield no_deterministic_verdict, not silent allow."""
@@ -78,6 +78,7 @@ def test_no_verdict_distinct_from_explicit_allow() -> None:
 # ---------------------------------------------------------------------------
 # Gap 2 — uncertain_intent_response sets allowed=False
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_intent_classifier_failure_returns_allowed_false(

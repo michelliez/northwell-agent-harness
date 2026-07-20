@@ -3,7 +3,6 @@ from pydantic import ValidationError
 
 from harness_spike.mcp_servers.sql_validation import validate_sql
 
-
 MALICIOUS_SQL_CASES = [
     # DDL, DML, scripting, permissions, and export operations.
     pytest.param(
@@ -75,8 +74,7 @@ MALICIOUS_SQL_CASES = [
         id="export_data",
     ),
     pytest.param(
-        "LOAD DATA INTO appointments FROM FILES(" 
-        "format='CSV', uris=['gs://unapproved/input.csv'])",
+        "LOAD DATA INTO appointments FROM FILES(format='CSV', uris=['gs://unapproved/input.csv'])",
         ["appointments"],
         None,
         id="load_data",
@@ -125,8 +123,7 @@ MALICIOUS_SQL_CASES = [
         id="destructive_first_statement",
     ),
     pytest.param(
-        "CREATE TEMP FUNCTION f(x INT64) AS (x); "
-        "SELECT COUNT(*) FROM appointments",
+        "CREATE TEMP FUNCTION f(x INT64) AS (x); SELECT COUNT(*) FROM appointments",
         ["appointments"],
         "multiple_statement_sql",
         id="function_then_select",
@@ -166,8 +163,7 @@ MALICIOUS_SQL_CASES = [
         id="generated_array_source",
     ),
     pytest.param(
-        "SELECT COUNT(*) FROM appointments "
-        "CROSS JOIN UNNEST(GENERATE_ARRAY(1, 1000000000))",
+        "SELECT COUNT(*) FROM appointments CROSS JOIN UNNEST(GENERATE_ARRAY(1, 1000000000))",
         ["appointments"],
         "unapproved_table_source",
         id="approved_table_cross_generated_array",
@@ -185,8 +181,7 @@ MALICIOUS_SQL_CASES = [
         id="declared_table_spoof",
     ),
     pytest.param(
-        "WITH appointments AS (SELECT status FROM evil) "
-        "SELECT COUNT(*) FROM appointments",
+        "WITH appointments AS (SELECT status FROM evil) SELECT COUNT(*) FROM appointments",
         ["appointments"],
         "unknown_table",
         id="cte_name_spoof",
@@ -236,8 +231,7 @@ MALICIOUS_SQL_CASES = [
         id="row_number_leak",
     ),
     pytest.param(
-        "SELECT status, (SELECT COUNT(*) FROM patients) AS nested_count "
-        "FROM appointments",
+        "SELECT status, (SELECT COUNT(*) FROM patients) AS nested_count FROM appointments",
         ["appointments", "patients"],
         "non_aggregate_sql",
         id="aggregate_only_in_scalar_subquery",
@@ -249,22 +243,19 @@ MALICIOUS_SQL_CASES = [
         id="ungrouped_row_column",
     ),
     pytest.param(
-        "SELECT COUNT(*) FROM appointments UNION ALL "
-        "SELECT status FROM appointments",
+        "SELECT COUNT(*) FROM appointments UNION ALL SELECT status FROM appointments",
         ["appointments"],
         "non_aggregate_sql",
         id="union_row_branch",
     ),
     pytest.param(
-        "SELECT COUNT(*) FROM appointments EXCEPT DISTINCT "
-        "SELECT status FROM appointments",
+        "SELECT COUNT(*) FROM appointments EXCEPT DISTINCT SELECT status FROM appointments",
         ["appointments"],
         "non_aggregate_sql",
         id="except_row_branch",
     ),
     pytest.param(
-        "SELECT COUNT(*) FROM appointments INTERSECT DISTINCT "
-        "SELECT status FROM appointments",
+        "SELECT COUNT(*) FROM appointments INTERSECT DISTINCT SELECT status FROM appointments",
         ["appointments"],
         "non_aggregate_sql",
         id="intersect_row_branch",
@@ -325,8 +316,7 @@ MALICIOUS_SQL_CASES = [
         id="identifier_membership_hidden_in_count",
     ),
     pytest.param(
-        "SELECT COUNT(DISTINCT IF(patient_id = 'target', patient_id, NULL)) "
-        "FROM patients",
+        "SELECT COUNT(DISTINCT IF(patient_id = 'target', patient_id, NULL)) FROM patients",
         ["patients"],
         "identifier_column_disallowed_context",
         id="identifier_membership_hidden_in_distinct_count",
@@ -417,8 +407,7 @@ MALICIOUS_SQL_CASES = [
         id="join_on_literal_equality",
     ),
     pytest.param(
-        "SELECT COUNT(*) FROM encounters AS e JOIN patients AS p "
-        "ON e.patient_id > p.patient_id",
+        "SELECT COUNT(*) FROM encounters AS e JOIN patients AS p ON e.patient_id > p.patient_id",
         ["encounters", "patients"],
         "unsafe_join",
         id="non_equality_join",
@@ -508,12 +497,10 @@ def test_malicious_sql_is_always_blocked(
 @pytest.mark.parametrize(
     "sql",
     [
-        "SELECT COUNT(*) FROM appointments "
-        "WHERE status = '; DROP TABLE appointments'",
+        "SELECT COUNT(*) FROM appointments WHERE status = '; DROP TABLE appointments'",
         "SELECT COUNT(*) FROM appointments "
         "WHERE status = 'DELETE FROM patients' /* UPDATE appointments */",
-        "SELECT COUNT(*) AS `drop`, COUNTIF(status = 'update') "
-        "FROM appointments",
+        "SELECT COUNT(*) AS `drop`, COUNTIF(status = 'update') FROM appointments",
         "SELECT COUNT(*) FROM appointments -- EXECUTE IMMEDIATE is only a comment",
         "SELECT COUNT(*) FROM appointments WHERE status = @status",
     ],
@@ -551,9 +538,6 @@ def test_duplicate_declared_tables_are_blocked() -> None:
     ],
     ids=["blank_sql", "oversized_sql", "too_many_declared_tables", "oversized_table_name"],
 )
-def test_malicious_input_boundaries_are_rejected(
-    sql: str, tables: list[str]
-) -> None:
+def test_malicious_input_boundaries_are_rejected(sql: str, tables: list[str]) -> None:
     with pytest.raises(ValidationError):
         validate_sql(sql, tables)
-

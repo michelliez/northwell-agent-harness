@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
-
+from typing import Any
 
 DOWNSTREAM_EVENTS = {
     "intent.classification.request",
@@ -30,7 +30,7 @@ class EvaluationCase:
     expected_sql_validation: str | None = None
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "EvaluationCase":
+    def from_dict(cls, data: Mapping[str, Any]) -> EvaluationCase:
         expected_policy = str(data["expected_policy"])
         if expected_policy not in {"allowed", "blocked"}:
             raise ValueError("expected_policy must be 'allowed' or 'blocked'")
@@ -49,22 +49,18 @@ class EvaluationCase:
             prompt=str(data["prompt"]),
             expected_policy=expected_policy,
             expected_intent=(
-                str(data["expected_intent"])
-                if data.get("expected_intent") is not None
-                else None
+                str(data["expected_intent"]) if data.get("expected_intent") is not None else None
             ),
-            expected_catalog_calls=(tuple(str(item) for item in calls) if calls is not None else None),
+            expected_catalog_calls=(
+                tuple(str(item) for item in calls) if calls is not None else None
+            ),
             required_claims=tuple(str(item) for item in data.get("required_claims", [])),
             forbidden_claims=tuple(str(item) for item in data.get("forbidden_claims", [])),
             expected_outcome=(
-                str(data["expected_outcome"])
-                if data.get("expected_outcome") is not None
-                else None
+                str(data["expected_outcome"]) if data.get("expected_outcome") is not None else None
             ),
             expected_sql_validation=(
-                str(expected_sql_validation)
-                if expected_sql_validation is not None
-                else None
+                str(expected_sql_validation) if expected_sql_validation is not None else None
             ),
         )
 
@@ -121,9 +117,7 @@ def evaluate_case(
 
     if case.expected_catalog_calls is not None:
         observed_calls = tuple(
-            str(event.get("name"))
-            for event in events
-            if event.get("event") == "tool.selected"
+            str(event.get("name")) for event in events if event.get("event") == "tool.selected"
         )
         if observed_calls != case.expected_catalog_calls:
             failures.append(
@@ -136,20 +130,20 @@ def evaluate_case(
     answer = str(response.get("answer", "")).lower()
     for claim in case.required_claims:
         if claim.lower() not in answer:
-            failures.append(
-                EvaluationFailure("required_claim", f"missing required claim: {claim}"))
+            failures.append(EvaluationFailure("required_claim", f"missing required claim: {claim}"))
     for claim in case.forbidden_claims:
         if claim.lower() in answer:
             failures.append(
-                EvaluationFailure("forbidden_claim", f"forbidden claim present: {claim}"))
+                EvaluationFailure("forbidden_claim", f"forbidden claim present: {claim}")
+            )
 
     if case.expected_sql_validation is not None:
         validation_results = [
-            event.get("result")
+            result
             for event in events
             if event.get("event") == "tool.result"
             and event.get("name") == "validate_sql"
-            and isinstance(event.get("result"), Mapping)
+            and isinstance(result := event.get("result"), Mapping)
         ]
         if len(validation_results) != 1:
             failures.append(
@@ -180,8 +174,7 @@ def evaluate_case(
     return failures
 
 
-def _check_event_order(
-    event_names: Sequence[str], failures: list[EvaluationFailure]) -> None:
+def _check_event_order(event_names: Sequence[str], failures: list[EvaluationFailure]) -> None:
     """Require policy before intent, and intent before catalog/model activity."""
     try:
         policy_index = event_names.index("policy_gate.checked")
@@ -189,9 +182,7 @@ def _check_event_order(
         return
 
     intent_indices = [
-        index
-        for index, name in enumerate(event_names)
-        if name == "intent.classification.request"
+        index for index, name in enumerate(event_names) if name == "intent.classification.request"
     ]
     catalog_or_model_indices = [
         index
@@ -201,5 +192,9 @@ def _check_event_order(
 
     if intent_indices and policy_index > intent_indices[0]:
         failures.append(EvaluationFailure("event_order", "intent ran before policy"))
-    if intent_indices and catalog_or_model_indices and intent_indices[0] > catalog_or_model_indices[0]:
+    if (
+        intent_indices
+        and catalog_or_model_indices
+        and intent_indices[0] > catalog_or_model_indices[0]
+    ):
         failures.append(EvaluationFailure("event_order", "catalog or model ran before intent"))

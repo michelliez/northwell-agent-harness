@@ -4,12 +4,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from harness_spike.evals import runner
 from harness_spike.evals.intent_assertions import (
     IntentEvaluationCase,
     evaluate_intent_case,
     summarize_intent_results,
 )
-from harness_spike.evals import runner
 
 
 def _case(**overrides: object) -> IntentEvaluationCase:
@@ -79,7 +79,7 @@ async def test_direct_intent_runner_reports_differences_without_operational_fail
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FakeBridge:
-        async def __aenter__(self) -> "FakeBridge":
+        async def __aenter__(self) -> FakeBridge:
             return self
 
         async def __aexit__(self, *args: object) -> None:
@@ -89,7 +89,11 @@ async def test_direct_intent_runner_reports_differences_without_operational_fail
             assert name == "classify_intent"
             return _result(intent="schema_lookup", recommended_action="get_table_schema")
 
-    monkeypatch.setattr(runner, "MCPToolBridge", lambda _: FakeBridge())
+    monkeypatch.setattr(
+        runner,
+        "MCPToolBridge",
+        lambda _, **__: FakeBridge(),
+    )
     monkeypatch.setattr(
         runner,
         "get_settings",

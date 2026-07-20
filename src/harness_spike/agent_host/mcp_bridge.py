@@ -15,8 +15,11 @@ class MCPToolBridge:
     This class keeps that translation out of the agent host.
     """
 
-    def __init__(self, server_source: str) -> None:
-        self.client = Client(server_source)
+    def __init__(self, server_source: str, *, auth_token: str | None = None) -> None:
+        # FastMCP sends this as a bearer token for HTTP transports.  A missing
+        # token is intentionally not replaced with a development default; an
+        # authenticated MCP server should reject the request.
+        self.client = Client(server_source, auth=auth_token)
 
     async def __aenter__(self) -> MCPToolBridge:
         await self.client.__aenter__()

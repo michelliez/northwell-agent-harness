@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import sqlglot
 from fastmcp import FastMCP
@@ -9,10 +9,10 @@ from sqlglot import exp
 from sqlglot.errors import OptimizeError, ParseError
 from sqlglot.optimizer.qualify import qualify
 
+from harness_spike.mcp_servers.auth import build_service_auth
 from harness_spike.mcp_servers.data_catalog import TABLES
 
-
-mcp = FastMCP("sql_validation")
+mcp = FastMCP("sql_validation", auth=build_service_auth("sql_validation"))
 
 SQL_DIALECT = "bigquery"
 VALIDATOR_VERSION = "sqlglot_ast_v2"
@@ -34,6 +34,10 @@ class SqlViolation(BaseModel):
 
 class SqlValidationResult(BaseModel):
     allowed: bool
+    disclosure_status: Literal["not_evaluated", "approved", "suppressed", "denied"] = (
+        "not_evaluated"
+    )
+    requires_authorized_execution: bool = True
     reason: str | None = None
     normalized_sql: str | None = None
     tables: list[str] = Field(default_factory=list)
@@ -93,10 +97,47 @@ PROHIBITED_FUNCTIONS = {
 
 @mcp.tool
 def validate_sql(sql: str, tables: list[str] | None = None) -> dict[str, object]:
-    """Validate one aggregate BigQuery query over the approved mock catalog.
+    """Apply the deterministic safety boundary to one generated BigQuery query.
 
-    ``tables`` is the generator's declaration. The validator derives physical
-    tables from the parsed SQL and blocks any mismatch instead of trusting it.
+    This tool validates read-only aggregate SQL against the validator's trusted
+    catalog and column-safety metadata. The current server configuration obtains
+    that metadata from the in-process ``TABLES`` fixture; a production deployment
+    can provide the same validation inputs from an Epic/BigQuery catalog adapter.
+    The tool does not execute SQL, estimate BigQuery cost, authorize access, or
+    repair a rejected query. ``tables`` is only the generator's declaration;
+    physical tables and columns are independently derived from the SQLGlot AST.
+
+    Validation is ordered and fail closed. The first failing gate returns a blocked
+    result with a stable violation code and AST-derived evidence when available:
+
+    1. Validate the tool arguments and reject duplicate declared tables.
+    2. Parse using the BigQuery dialect and require exactly one query statement.
+    3. Reject unsafe AST structure: empty projections, non-query roots, prohibited
+       operations or functions, system variables, recursive CTEs, windows, UNNEST,
+       unsafe joins, and every form of star projection.
+    4. Derive physical tables while excluding CTE aliases, then require at least one
+       approved, non-wildcard catalog table and require the declaration to exactly
+       match the tables observed in the AST. The current fixture policy additionally
+       rejects project- or dataset-qualified names.
+    5. Qualify the AST against the configured SQLGlot schema so unknown and ambiguous
+       columns are rejected and referenced columns can be reported structurally.
+    6. Enforce result-safety policy: every output branch must aggregate, projected
+       columns must be grouped, sensitive columns are forbidden, and identifier
+       columns may appear only in explicitly allowed aggregate or join contexts.
+    7. Render the fully qualified AST back to normalized BigQuery SQL and return it
+       with structural validation metadata. Disclosure status remains
+       ``not_evaluated`` because this node does not authorize, execute, cost, or
+       suppress query results. No SQL is returned for a blocked result.
+
+    Args:
+        sql: Candidate BigQuery SQL. Input is limited to one non-empty statement.
+        tables: Physical table names declared by the generator. These are advisory
+            until they exactly match the physical tables derived from the AST.
+
+    Returns:
+        A serialized ``SqlValidationResult``. Allowed results contain normalized SQL
+        and no violations, but are not a data-disclosure approval. Blocked results
+        contain at least one violation and never contain normalized SQL.
     """
     args = ValidateSqlArgs(sql=sql.strip(), tables=tables or [])
     declared_tables = sorted(set(args.tables))
@@ -150,7 +191,7 @@ def validate_sql(sql: str, tables: list[str] | None = None) -> dict[str, object]
             evidence={"error": "SELECT must contain at least one projection"},
         )
 
-    prohibited = next(expression.find_all(PROHIBITED_EXPRESSION_TYPES), None)
+    prohibited = next(expression.find_all(*PROHIBITED_EXPRESSION_TYPES), None)
     if prohibited is not None:
         return _blocked(
             "unsafe_sql_operation",
@@ -228,8 +269,7 @@ def validate_sql(sql: str, tables: list[str] | None = None) -> dict[str, object]
 
     cte_names = {cte.alias_or_name.lower() for cte in expression.find_all(exp.CTE)}
     physical_tables = [
-        table for table in expression.find_all(exp.Table)
-        if table.name.lower() not in cte_names
+        table for table in expression.find_all(exp.Table) if table.name.lower() not in cte_names
     ]
     referenced_tables = sorted({table.name.lower() for table in physical_tables})
 
@@ -292,7 +332,7 @@ def validate_sql(sql: str, tables: list[str] | None = None) -> dict[str, object]
         qualified = qualify(
             expression.copy(),
             dialect=SQL_DIALECT,
-            schema=_sqlglot_schema(),
+            schema=_sqlglot_schema(),  # type: ignore[arg-type]
             expand_stars=False,
             quote_identifiers=False,
             validate_qualify_columns=True,
@@ -383,6 +423,8 @@ def validate_sql(sql: str, tables: list[str] | None = None) -> dict[str, object]
     normalized_sql = qualified.sql(dialect=SQL_DIALECT, pretty=True)
     return SqlValidationResult(
         allowed=True,
+        disclosure_status="not_evaluated",
+        requires_authorized_execution=True,
         normalized_sql=normalized_sql,
         tables=referenced_tables,
         referenced_tables=referenced_tables,
@@ -393,7 +435,7 @@ def validate_sql(sql: str, tables: list[str] | None = None) -> dict[str, object]
     ).model_dump()
 
 
-def _find_prohibited_function(expression: exp.Expression) -> str | None:
+def _find_prohibited_function(expression: exp.Expression | exp.Query) -> str | None:
     for function in expression.find_all(exp.Func):
         function_name = (
             function.name if isinstance(function, exp.Anonymous) else function.sql_name()
@@ -403,14 +445,14 @@ def _find_prohibited_function(expression: exp.Expression) -> str | None:
     return None
 
 
-def _uses_system_variable(expression: exp.Expression) -> bool:
+def _uses_system_variable(expression: exp.Expression | exp.Query) -> bool:
     return any(
         isinstance(parameter.this, exp.Parameter)
         for parameter in expression.find_all(exp.Parameter)
     )
 
 
-def _find_unsafe_join(expression: exp.Expression) -> exp.Join | None:
+def _find_unsafe_join(expression: exp.Expression | exp.Query) -> exp.Join | None:
     for join in expression.find_all(exp.Join):
         if join.args.get("method") == "NATURAL" or join.args.get("kind") == "CROSS":
             return join
@@ -430,19 +472,17 @@ def _join_condition_is_safe(condition: exp.Expression) -> bool:
         )
     if not isinstance(condition, exp.EQ):
         return False
-    return isinstance(condition.this, exp.Column) and isinstance(
-        condition.expression, exp.Column
-    )
+    return isinstance(condition.this, exp.Column) and isinstance(condition.expression, exp.Column)
 
 
-def _find_unsafe_star(expression: exp.Expression) -> exp.Star | None:
+def _find_unsafe_star(expression: exp.Expression | exp.Query) -> exp.Star | None:
     for star in expression.find_all(exp.Star):
         if not isinstance(star.parent, exp.Count):
             return star
     return None
 
 
-def _output_selects(expression: exp.Expression) -> list[exp.Select]:
+def _output_selects(expression: exp.Expression | exp.Query) -> list[exp.Select]:
     if isinstance(expression, exp.Select):
         return [expression]
     if isinstance(expression, exp.SetOperation):
@@ -455,8 +495,7 @@ def _output_selects(expression: exp.Expression) -> list[exp.Select]:
 
 def _select_has_direct_aggregate(select: exp.Select) -> bool:
     return any(
-        aggregate.find_ancestor(exp.Select) is select
-        for aggregate in select.find_all(exp.AggFunc)
+        aggregate.find_ancestor(exp.Select) is select for aggregate in select.find_all(exp.AggFunc)
     )
 
 
@@ -504,7 +543,7 @@ def _column_reference(column: exp.Column) -> str:
     return f"{column.table}.{column.name}" if column.table else column.name
 
 
-def _table_aliases(expression: exp.Expression) -> dict[str, str]:
+def _table_aliases(expression: exp.Expression | exp.Query) -> dict[str, str]:
     return {
         (table.alias_or_name or table.name).lower(): table.name.lower()
         for table in expression.find_all(exp.Table)
@@ -512,9 +551,7 @@ def _table_aliases(expression: exp.Expression) -> dict[str, str]:
     }
 
 
-def _column_safety_label(
-    column: exp.Column, table_aliases: dict[str, str]
-) -> str | None:
+def _column_safety_label(column: exp.Column, table_aliases: dict[str, str]) -> str | None:
     table_name = table_aliases.get(column.table.lower(), column.table.lower())
     table = TABLES.get(table_name)
     if table is None:
@@ -526,7 +563,7 @@ def _column_safety_label(
 
 
 def _find_sensitive_column(
-    expression: exp.Expression,
+    expression: exp.Expression | exp.Query,
     table_aliases: dict[str, str],
 ) -> tuple[exp.Column, str] | None:
     for column in expression.find_all(exp.Column):
@@ -536,9 +573,7 @@ def _find_sensitive_column(
     return None
 
 
-def _identifier_use_is_allowed(
-    column: exp.Column, table_aliases: dict[str, str]
-) -> bool:
+def _identifier_use_is_allowed(column: exp.Column, table_aliases: dict[str, str]) -> bool:
     count = column.find_ancestor(exp.Count)
     if count is not None:
         count_input = count.this
@@ -559,12 +594,8 @@ def _identifier_use_is_allowed(
         return False
 
     compared_columns = list(equality.find_all(exp.Column))
-    return (
-        len(compared_columns) == 2
-        and all(
-            _column_safety_label(item, table_aliases) == "identifier"
-            for item in compared_columns
-        )
+    return len(compared_columns) == 2 and all(
+        _column_safety_label(item, table_aliases) == "identifier" for item in compared_columns
     )
 
 
@@ -584,6 +615,8 @@ def _blocked(
     )
     return SqlValidationResult(
         allowed=False,
+        disclosure_status="not_evaluated",
+        requires_authorized_execution=True,
         reason=reason,
         normalized_sql=None,
         tables=referenced_tables or [],

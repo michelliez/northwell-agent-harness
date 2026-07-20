@@ -191,7 +191,9 @@ def parse_file(path: Path) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
                 warnings.append(f"{path.name}:{line_num}: malformed JSON: {exc}")
                 continue
             if not isinstance(record, dict):
-                warnings.append(f"{path.name}:{line_num}: expected object, got {type(record).__name__}")
+                warnings.append(
+                    f"{path.name}:{line_num}: expected object, got {type(record).__name__}"
+                )
                 continue
             run_id = record.get("run_id")
             if not run_id:
@@ -277,9 +279,7 @@ def build_trace_run(run_id: str, raw_events: list[dict[str, Any]]) -> TraceRun:
             status = "success"
         elif last.event_type == "request.blocked":
             status = "blocked"
-        elif last.status == "error":
-            status = "error"
-        elif last.event_type == "intent.classification.failed":
+        elif last.status == "error" or last.event_type == "intent.classification.failed":
             status = "error"
 
     total_duration = None

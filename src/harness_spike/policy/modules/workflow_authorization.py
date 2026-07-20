@@ -3,7 +3,6 @@ from __future__ import annotations
 from harness_spike.policy.normalize import contains_phrase
 from harness_spike.policy.result import PolicyGateResult, allowed, blocked
 
-
 SAFE_CATALOG_TERMS = {
     "what table",
     "which table",

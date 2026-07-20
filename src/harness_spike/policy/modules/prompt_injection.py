@@ -3,7 +3,6 @@ from __future__ import annotations
 from harness_spike.policy.normalize import matches_blocked_term
 from harness_spike.policy.result import PolicyGateResult, blocked
 
-
 POLICY_MANIPULATION_TERMS: dict[str, str] = {
     "ignore policy": "Tries to change rules",
     "ignore rules": "Tries to change rules",
@@ -48,9 +47,7 @@ def check_tool_bypass(text: str, q: str) -> PolicyGateResult | None:
     return match_terms(text, q, TOOL_BYPASS_TERMS)
 
 
-def match_terms(
-    text: str, q: str, terms: dict[str, str]
-) -> PolicyGateResult | None:
+def match_terms(text: str, q: str, terms: dict[str, str]) -> PolicyGateResult | None:
     for term, reason in terms.items():
         if matches_blocked_term(text, q, term):
             return blocked(reason=reason, matched_term=term)

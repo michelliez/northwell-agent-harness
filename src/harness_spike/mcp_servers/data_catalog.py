@@ -3,8 +3,9 @@ from __future__ import annotations
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
+from harness_spike.mcp_servers.auth import build_service_auth
 
-mcp = FastMCP("data_catalog")
+mcp = FastMCP("data_catalog", auth=build_service_auth("catalog"))
 
 
 class SearchTablesArgs(BaseModel):
