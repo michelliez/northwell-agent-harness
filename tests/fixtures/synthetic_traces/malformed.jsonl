@@ -1,0 +1,5 @@
+not valid json at all
+{"ts": 5000.0, "run_id": "eee", "event": "request.received", "question": "test"}
+{missing: quotes}
+{"ts": 5000.01, "event": "policy_gate.checked", "result": {"allowed": true}}
+{"ts": 5000.02, "run_id": "eee", "event": "policy_gate.checked", "result": {"allowed": true, "reason": null, "matched_term": null}}

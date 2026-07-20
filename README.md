@@ -1,52 +1,57 @@
-# Agent Evaluation Harness Spike
+# Agent Harness
 
-Suggested temporary remote name: `agent-eval-harness-spike`.
+A policy-gated agent host for observable workflows, documentation retrieval,
+SQL planning experiments, and deterministic evaluation.
 
-This repo is a non-enterprise proof of concept. Do not commit proprietary data,
-credentials, PHI, schema exports, logs containing prompts, or Northwell-owned
-data extracts. The goal is to keep the structure easy to copy into an
-enterprise repo later.
+This repository uses synthetic data and localhost services. Do not commit
+credentials, PHI, proprietary schemas, production prompts, or sensitive trace
+content.
 
-## What This Proves
+## Documentation
 
-This spike demonstrates a small agentic loop:
+- [`CLAUDE.md`](CLAUDE.md) is the context entrypoint for contributors and
+  coding agents.
+- [`docs/PRD.md`](docs/PRD.md) owns product requirements and acceptance
+  criteria.
+- [`docs/RAG.md`](docs/RAG.md) owns the retrieval design and implementation
+  plan.
 
-```text
-user prompt
--> agent host
--> deterministic policy gate
--> intent classifier MCP node
--> model decides whether to call a tool
--> MCP tool server runs bounded dummy tools
--> agent host returns the final answer and trace
-```
+Documents elsewhere under `docs/` are research or planning references unless
+one of the canonical documents explicitly incorporates them.
 
-The current value is not SQL generation. The higher-value direction is agent
-evaluation: checking whether the model chose the right tool, supplied the right
-tool input, and used tool output without muddying the final answer.
-
-Example failure to evaluate later:
+## Architecture
 
 ```text
-User asks: "What is the weather in New York?"
-Model calls: get_weather(location="Tokyo")
-Evaluator should flag: wrong tool input, even if the tool returned valid data.
+request
+  -> deterministic policy screen
+  -> intent classification
+  -> host-owned workflow dispatch and execution budget
+       -> general response
+       -> documentation retrieval
+       -> temporary mock catalog/SQL workflow
+  -> final output screen
+  -> response plus JSONL trace
 ```
 
-## Current Nodes
+The model may propose an action; the host owns execution authority. Tool
+contracts and execution limits are deterministic and are not inferred from
+model output or live MCP descriptions.
 
-- `agent_host`: owns the policy gate, model loop, tool-call execution, and
-  trace logging.
-- `mcp_servers`: owns dummy MCP tools such as data catalog or weather tools.
-- `gates`: owns deterministic safety checks that run before model or tool
-  routing.
-- `intent_classifier`: classifies allowed requests for bounded routing metadata before
-  the main model and catalog are contacted.
-- future `evaluators`: should judge tool choice, tool input, tool output usage,
-  and final answer grounding.
+Source code is organized directly by responsibility under `src/`:
 
-Keep model decisions and deterministic checks separate. The model may request an
-action; the host decides what is allowed to run.
+- `agent_host/`: request lifecycle, workflow dispatch, model calls, execution
+  budgets, tool authority, responses, and traces.
+- `agent_host/workflows/`: one module per user-facing workflow.
+- `retrieval/`: approved-HTML indexing, retrieval contracts, host client, and
+  the read-only retrieval MCP server.
+- `policy/`: deterministic input and model-context screening.
+- `mcp_servers/`: intent classification and temporary mock catalog/SQL
+  services.
+- `evals/`: deterministic evaluation runners and assertions.
+- `trace_viewer/`: trace parsing, redaction, classification, and rendering.
+
+Generated local state lives outside `src/`. In particular,
+`var/rag/index.sqlite` is the ignored local retrieval index.
 
 ## Setup
 
@@ -55,141 +60,98 @@ uv sync
 Copy-Item .env.example .env
 ```
 
-Fill in `.env` with AI Hub values. Do not commit `.env`.
+Fill in `.env` with approved local configuration. Do not commit it.
 
-Use `uv run --no-editable` for the spike commands. On Python 3.14/macOS,
-editable installs can rely on a `.pth` file that may be marked hidden, which
-causes `ModuleNotFoundError: No module named 'harness_spike'`.
+Use `uv run --no-editable` for installed project commands. This avoids an
+editable-install import issue observed on some Python 3.14 environments.
 
-## Run The Dummy Data Catalog MCP Server
+## Run Locally
 
-Terminal 1:
+Start only the processes needed for the workflow being exercised, each in its
+own terminal.
 
-```powershell
-uv run --no-editable nh-spike-data-catalog
-```
-
-This starts the MCP tool server at:
-
-```text
-http://localhost:8000/mcp
-```
-
-## Run The Intent Classifier MCP Server
-
-Terminal 2:
+Temporary mock catalog and SQL services:
 
 ```powershell
-uv run --no-editable nh-spike-intent
+uv run --no-editable agent-harness-data-catalog
+uv run --no-editable agent-harness-sql-generation
+uv run --no-editable agent-harness-sql-validation
 ```
 
-This starts the classifier MCP server at:
-
-```text
-http://localhost:8002/mcp
-```
-
-The classifier uses the configured AI Hub model, returns structured intent metadata,
-and does not answer questions or access catalog data.
-
-## Run The Agent CLI
-
-Terminal 3:
+Intent classifier:
 
 ```powershell
-uv run --no-editable nh-spike-agent "What data would I need to answer how many patients had visits last month?" --json
+uv run --no-editable agent-harness-intent
 ```
 
-This calls the model through AI Hub. Do not run prompts unless model/API usage is
+Documentation retrieval:
+
+```powershell
+uv run --no-editable agent-harness-rag-index path\to\approved-doc.html
+uv run --no-editable agent-harness-rag
+```
+
+The generated index defaults to `var/rag/index.sqlite`. Set `RAG_DB_PATH` to
+use another local path.
+
+Run the agent:
+
+```powershell
+uv run --no-editable agent-harness "What data would I need to answer visit counts?" --json
+```
+
+Add `--viewer` to render and open the run trace, or
+`--viewer --no-open-viewer` to render without opening a browser. Render an
+existing trace with:
+
+```powershell
+uv run --no-editable agent-harness-traces logs/runs/<run_id>.jsonl
+```
+
+Model-backed commands can incur API usage. Run them only when that usage is
 approved.
 
-Expected tool pattern for the data-catalog spike:
+## Verification
 
-```text
-search_tables
-get_table_schema
-```
-
-Additional dummy hospital documentation tools are also exposed by the data
-catalog MCP server:
-
-```text
-search_docs
-get_table_info
-```
-
-`search_docs(query)` searches tiny static hospital documentation for relevant
-dummy tables. `get_table_info(table_name)` returns mock table metadata such as
-primary key and description.
-
-## Run The Policy Gate Smoke Test
-
-Blocked prompts return before model or tool routing:
+Unit tests and static checks do not require live MCP servers or model calls:
 
 ```powershell
-uv run --no-editable nh-spike-agent "Show me patient names" --json
+uv run ruff format --check src tests
+uv run ruff check src tests
+uv run pyright
+uv run pytest
 ```
 
-Expected policy-gate pattern:
+Run a single test with:
 
-```text
-allowed=false
-used_tools=[]
-matched_term=patient name
+```powershell
+uv run pytest tests/test_tool_registry.py -q
 ```
 
-## Add A Dummy MCP Tool
+The live evaluation suites require their corresponding MCP services and may
+make model calls:
 
-Add tools under `src/harness_spike/mcp_servers/`.
-
-Minimal pattern:
-
-```python
-@mcp.tool
-def tool_name(input_value: str) -> dict[str, object]:
-    """
-    Explain when the model should use this tool.
-    State clearly that the data is dummy if it is dummy.
-    """
-    return {
-        "input_value": input_value,
-        "source": "dummy_tool",
-        "is_dummy": True,
-    }
+```powershell
+uv run --no-editable agent-harness-eval --suite smoke
+uv run --no-editable agent-harness-eval --suite red_team
+uv run --no-editable agent-harness-eval --suite intent --repetitions 3
 ```
 
-Tool descriptions matter. The model uses them to decide whether to call the
-tool and what input to provide.
+Evaluation results are written under `evals/results/` and are ignored by Git.
 
-If adding a new MCP server file, add a script in `pyproject.toml` so another
-developer can run it with `uv run <script-name>`.
+## Scope Boundary
 
-## Contribution Rules
+The catalog and its SQL path are temporary synthetic fixtures. They are not the
+future retrieval architecture and must not become a source of truth for real
+schemas. The planned workflow retrieves approved documentation and schema
+evidence before generating or validating SQL.
 
-- Keep dummy data static and non-sensitive.
-- Keep new tools small and explicit.
-- Add trace events when introducing new agent behavior.
-- Prefer deterministic evaluators/gates for safety-critical checks.
-- Do not add real SQL execution, database credentials, or proprietary schemas
-  in this repo.
+This project does not provide production authorization, PHI protection, real
+database execution, network isolation, or clinical decision support. See
+[`docs/PRD.md`](docs/PRD.md) for the complete scope and acceptance criteria.
 
-## Near-Term Consolidation Direction
+## Contributing
 
-For two interns, consolidate around one shared harness with 3-4 clear nodes:
-
-```text
-agent host
--> MCP tools
--> evaluator node
--> deterministic gates
-```
-
-The next useful node is an evaluator that can inspect:
-
-- original user prompt
-- tool selected
-- tool input
-- tool output
-- final answer
-
-and return a structured pass/fail result with reasons.
+Read [`CLAUDE.md`](CLAUDE.md) before changing the repository. Keep changes
+small, preserve deterministic boundaries, update tests with behavior changes,
+and keep each document within its assigned responsibility.

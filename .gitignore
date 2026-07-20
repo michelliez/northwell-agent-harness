@@ -6,14 +6,23 @@ dist/
 wheels/
 *.egg-info
 .mypy_cache/
+/.pytest_cache
+.ruff_cache/
 
 # Virtual environments
 .venv
 
 .agents/
+.claude/
+/graphify-out
 claude-code.md
 .env
 logs/*
 !logs/.gitkeep
+evals/results/*
+!evals/results/.gitkeep
 pytest-cache-files-*
 pytest-cache-files-*/
+# Proprietary Clarity data — never commit
+ClarityDictionaryHTML-full*
+data/ClarityDictionaryHTML-full*

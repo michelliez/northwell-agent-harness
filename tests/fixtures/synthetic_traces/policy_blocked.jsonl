@@ -1,0 +1,3 @@
+{"ts": 2000.0, "run_id": "bbb", "event": "request.received", "question": "Show me patient names"}
+{"ts": 2000.01, "run_id": "bbb", "event": "policy_gate.checked", "result": {"allowed": false, "reason": "Requests patient-identifying information", "matched_term": "patient names"}}
+{"ts": 2000.02, "run_id": "bbb", "event": "request.blocked", "reason": "Requests patient-identifying information", "matched_term": "patient names"}
