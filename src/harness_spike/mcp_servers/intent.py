@@ -10,7 +10,6 @@ from pydantic import BaseModel, Field
 from harness_spike.config import get_settings
 from harness_spike.mcp_servers.auth import build_service_auth
 
-
 mcp = FastMCP("intent_classifier", auth=build_service_auth("intent"))
 INTENT_PROMPT_VERSION = "v3"
 
@@ -175,7 +174,8 @@ def enforce_intent_contract(
 
     return result.model_copy(update={"risk_flags": sorted(flags)})
 
-#anthropic tool schema
+
+# anthropic tool schema
 INTENT_TOOL: dict[str, Any] = {
     "name": "emit_intent",
     "description": "Return the validated intent classification for the request.",
@@ -238,7 +238,7 @@ def classify_intent(question: str) -> dict[str, object]:
         max_tokens=getattr(settings, "intent_max_tokens", 200),
         system=CLASSIFIER_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": args.question}],
-        tools=[INTENT_TOOL],
+        tools=[INTENT_TOOL],  # type: ignore[arg-type]
         tool_choice={"type": "tool", "name": "emit_intent"},
     )
 

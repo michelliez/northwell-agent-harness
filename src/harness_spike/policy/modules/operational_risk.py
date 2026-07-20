@@ -6,7 +6,6 @@ from harness_spike.policy.normalize import (
 )
 from harness_spike.policy.result import PolicyGateResult, blocked
 
-
 SECRET_ACCESS_TERMS: dict[str, str] = {
     "api key": "Requests a secret or credential",
     "api keys": "Requests a secret or credential",
@@ -68,9 +67,7 @@ def check_secret_access(text: str, q: str) -> PolicyGateResult | None:
     return match_terms(text, q, SECRET_ACCESS_TERMS)
 
 
-def check_local_execution_and_exfiltration(
-    text: str, q: str
-) -> PolicyGateResult | None:
+def check_local_execution_and_exfiltration(text: str, q: str) -> PolicyGateResult | None:
     return match_terms(text, q, LOCAL_EXECUTION_AND_EXFILTRATION_TERMS)
 
 
@@ -91,9 +88,7 @@ def check_broad_data_exposure(text: str, q: str) -> PolicyGateResult | None:
     return match_terms(text, q, BROAD_DATA_EXPOSURE_TERMS)
 
 
-def match_terms(
-    text: str, q: str, terms: dict[str, str]
-) -> PolicyGateResult | None:
+def match_terms(text: str, q: str, terms: dict[str, str]) -> PolicyGateResult | None:
     for term, reason in terms.items():
         if matches_blocked_term(text, q, term):
             return blocked(reason=reason, matched_term=term)

@@ -9,9 +9,8 @@ from sqlglot import exp
 from sqlglot.errors import OptimizeError, ParseError
 from sqlglot.optimizer.qualify import qualify
 
-from harness_spike.mcp_servers.data_catalog import TABLES
 from harness_spike.mcp_servers.auth import build_service_auth
-
+from harness_spike.mcp_servers.data_catalog import TABLES
 
 mcp = FastMCP("sql_validation", auth=build_service_auth("sql_validation"))
 
@@ -192,7 +191,7 @@ def validate_sql(sql: str, tables: list[str] | None = None) -> dict[str, object]
             evidence={"error": "SELECT must contain at least one projection"},
         )
 
-    prohibited = next(expression.find_all(PROHIBITED_EXPRESSION_TYPES), None)
+    prohibited = next(expression.find_all(*PROHIBITED_EXPRESSION_TYPES), None)
     if prohibited is not None:
         return _blocked(
             "unsafe_sql_operation",
@@ -270,8 +269,7 @@ def validate_sql(sql: str, tables: list[str] | None = None) -> dict[str, object]
 
     cte_names = {cte.alias_or_name.lower() for cte in expression.find_all(exp.CTE)}
     physical_tables = [
-        table for table in expression.find_all(exp.Table)
-        if table.name.lower() not in cte_names
+        table for table in expression.find_all(exp.Table) if table.name.lower() not in cte_names
     ]
     referenced_tables = sorted({table.name.lower() for table in physical_tables})
 
@@ -334,7 +332,7 @@ def validate_sql(sql: str, tables: list[str] | None = None) -> dict[str, object]
         qualified = qualify(
             expression.copy(),
             dialect=SQL_DIALECT,
-            schema=_sqlglot_schema(),
+            schema=_sqlglot_schema(),  # type: ignore[arg-type]
             expand_stars=False,
             quote_identifiers=False,
             validate_qualify_columns=True,
@@ -437,7 +435,7 @@ def validate_sql(sql: str, tables: list[str] | None = None) -> dict[str, object]
     ).model_dump()
 
 
-def _find_prohibited_function(expression: exp.Expression) -> str | None:
+def _find_prohibited_function(expression: exp.Expression | exp.Query) -> str | None:
     for function in expression.find_all(exp.Func):
         function_name = (
             function.name if isinstance(function, exp.Anonymous) else function.sql_name()
@@ -447,14 +445,14 @@ def _find_prohibited_function(expression: exp.Expression) -> str | None:
     return None
 
 
-def _uses_system_variable(expression: exp.Expression) -> bool:
+def _uses_system_variable(expression: exp.Expression | exp.Query) -> bool:
     return any(
         isinstance(parameter.this, exp.Parameter)
         for parameter in expression.find_all(exp.Parameter)
     )
 
 
-def _find_unsafe_join(expression: exp.Expression) -> exp.Join | None:
+def _find_unsafe_join(expression: exp.Expression | exp.Query) -> exp.Join | None:
     for join in expression.find_all(exp.Join):
         if join.args.get("method") == "NATURAL" or join.args.get("kind") == "CROSS":
             return join
@@ -474,19 +472,17 @@ def _join_condition_is_safe(condition: exp.Expression) -> bool:
         )
     if not isinstance(condition, exp.EQ):
         return False
-    return isinstance(condition.this, exp.Column) and isinstance(
-        condition.expression, exp.Column
-    )
+    return isinstance(condition.this, exp.Column) and isinstance(condition.expression, exp.Column)
 
 
-def _find_unsafe_star(expression: exp.Expression) -> exp.Star | None:
+def _find_unsafe_star(expression: exp.Expression | exp.Query) -> exp.Star | None:
     for star in expression.find_all(exp.Star):
         if not isinstance(star.parent, exp.Count):
             return star
     return None
 
 
-def _output_selects(expression: exp.Expression) -> list[exp.Select]:
+def _output_selects(expression: exp.Expression | exp.Query) -> list[exp.Select]:
     if isinstance(expression, exp.Select):
         return [expression]
     if isinstance(expression, exp.SetOperation):
@@ -499,8 +495,7 @@ def _output_selects(expression: exp.Expression) -> list[exp.Select]:
 
 def _select_has_direct_aggregate(select: exp.Select) -> bool:
     return any(
-        aggregate.find_ancestor(exp.Select) is select
-        for aggregate in select.find_all(exp.AggFunc)
+        aggregate.find_ancestor(exp.Select) is select for aggregate in select.find_all(exp.AggFunc)
     )
 
 
@@ -548,7 +543,7 @@ def _column_reference(column: exp.Column) -> str:
     return f"{column.table}.{column.name}" if column.table else column.name
 
 
-def _table_aliases(expression: exp.Expression) -> dict[str, str]:
+def _table_aliases(expression: exp.Expression | exp.Query) -> dict[str, str]:
     return {
         (table.alias_or_name or table.name).lower(): table.name.lower()
         for table in expression.find_all(exp.Table)
@@ -556,9 +551,7 @@ def _table_aliases(expression: exp.Expression) -> dict[str, str]:
     }
 
 
-def _column_safety_label(
-    column: exp.Column, table_aliases: dict[str, str]
-) -> str | None:
+def _column_safety_label(column: exp.Column, table_aliases: dict[str, str]) -> str | None:
     table_name = table_aliases.get(column.table.lower(), column.table.lower())
     table = TABLES.get(table_name)
     if table is None:
@@ -570,7 +563,7 @@ def _column_safety_label(
 
 
 def _find_sensitive_column(
-    expression: exp.Expression,
+    expression: exp.Expression | exp.Query,
     table_aliases: dict[str, str],
 ) -> tuple[exp.Column, str] | None:
     for column in expression.find_all(exp.Column):
@@ -580,9 +573,7 @@ def _find_sensitive_column(
     return None
 
 
-def _identifier_use_is_allowed(
-    column: exp.Column, table_aliases: dict[str, str]
-) -> bool:
+def _identifier_use_is_allowed(column: exp.Column, table_aliases: dict[str, str]) -> bool:
     count = column.find_ancestor(exp.Count)
     if count is not None:
         count_input = count.this
@@ -603,12 +594,8 @@ def _identifier_use_is_allowed(
         return False
 
     compared_columns = list(equality.find_all(exp.Column))
-    return (
-        len(compared_columns) == 2
-        and all(
-            _column_safety_label(item, table_aliases) == "identifier"
-            for item in compared_columns
-        )
+    return len(compared_columns) == 2 and all(
+        _column_safety_label(item, table_aliases) == "identifier" for item in compared_columns
     )
 
 

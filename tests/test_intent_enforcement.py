@@ -131,7 +131,8 @@ async def test_refuse_intent_records_blocked_trace_event(
         result = await answer_question(SAFE_PROMPT)
 
     trace_path = result.trace_file
-    events = [json.loads(line) for line in open(trace_path)]
+    with open(trace_path) as f:
+        events = [json.loads(line) for line in f]
     event_types = [e["event"] for e in events]
 
     assert "request.blocked" in event_types

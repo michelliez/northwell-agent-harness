@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import json
 import hashlib
 import hmac
+import json
 import os
 import time
 import uuid
 from pathlib import Path
 from typing import Any, Literal
-
 
 TraceContentMode = Literal["metadata", "debug"]
 _SENSITIVE_KEYS = frozenset(
@@ -79,9 +78,7 @@ class TraceLogger:
         self.path = Path(trace_dir) / f"{self.run_id}.jsonl"
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.content_mode = content_mode
-        self._hash_key = (hash_key or os.getenv("TRACE_HASH_KEY") or self.run_id).encode(
-            "utf-8"
-        )
+        self._hash_key = (hash_key or os.getenv("TRACE_HASH_KEY") or self.run_id).encode("utf-8")
 
     def record(self, event: str, **fields: Any) -> None:
         row = {
@@ -100,9 +97,7 @@ class TraceLogger:
 
     def _redact_mapping(self, value: dict[str, Any]) -> dict[str, Any]:
         return {
-            key: self._redact_value(item)
-            if key in _SENSITIVE_KEYS
-            else self._redact_nested(item)
+            key: self._redact_value(item) if key in _SENSITIVE_KEYS else self._redact_nested(item)
             for key, item in value.items()
         }
 

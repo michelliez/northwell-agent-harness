@@ -53,16 +53,13 @@ class Settings:
     def require_anthropic_api_key(self) -> str:
         if not self.anthropic_api_key:
             raise RuntimeError(
-                "Set ANTHROPIC_API_KEY or AI_HUB_API_KEY in your environment "
-                "or .env file."
+                "Set ANTHROPIC_API_KEY or AI_HUB_API_KEY in your environment or .env file."
             )
         return self.anthropic_api_key
 
     def require_anthropic_base_url(self) -> str:
         if not self.anthropic_base_url:
-            raise RuntimeError(
-                "Set ANTHROPIC_BASE_URL in your environment or .env file."
-            )
+            raise RuntimeError("Set ANTHROPIC_BASE_URL in your environment or .env file.")
         return self.anthropic_base_url
 
     def require_claude_model(self) -> str:
@@ -106,11 +103,7 @@ def get_settings() -> Settings:
             "MAX_WALL_SECONDS, MCP_CALL_TIMEOUT_SECONDS, MODEL_CALL_TIMEOUT_SECONDS, and "
             "INTENT_MIN_CONFIDENCE must be numeric."
         ) from exc
-    if (
-        max_wall_seconds <= 0
-        or mcp_call_timeout_seconds <= 0
-        or model_call_timeout_seconds <= 0
-    ):
+    if max_wall_seconds <= 0 or mcp_call_timeout_seconds <= 0 or model_call_timeout_seconds <= 0:
         raise RuntimeError("execution timeouts must be greater than 0.")
     if not 0 <= intent_min_confidence <= 1:
         raise RuntimeError("INTENT_MIN_CONFIDENCE must be between 0 and 1.")
@@ -122,18 +115,12 @@ def get_settings() -> Settings:
     return Settings(
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY") or os.getenv("AI_HUB_API_KEY"),
         anthropic_base_url=os.getenv("ANTHROPIC_BASE_URL") or None,
-        anthropic_custom_headers=parse_custom_headers(
-            os.getenv("ANTHROPIC_CUSTOM_HEADERS", "")
-        ),
+        anthropic_custom_headers=parse_custom_headers(os.getenv("ANTHROPIC_CUSTOM_HEADERS", "")),
         claude_model=os.getenv("CLAUDE_MODEL") or "claude-haiku-4-5-20251001",
         mcp_server_url=os.getenv("MCP_SERVER_URL") or "http://localhost:8000/mcp",
         intent_mcp_url=os.getenv("INTENT_MCP_URL") or "http://localhost:8002/mcp",
-        sql_generation_mcp_url=(
-            os.getenv("SQL_GENERATION_MCP_URL") or "http://localhost:8003/mcp"
-        ),
-        sql_validation_mcp_url=(
-            os.getenv("SQL_VALIDATION_MCP_URL") or "http://localhost:8004/mcp"
-        ),
+        sql_generation_mcp_url=(os.getenv("SQL_GENERATION_MCP_URL") or "http://localhost:8003/mcp"),
+        sql_validation_mcp_url=(os.getenv("SQL_VALIDATION_MCP_URL") or "http://localhost:8004/mcp"),
         mcp_auth_token=os.getenv("MCP_AUTH_TOKEN") or None,
         max_tool_rounds=parsed_ints["max_tool_rounds"],
         max_model_calls=parsed_ints["max_model_calls"],
@@ -163,8 +150,6 @@ def parse_custom_headers(raw_headers: str) -> dict[str, str]:
             continue
         name, _, value = item.partition(":")
         if not name or not value:
-            raise RuntimeError(
-                "Expected ANTHROPIC_CUSTOM_HEADERS like 'x-client-id: <client-id>'"
-            )
+            raise RuntimeError("Expected ANTHROPIC_CUSTOM_HEADERS like 'x-client-id: <client-id>'")
         headers[name.strip()] = value.strip()
     return headers

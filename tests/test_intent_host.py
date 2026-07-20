@@ -15,7 +15,7 @@ class FakeBridge:
         self.url = url
         self.auth_token = auth_token
 
-    async def __aenter__(self) -> "FakeBridge":
+    async def __aenter__(self) -> FakeBridge:
         return self
 
     async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
@@ -136,9 +136,7 @@ class FakeMessages:
     def create(self, **kwargs: object) -> SimpleNamespace:
         self.kwargs = kwargs
         FakeBridge.events.append("model:create")
-        return SimpleNamespace(
-            content=[TextBlock(type="text", text="catalog answer")]
-        )
+        return SimpleNamespace(content=[TextBlock(type="text", text="catalog answer")])
 
 
 class FakeClient:
@@ -184,9 +182,11 @@ async def test_allowed_request_classifies_before_catalog(
         line.split('"event": "', 1)[1].split('"', 1)[0]
         for line in (tmp_path / f"{result.run_id}.jsonl").read_text().splitlines()
     ]
-    assert events.index("policy_gate.checked") < events.index(
-        "intent.classification.request"
-    ) < events.index("mcp.tools.listed")
+    assert (
+        events.index("policy_gate.checked")
+        < events.index("intent.classification.request")
+        < events.index("mcp.tools.listed")
+    )
 
 
 @pytest.mark.asyncio

@@ -97,6 +97,7 @@ class ExecutionBudget:
 
 def budget_from_settings(settings: Any) -> ExecutionBudget:
     """Build a budget while keeping lightweight test settings compatible."""
+
     def get(name: str, default: Any) -> Any:
         return getattr(settings, name, default)
 

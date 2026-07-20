@@ -121,8 +121,7 @@ DOCS: list[dict[str, str]] = [
     {
         "name": "departments",
         "description": (
-            "Contains department names and department metadata for dummy "
-            "operational analytics."
+            "Contains department names and department metadata for dummy operational analytics."
         ),
     },
 ]
@@ -133,8 +132,7 @@ TABLE_INFO: dict[str, dict[str, str]] = {
         "table": "encounters",
         "primary_key": "encounter_id",
         "description": (
-            "Contains admission, discharge, department, and encounter date "
-            "information."
+            "Contains admission, discharge, department, and encounter date information."
         ),
     },
     "diagnoses": {
@@ -155,11 +153,7 @@ def search_docs(query: str) -> list[dict[str, str]]:
     """Search tiny hospital documentation for relevant dummy tables."""
     args = SearchDocsArgs(query=query.strip())
     q = args.query.lower()
-    return [
-        doc
-        for doc in DOCS
-        if q in f"{doc['name']} {doc['description']}".lower()
-    ]
+    return [doc for doc in DOCS if q in f"{doc['name']} {doc['description']}".lower()]
 
 
 @mcp.tool

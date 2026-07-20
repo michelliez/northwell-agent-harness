@@ -175,9 +175,7 @@ def screen_content(value: Any, surface: ContentSurface) -> ContentScreenResult:
     return ContentScreenResult(allowed=True, surface=surface)
 
 
-def _screen_untrusted_instructions(
-    text: str, surface: ContentSurface
-) -> ContentScreenResult:
+def _screen_untrusted_instructions(text: str, surface: ContentSurface) -> ContentScreenResult:
     normalized = normalize_prompt(text)
     for term, reason in UNTRUSTED_INSTRUCTION_TERMS.items():
         if matches_blocked_term(text, normalized, term):

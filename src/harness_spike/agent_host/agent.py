@@ -8,30 +8,30 @@ from anthropic import Anthropic
 from anthropic.types import MessageParam, TextBlock, ToolParam, ToolUseBlock
 from pydantic import ValidationError
 
-from harness_spike.agent_host.mcp_bridge import MCPToolBridge
 from harness_spike.agent_host.budget import (
     BudgetExceeded,
     ExecutionBudget,
     ModelStopError,
     budget_from_settings,
 )
+from harness_spike.agent_host.mcp_bridge import MCPToolBridge
 from harness_spike.agent_host.schemas import AskResponse
-from harness_spike.agent_host.trace_logger import TraceLogger
 from harness_spike.agent_host.tool_registry import (
     ToolContractError,
     contract_for_tool,
     tools_for_intent,
     validate_live_inventory,
 )
+from harness_spike.agent_host.trace_logger import TraceLogger
 from harness_spike.config import Settings, get_settings
+from harness_spike.mcp_servers.intent import (
+    IntentResult,
+)
 from harness_spike.policy.screen import (
     ContentScreenBlocked,
     ContentScreenResult,
     ContentSurface,
     screen_content,
-)
-from harness_spike.mcp_servers.intent import (
-    IntentResult,
 )
 
 
@@ -110,10 +110,8 @@ async def answer_question(question: str) -> AskResponse:
         except ContentScreenBlocked as exc:
             return content_blocked_response(trace, exc)
         except ToolContractError as exc:
-            return tool_contract_error_response(trace, exc)
-        tools = [
-            tool for tool in discovered_tools if tool.get("name") in allowed_tools
-        ]
+            return tool_contract_error_response(trace, exc, [])
+        tools = [tool for tool in discovered_tools if tool.get("name") in allowed_tools]
         trace.record(
             "mcp.tools.scoped",
             intent=classification.intent,
@@ -215,8 +213,7 @@ async def classify_request(
     if (
         classification.intent == "unknown"
         or classification.needs_clarification
-        or classification.confidence
-        < getattr(settings, "intent_min_confidence", 0.70)
+        or classification.confidence < getattr(settings, "intent_min_confidence", 0.70)
     ):
         return AskResponse(
             answer=(
@@ -247,9 +244,7 @@ def uncertain_intent_response(trace: TraceLogger) -> AskResponse:
     )
 
 
-def refused_intent_response(
-    classification: IntentResult, trace: TraceLogger
-) -> AskResponse:
+def refused_intent_response(classification: IntentResult, trace: TraceLogger) -> AskResponse:
     trace.record(
         "intent.classification.refused",
         intent=classification.intent,
@@ -481,7 +476,7 @@ async def call_workflow_tool(
             mcp.call_tool(name, validated_arguments),
             timeout=budget.mcp_call_timeout_seconds,
         )
-    except asyncio.TimeoutError as exc:
+    except TimeoutError as exc:
         raise BudgetExceeded("mcp_call_timeout") from exc
     used_tools.append(name)
     budget.accept_tool_result(result)
@@ -727,9 +722,7 @@ async def run_agent_loop(
             return budget_exceeded_response(trace, exc, used_tools)
 
         unauthorized = [
-            tool_use.name
-            for tool_use in tool_uses
-            if tool_use.name not in allowed_tools
+            tool_use.name for tool_use in tool_uses if tool_use.name not in allowed_tools
         ]
         if unauthorized:
             trace.record(
@@ -861,7 +854,7 @@ async def execute_tool_uses(
                 mcp.call_tool(tool_use.name, validated_input),
                 timeout=budget.mcp_call_timeout_seconds,
             )
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             raise BudgetExceeded("mcp_call_timeout") from exc
         used_tools.append(tool_use.name)
         budget.accept_tool_result(tool_result)
@@ -1051,6 +1044,5 @@ def max_rounds_response(
 
 def tool_names(tools: list[Any]) -> list[str]:
     return [
-        str(tool.get("name", "unknown")) if isinstance(tool, dict) else "unknown"
-        for tool in tools
+        str(tool.get("name", "unknown")) if isinstance(tool, dict) else "unknown" for tool in tools
     ]

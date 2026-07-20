@@ -75,7 +75,7 @@ class MetadataBridge:
     def __init__(self, url: str, *, auth_token: str | None = None) -> None:
         self.url = url
 
-    async def __aenter__(self) -> "MetadataBridge":
+    async def __aenter__(self) -> MetadataBridge:
         return self
 
     async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
@@ -192,9 +192,7 @@ async def test_blocked_tool_result_stops_before_next_model_round(tmp_path: Path)
 
 def test_blocked_final_answer_is_not_returned_or_logged(tmp_path: Path) -> None:
     trace = TraceLogger(str(tmp_path))
-    response = SimpleNamespace(
-        content=[TextBlock(type="text", text="patient_name: Alice")]
-    )
+    response = SimpleNamespace(content=[TextBlock(type="text", text="patient_name: Alice")])
 
     result = agent.final_answer_response(response, trace, [])
 

@@ -8,8 +8,9 @@ here and derives route scopes from the same contract data.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping
+from typing import Any
 
 from anthropic.types import ToolParam
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -145,9 +146,12 @@ def _validate_value_type(
         raise ToolContractError(f"{field_name} must be an object", tool=tool_name)
     if isinstance(allowed, list):
         valid = any(
-            option == "null" and value is None
-            or option == "string" and isinstance(value, str)
-            or option == "array" and isinstance(value, list)
+            option == "null"
+            and value is None
+            or option == "string"
+            and isinstance(value, str)
+            or option == "array"
+            and isinstance(value, list)
             for option in allowed
         )
         if not valid:
@@ -169,8 +173,7 @@ TOOL_CONTRACTS: dict[str, ToolContract] = {
         name="search_tables",
         server="catalog",
         description=(
-            "Find candidate tables for a natural-language data question in the "
-            "dummy catalog."
+            "Find candidate tables for a natural-language data question in the dummy catalog."
         ),
         input_schema={
             "type": "object",
@@ -237,9 +240,7 @@ TOOL_CONTRACTS: dict[str, ToolContract] = {
 
 def tools_for_intent(intent: str) -> frozenset[str]:
     """Derive host-owned capability scope from the single contract registry."""
-    return frozenset(
-        name for name, contract in TOOL_CONTRACTS.items() if intent in contract.routes
-    )
+    return frozenset(name for name, contract in TOOL_CONTRACTS.items() if intent in contract.routes)
 
 
 def contract_for_tool(name: str, *, server: str | None = None) -> ToolContract:
@@ -263,19 +264,13 @@ def validate_live_inventory(
     server: str,
     required_tools: frozenset[str],
 ) -> list[ToolParam]:
-    live_by_name = {
-        str(tool.get("name")): tool for tool in tools if isinstance(tool, dict)
-    }
+    live_by_name = {str(tool.get("name")): tool for tool in tools if isinstance(tool, dict)}
     server_contracts = {
-        name: contract
-        for name, contract in TOOL_CONTRACTS.items()
-        if contract.server == server
+        name: contract for name, contract in TOOL_CONTRACTS.items() if contract.server == server
     }
     missing = sorted(name for name in required_tools if name not in live_by_name)
     if missing:
-        raise ToolContractError(
-            f"required MCP tools are missing: {', '.join(missing)}"
-        )
+        raise ToolContractError(f"required MCP tools are missing: {', '.join(missing)}")
 
     for name, live_tool in live_by_name.items():
         contract = server_contracts.get(name)
@@ -297,9 +292,7 @@ def _schema_signature(schema: Any) -> Any:
         return schema
     ignored = {"title", "description", "default"}
     return {
-        key: _schema_signature(value)
-        for key, value in sorted(schema.items())
-        if key not in ignored
+        key: _schema_signature(value) for key, value in sorted(schema.items()) if key not in ignored
     }
 
 

@@ -8,11 +8,10 @@ from fastmcp import FastMCP
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from harness_spike.config import get_settings
+from harness_spike.mcp_servers.auth import build_service_auth
 
 # Mock data for now.
 from harness_spike.mcp_servers.data_catalog import TABLES
-from harness_spike.mcp_servers.auth import build_service_auth
-
 
 mcp = FastMCP("sql_generation", auth=build_service_auth("sql_generation"))
 
@@ -123,7 +122,7 @@ def generate_sql(question: str, schema_context: str | None = None) -> dict[str, 
                 ),
             }
         ],
-        tools=[SQL_TOOL],
+        tools=[SQL_TOOL],  # type: ignore[arg-type]
         tool_choice={"type": "tool", "name": "emit_sql"},
     )
 
@@ -151,7 +150,7 @@ def _format_mock_schema() -> str:
     lines: list[str] = []
     for table_name, table in TABLES.items():
         lines.append(f"- {table_name}: {table['description']}")
-        for column in table["columns"]:
+        for column in table["columns"]:  # type: ignore[index]
             lines.append(
                 "  - "
                 f"{column['name']} ({column['type']}): "
