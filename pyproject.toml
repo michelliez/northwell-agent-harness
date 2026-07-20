@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "anthropic>=0.116.0",
+    "beautifulsoup4>=4.15.0",
     "fastmcp>=3.4.3",
     "pydantic>=2.13.4",
     "python-dotenv>=1.2.2",
@@ -21,6 +22,7 @@ nh-spike-sql-generation = "harness_spike.mcp_servers.sql_generation:main"
 nh-spike-sql-validation = "harness_spike.mcp_servers.sql_validation:main"
 nh-spike-eval = "harness_spike.evals.runner:main"
 nh-spike-traces = "harness_spike.trace_viewer.__main__:main"
+nh-spike-rag = "harness_spike.mcp_servers.rag_retrieval:main"
 
 [build-system]
 requires = ["hatchling"]

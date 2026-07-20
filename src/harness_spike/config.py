@@ -30,7 +30,7 @@ class Settings:
     intent_mcp_url: str = "http://localhost:8002/mcp"
     sql_generation_mcp_url: str = "http://localhost:8003/mcp"
     sql_validation_mcp_url: str = "http://localhost:8004/mcp"
-    mcp_auth_token: str | None = None
+    rag_mcp_url: str = "http://localhost:8005/mcp"
     max_tool_rounds: int = 3
     max_model_calls: int = 4
     max_tool_calls: int = 12
@@ -49,6 +49,7 @@ class Settings:
     trace_dir: str = "logs/runs"
     log_raw_prompts: bool = False
     trace_content_mode: str = "metadata"
+
 
     def require_anthropic_api_key(self) -> str:
         if not self.anthropic_api_key:
@@ -119,24 +120,14 @@ def get_settings() -> Settings:
         claude_model=os.getenv("CLAUDE_MODEL") or "claude-haiku-4-5-20251001",
         mcp_server_url=os.getenv("MCP_SERVER_URL") or "http://localhost:8000/mcp",
         intent_mcp_url=os.getenv("INTENT_MCP_URL") or "http://localhost:8002/mcp",
-        sql_generation_mcp_url=(os.getenv("SQL_GENERATION_MCP_URL") or "http://localhost:8003/mcp"),
-        sql_validation_mcp_url=(os.getenv("SQL_VALIDATION_MCP_URL") or "http://localhost:8004/mcp"),
-        mcp_auth_token=os.getenv("MCP_AUTH_TOKEN") or None,
-        max_tool_rounds=parsed_ints["max_tool_rounds"],
-        max_model_calls=parsed_ints["max_model_calls"],
-        max_tool_calls=parsed_ints["max_tool_calls"],
-        max_calls_per_tool=parsed_ints["max_calls_per_tool"],
-        max_candidate_schemas=parsed_ints["max_candidate_schemas"],
-        max_input_bytes=parsed_ints["max_input_bytes"],
-        max_tool_result_bytes=parsed_ints["max_tool_result_bytes"],
-        max_context_bytes=parsed_ints["max_context_bytes"],
-        max_wall_seconds=max_wall_seconds,
-        mcp_call_timeout_seconds=mcp_call_timeout_seconds,
-        model_call_timeout_seconds=model_call_timeout_seconds,
-        model_max_tokens=parsed_ints["model_max_tokens"],
-        intent_max_tokens=parsed_ints["intent_max_tokens"],
-        sql_generation_max_tokens=parsed_ints["sql_generation_max_tokens"],
-        intent_min_confidence=intent_min_confidence,
+        sql_generation_mcp_url=(
+            os.getenv("SQL_GENERATION_MCP_URL") or "http://localhost:8003/mcp"
+        ),
+        sql_validation_mcp_url=(
+            os.getenv("SQL_VALIDATION_MCP_URL") or "http://localhost:8004/mcp"
+        ),
+        rag_mcp_url=os.getenv("RAG_MCP_URL") or "http://localhost:8005/mcp",
+        max_tool_rounds=max_tool_rounds,
         trace_dir=os.getenv("TRACE_DIR", "logs/runs"),
         log_raw_prompts=_bool_env("LOG_RAW_PROMPTS", False),
         trace_content_mode=trace_content_mode,

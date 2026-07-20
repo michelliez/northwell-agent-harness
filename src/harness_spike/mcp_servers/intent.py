@@ -16,6 +16,7 @@ INTENT_PROMPT_VERSION = "v3"
 IntentName = Literal[
     "table_discovery",
     "schema_lookup",
+    "documentation_lookup",
     "aggregate_definition",
     "safe_sql_generation",
     "general_question",
@@ -55,6 +56,21 @@ REFUSAL_INTENTS = frozenset(
         "unsupported_sql_request",
     }
 )
+
+ROUTE_TOOLS: dict[IntentName, frozenset[str]] = {
+    "table_discovery": frozenset({"search_tables"}),
+    "schema_lookup": frozenset({"get_table_schema"}),
+    "documentation_lookup": frozenset({"search_docs", "get_doc_chunk"}),
+    "aggregate_definition": frozenset({"search_tables", "get_table_schema"}),
+    "safe_sql_generation": frozenset(
+        {"search_tables", "get_table_schema", "generate_sql", "validate_sql"}
+    ),
+    "general_question": frozenset(),
+    "patient_specific_request": frozenset(),
+    "policy_probe": frozenset(),
+    "unsupported_sql_request": frozenset(),
+    "unknown": frozenset(),
+}
 
 EXPECTED_ACTION: dict[IntentName, RecommendedAction] = {
     "table_discovery": "search_tables",
