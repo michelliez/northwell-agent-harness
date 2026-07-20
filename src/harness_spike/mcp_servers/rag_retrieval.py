@@ -10,17 +10,22 @@ from pydantic import BaseModel, Field
 mcp = FastMCP("rag_retrieval")
 
 RAG_DB_PATH = Path(__file__).resolve().parents[3] / "rag" / "one_file_rag.sqlite"
+
+
 class SearchDocsArgs(BaseModel):
     query: str = Field(min_length=1)
     top_k: int = Field(default=5, ge=1, le=20)
 
+
 class GetDocChunkArgs(BaseModel):
     chunk_id: str = Field(min_length=1)
+
 
 def get_rag_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(RAG_DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
 
 def escape_fts5(query: str) -> str:
     special_chars = '()+-*:"'
@@ -28,7 +33,8 @@ def escape_fts5(query: str) -> str:
         query = query.replace(char, " ")
     return " ".join(query.split())
 
-#Retrieval tool
+
+# Retrieval tool
 @mcp.tool
 def search_docs(query: str, top_k: int = 5) -> dict[str, object]:
     """Search indexed HTML documentation chunks."""
@@ -72,7 +78,8 @@ def search_docs(query: str, top_k: int = 5) -> dict[str, object]:
     finally:
         conn.close()
 
-#Fetch one chunk
+
+# Fetch one chunk
 @mcp.tool
 def get_doc_chunk(chunk_id: str) -> dict[str, object]:
     """Fetch the full text and metadata for one retrieved documentation chunk."""
@@ -117,6 +124,7 @@ def get_doc_chunk(chunk_id: str) -> dict[str, object]:
         }
     finally:
         conn.close()
+
 
 def main() -> None:
     mcp.run(transport="http", host="localhost", port=8005, path="/mcp")
