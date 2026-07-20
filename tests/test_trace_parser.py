@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from harness_spike.trace_viewer.parser import build_trace_run, load_traces, parse_file
+from harness_spike.trace_viewer.parser import load_traces, parse_file
 
 FIXTURES = Path(__file__).parent / "fixtures" / "synthetic_traces"
 
@@ -72,10 +72,12 @@ def test_directory_loading():
 
 
 def test_multiple_files():
-    traces, _ = load_traces([
-        FIXTURES / "linear_success.jsonl",
-        FIXTURES / "policy_blocked.jsonl",
-    ])
+    traces, _ = load_traces(
+        [
+            FIXTURES / "linear_success.jsonl",
+            FIXTURES / "policy_blocked.jsonl",
+        ]
+    )
     assert len(traces) == 2
     run_ids = {t.run_id for t in traces}
     assert "aaa" in run_ids

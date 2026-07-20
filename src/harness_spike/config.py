@@ -32,23 +32,35 @@ class Settings:
     sql_validation_mcp_url: str = "http://localhost:8004/mcp"
     rag_mcp_url: str = "http://localhost:8005/mcp"
     max_tool_rounds: int = 3
+    max_model_calls: int = 4
+    max_tool_calls: int = 12
+    max_calls_per_tool: int = 6
+    max_candidate_schemas: int = 5
+    max_input_bytes: int = 16_000
+    max_tool_result_bytes: int = 32_000
+    max_context_bytes: int = 128_000
+    max_wall_seconds: float = 60.0
+    mcp_call_timeout_seconds: float = 10.0
+    model_call_timeout_seconds: float = 30.0
+    model_max_tokens: int = 300
+    intent_max_tokens: int = 200
+    sql_generation_max_tokens: int = 500
+    intent_min_confidence: float = 0.70
     trace_dir: str = "logs/runs"
     log_raw_prompts: bool = False
+    trace_content_mode: str = "metadata"
 
 
     def require_anthropic_api_key(self) -> str:
         if not self.anthropic_api_key:
             raise RuntimeError(
-                "Set ANTHROPIC_API_KEY or AI_HUB_API_KEY in your environment "
-                "or .env file."
+                "Set ANTHROPIC_API_KEY or AI_HUB_API_KEY in your environment or .env file."
             )
         return self.anthropic_api_key
 
     def require_anthropic_base_url(self) -> str:
         if not self.anthropic_base_url:
-            raise RuntimeError(
-                "Set ANTHROPIC_BASE_URL in your environment or .env file."
-            )
+            raise RuntimeError("Set ANTHROPIC_BASE_URL in your environment or .env file.")
         return self.anthropic_base_url
 
     def require_claude_model(self) -> str:
@@ -60,19 +72,51 @@ class Settings:
 def get_settings() -> Settings:
     load_dotenv()
 
+    int_defaults = {
+        "max_tool_rounds": ("MAX_TOOL_ROUNDS", 3),
+        "max_model_calls": ("MAX_MODEL_CALLS", 4),
+        "max_tool_calls": ("MAX_TOOL_CALLS", 12),
+        "max_calls_per_tool": ("MAX_CALLS_PER_TOOL", 6),
+        "max_candidate_schemas": ("MAX_CANDIDATE_SCHEMAS", 5),
+        "max_input_bytes": ("MAX_INPUT_BYTES", 16_000),
+        "max_tool_result_bytes": ("MAX_TOOL_RESULT_BYTES", 32_000),
+        "max_context_bytes": ("MAX_CONTEXT_BYTES", 128_000),
+        "model_max_tokens": ("MODEL_MAX_TOKENS", 300),
+        "intent_max_tokens": ("INTENT_MAX_TOKENS", 200),
+        "sql_generation_max_tokens": ("SQL_GENERATION_MAX_TOKENS", 500),
+    }
+    parsed_ints: dict[str, int] = {}
+    for field_name, (env_name, default) in int_defaults.items():
+        try:
+            parsed_ints[field_name] = _int_env(env_name, default)
+        except ValueError as exc:
+            raise RuntimeError(f"{env_name} must be an integer.") from exc
+        if parsed_ints[field_name] < 0:
+            raise RuntimeError(f"{env_name} must be 0 or greater.")
+
     try:
-        max_tool_rounds = _int_env("MAX_TOOL_ROUNDS", 3)
+        max_wall_seconds = float(os.getenv("MAX_WALL_SECONDS", "60"))
+        mcp_call_timeout_seconds = float(os.getenv("MCP_CALL_TIMEOUT_SECONDS", "10"))
+        model_call_timeout_seconds = float(os.getenv("MODEL_CALL_TIMEOUT_SECONDS", "30"))
+        intent_min_confidence = float(os.getenv("INTENT_MIN_CONFIDENCE", "0.70"))
     except ValueError as exc:
-        raise RuntimeError("MAX_TOOL_ROUNDS must be an integer.") from exc
-    if max_tool_rounds < 0:
-        raise RuntimeError("MAX_TOOL_ROUNDS must be 0 or greater.")
+        raise RuntimeError(
+            "MAX_WALL_SECONDS, MCP_CALL_TIMEOUT_SECONDS, MODEL_CALL_TIMEOUT_SECONDS, and "
+            "INTENT_MIN_CONFIDENCE must be numeric."
+        ) from exc
+    if max_wall_seconds <= 0 or mcp_call_timeout_seconds <= 0 or model_call_timeout_seconds <= 0:
+        raise RuntimeError("execution timeouts must be greater than 0.")
+    if not 0 <= intent_min_confidence <= 1:
+        raise RuntimeError("INTENT_MIN_CONFIDENCE must be between 0 and 1.")
+
+    trace_content_mode = os.getenv("TRACE_CONTENT_MODE", "metadata").strip().lower()
+    if trace_content_mode not in {"metadata", "debug"}:
+        raise RuntimeError("TRACE_CONTENT_MODE must be 'metadata' or 'debug'.")
 
     return Settings(
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY") or os.getenv("AI_HUB_API_KEY"),
         anthropic_base_url=os.getenv("ANTHROPIC_BASE_URL") or None,
-        anthropic_custom_headers=parse_custom_headers(
-            os.getenv("ANTHROPIC_CUSTOM_HEADERS", "")
-        ),
+        anthropic_custom_headers=parse_custom_headers(os.getenv("ANTHROPIC_CUSTOM_HEADERS", "")),
         claude_model=os.getenv("CLAUDE_MODEL") or "claude-haiku-4-5-20251001",
         mcp_server_url=os.getenv("MCP_SERVER_URL") or "http://localhost:8000/mcp",
         intent_mcp_url=os.getenv("INTENT_MCP_URL") or "http://localhost:8002/mcp",
@@ -86,6 +130,7 @@ def get_settings() -> Settings:
         max_tool_rounds=max_tool_rounds,
         trace_dir=os.getenv("TRACE_DIR", "logs/runs"),
         log_raw_prompts=_bool_env("LOG_RAW_PROMPTS", False),
+        trace_content_mode=trace_content_mode,
     )
 
 
@@ -96,8 +141,6 @@ def parse_custom_headers(raw_headers: str) -> dict[str, str]:
             continue
         name, _, value = item.partition(":")
         if not name or not value:
-            raise RuntimeError(
-                "Expected ANTHROPIC_CUSTOM_HEADERS like 'x-client-id: <client-id>'"
-            )
+            raise RuntimeError("Expected ANTHROPIC_CUSTOM_HEADERS like 'x-client-id: <client-id>'")
         headers[name.strip()] = value.strip()
     return headers

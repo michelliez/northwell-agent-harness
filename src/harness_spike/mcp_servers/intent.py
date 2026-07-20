@@ -8,9 +8,9 @@ from fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
 from harness_spike.config import get_settings
+from harness_spike.mcp_servers.auth import build_service_auth
 
-
-mcp = FastMCP("intent_classifier")
+mcp = FastMCP("intent_classifier", auth=build_service_auth("intent"))
 INTENT_PROMPT_VERSION = "v3"
 
 IntentName = Literal[
@@ -141,12 +141,11 @@ Examples:
 """.strip()
 
 
-def allowed_tools_for(intent: IntentName) -> frozenset[str]:
-    """Return the host-owned tool scope for an intent."""
-    return ROUTE_TOOLS[intent]
-
-
-def enforce_intent_contract(result: IntentResult) -> IntentResult:
+def enforce_intent_contract(
+    result: IntentResult,
+    *,
+    min_confidence: float = MIN_CONFIDENCE,
+) -> IntentResult:
     """Normalize model output so intent and action cannot disagree."""
     flags = set(result.risk_flags)
 
@@ -159,7 +158,7 @@ def enforce_intent_contract(result: IntentResult) -> IntentResult:
             }
         )
 
-    if result.confidence < MIN_CONFIDENCE:
+    if result.confidence < min_confidence:
         flags.add("low_confidence")
         return IntentResult(
             intent="unknown",
@@ -191,7 +190,8 @@ def enforce_intent_contract(result: IntentResult) -> IntentResult:
 
     return result.model_copy(update={"risk_flags": sorted(flags)})
 
-#anthropic tool schema
+
+# anthropic tool schema
 INTENT_TOOL: dict[str, Any] = {
     "name": "emit_intent",
     "description": "Return the validated intent classification for the request.",
@@ -251,12 +251,16 @@ def classify_intent(question: str) -> dict[str, object]:
     )
     response = client.messages.create(
         model=settings.require_claude_model(),
-        max_tokens=200,
+        max_tokens=getattr(settings, "intent_max_tokens", 200),
         system=CLASSIFIER_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": args.question}],
-        tools=[INTENT_TOOL],
+        tools=[INTENT_TOOL],  # type: ignore[arg-type]
         tool_choice={"type": "tool", "name": "emit_intent"},
     )
+
+    stop_reason = getattr(response, "stop_reason", None)
+    if stop_reason in {"refusal", "max_tokens"}:
+        raise RuntimeError(f"intent classifier stopped with {stop_reason}")
 
     tool_uses = [
         block
@@ -267,7 +271,10 @@ def classify_intent(question: str) -> dict[str, object]:
         raise RuntimeError("Intent classifier did not return exactly one result.")
 
     result = IntentResult.model_validate(tool_uses[0].input)
-    return enforce_intent_contract(result).model_dump()
+    return enforce_intent_contract(
+        result,
+        min_confidence=getattr(settings, "intent_min_confidence", MIN_CONFIDENCE),
+    ).model_dump()
 
 
 def main() -> None:

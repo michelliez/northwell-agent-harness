@@ -9,7 +9,6 @@ from harness_spike.policy.normalize import (
 )
 from harness_spike.policy.result import PolicyGateResult, blocked
 
-
 SMALL_CELL_RISK_TERMS: dict[str, str] = {
     "smallest": "Potential small-cell disclosure risk",
     "only one": "Requests small-cell output",
@@ -160,6 +159,19 @@ AGGREGATE_KEYWORDS = {
     "compare",
 }
 
+MIXED_ROW_LEVEL_MARKERS = {
+    "row",
+    "rows",
+    "record",
+    "records",
+    "raw",
+    "individual",
+    "each",
+    "every",
+    "person",
+    "people",
+}
+
 FUZZY_HIGH_RISK_TERMS: dict[str, str] = {
     "patient": "Likely typo for patient-identifying information",
     "patients": "Likely typo for patient-identifying information",
@@ -230,25 +242,32 @@ def check_row_level_request(q: str) -> PolicyGateResult | None:
     if is_schema_metadata_request(q):
         return None
 
-    has_aggregate_keyword = any(
-        contains_phrase(q, term) for term in AGGREGATE_KEYWORDS
-    )
-
-    if has_aggregate_keyword:
-        return None
-
+    has_aggregate_keyword = any(contains_phrase(q, term) for term in AGGREGATE_KEYWORDS)
     has_unsafe_verb = any(contains_phrase(q, term) for term in ROW_LEVEL_VERBS)
     has_row_object = any(contains_phrase(q, term) for term in ROW_LEVEL_OBJECTS)
+    has_explicit_row_level_marker = any(
+        contains_phrase(q, term) for term in MIXED_ROW_LEVEL_MARKERS
+    )
 
-    if has_unsafe_verb and has_row_object:
+    # Aggregate metrics commonly mention patients (for example, "average
+    # length of stay for patients").  Require an explicit row-level marker
+    # before treating a mixed aggregate request as disclosure-oriented.
+    if (
+        has_unsafe_verb
+        and has_row_object
+        and (not has_aggregate_keyword or has_explicit_row_level_marker)
+    ):
         return blocked("Requests row-level patient or encounter data", "row-level request")
+
+    # Aggregate wording does not make a mixed request safe.  Check for the
+    # stronger row-level request first, then allow aggregate-only analytics.
+    if has_aggregate_keyword:
+        return None
 
     return None
 
 
-def match_terms(
-    text: str, q: str, terms: dict[str, str]
-) -> PolicyGateResult | None:
+def match_terms(text: str, q: str, terms: dict[str, str]) -> PolicyGateResult | None:
     for term, reason in terms.items():
         if matches_blocked_term(text, q, term):
             return blocked(reason=reason, matched_term=term)
@@ -281,12 +300,7 @@ def damerau_levenshtein(a: str, b: str) -> int:
                 distances[i][j - 1] + 1,
                 distances[i - 1][j - 1] + cost,
             )
-            if (
-                i > 1
-                and j > 1
-                and a[i - 1] == b[j - 2]
-                and a[i - 2] == b[j - 1]
-            ):
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
                 distances[i][j] = min(
                     distances[i][j],
                     distances[i - 2][j - 2] + 1,

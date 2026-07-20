@@ -4,7 +4,7 @@ import argparse
 import asyncio
 import json
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +20,6 @@ from harness_spike.evals.intent_assertions import (
     summarize_intent_results,
 )
 from harness_spike.mcp_servers.intent import INTENT_PROMPT_VERSION, IntentResult
-
 
 DEFAULT_CASE_DIR = Path("evals")
 DEFAULT_RESULTS_DIR = DEFAULT_CASE_DIR / "results"
@@ -88,14 +87,12 @@ async def run_cases(cases: list[EvaluationCase]) -> dict[str, Any]:
                     "category": case.category,
                     "passed": False,
                     "run_id": None,
-                    "failures": [
-                        {"check": "runner", "message": f"{type(exc).__name__}: {exc}"}
-                    ],
+                    "failures": [{"check": "runner", "message": f"{type(exc).__name__}: {exc}"}],
                 }
             )
 
     return {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "total": len(results),
         "passed": sum(1 for result in results if result["passed"]),
         "failed": sum(1 for result in results if not result["passed"]),
@@ -103,15 +100,16 @@ async def run_cases(cases: list[EvaluationCase]) -> dict[str, Any]:
     }
 
 
-async def run_intent_cases(
-    cases: list[IntentEvaluationCase], repetitions: int
-) -> dict[str, Any]:
+async def run_intent_cases(cases: list[IntentEvaluationCase], repetitions: int) -> dict[str, Any]:
     """Run synthetic labels against the intent MCP without invoking the host."""
     settings = get_settings()
     results: list[dict[str, Any]] = []
     for repetition in range(1, repetitions + 1):
         try:
-            async with MCPToolBridge(settings.intent_mcp_url) as intent_mcp:
+            async with MCPToolBridge(
+                settings.intent_mcp_url,
+                auth_token=getattr(settings, "mcp_auth_token", None),
+            ) as intent_mcp:
                 for case in cases:
                     expected = {
                         "intent": case.expected_intent,
@@ -182,7 +180,7 @@ async def run_intent_cases(
 
     return {
         "suite": "intent",
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "model": settings.require_claude_model(),
         "intent_prompt_version": INTENT_PROMPT_VERSION,
         "repetitions": repetitions,
@@ -193,7 +191,7 @@ async def run_intent_cases(
 
 def write_report(report: dict[str, Any], results_dir: Path, prefix: str = "evaluation") -> Path:
     results_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     path = results_dir / f"{prefix}-{timestamp}.json"
     path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return path

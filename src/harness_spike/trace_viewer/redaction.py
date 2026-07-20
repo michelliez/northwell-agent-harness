@@ -32,10 +32,7 @@ def _is_sensitive_key(key: str) -> bool:
 
 def redact(obj: Any) -> Any:
     if isinstance(obj, dict):
-        return {
-            k: REDACTED if _is_sensitive_key(k) else redact(v)
-            for k, v in obj.items()
-        }
+        return {k: REDACTED if _is_sensitive_key(k) else redact(v) for k, v in obj.items()}
     if isinstance(obj, list):
         return [redact(item) for item in obj]
     return obj

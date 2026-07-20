@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from harness_spike.policy.result import PolicyFinding, PolicyGateResult, allowed, no_verdict
+from harness_spike.policy.result import PolicyFinding, PolicyGateResult, no_verdict
 
 
 def consolidate_findings(findings: Iterable[PolicyFinding]) -> PolicyGateResult:
