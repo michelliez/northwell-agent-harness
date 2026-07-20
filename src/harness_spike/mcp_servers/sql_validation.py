@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import sqlglot
 from fastmcp import FastMCP
@@ -10,9 +10,10 @@ from sqlglot.errors import OptimizeError, ParseError
 from sqlglot.optimizer.qualify import qualify
 
 from harness_spike.mcp_servers.data_catalog import TABLES
+from harness_spike.mcp_servers.auth import build_service_auth
 
 
-mcp = FastMCP("sql_validation")
+mcp = FastMCP("sql_validation", auth=build_service_auth("sql_validation"))
 
 SQL_DIALECT = "bigquery"
 VALIDATOR_VERSION = "sqlglot_ast_v2"
@@ -34,6 +35,10 @@ class SqlViolation(BaseModel):
 
 class SqlValidationResult(BaseModel):
     allowed: bool
+    disclosure_status: Literal["not_evaluated", "approved", "suppressed", "denied"] = (
+        "not_evaluated"
+    )
+    requires_authorized_execution: bool = True
     reason: str | None = None
     normalized_sql: str | None = None
     tables: list[str] = Field(default_factory=list)
@@ -121,7 +126,9 @@ def validate_sql(sql: str, tables: list[str] | None = None) -> dict[str, object]
        columns must be grouped, sensitive columns are forbidden, and identifier
        columns may appear only in explicitly allowed aggregate or join contexts.
     7. Render the fully qualified AST back to normalized BigQuery SQL and return it
-       with structural validation metadata. No SQL is returned for a blocked result.
+       with structural validation metadata. Disclosure status remains
+       ``not_evaluated`` because this node does not authorize, execute, cost, or
+       suppress query results. No SQL is returned for a blocked result.
 
     Args:
         sql: Candidate BigQuery SQL. Input is limited to one non-empty statement.
@@ -130,8 +137,8 @@ def validate_sql(sql: str, tables: list[str] | None = None) -> dict[str, object]
 
     Returns:
         A serialized ``SqlValidationResult``. Allowed results contain normalized SQL
-        and no violations; blocked results contain at least one violation and never
-        contain normalized SQL.
+        and no violations, but are not a data-disclosure approval. Blocked results
+        contain at least one violation and never contain normalized SQL.
     """
     args = ValidateSqlArgs(sql=sql.strip(), tables=tables or [])
     declared_tables = sorted(set(args.tables))
@@ -418,6 +425,8 @@ def validate_sql(sql: str, tables: list[str] | None = None) -> dict[str, object]
     normalized_sql = qualified.sql(dialect=SQL_DIALECT, pretty=True)
     return SqlValidationResult(
         allowed=True,
+        disclosure_status="not_evaluated",
+        requires_authorized_execution=True,
         normalized_sql=normalized_sql,
         tables=referenced_tables,
         referenced_tables=referenced_tables,
@@ -619,6 +628,8 @@ def _blocked(
     )
     return SqlValidationResult(
         allowed=False,
+        disclosure_status="not_evaluated",
+        requires_authorized_execution=True,
         reason=reason,
         normalized_sql=None,
         tables=referenced_tables or [],

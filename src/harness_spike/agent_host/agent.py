@@ -44,7 +44,10 @@ async def ask(question: str) -> dict[str, Any]:
 async def answer_question(question: str) -> AskResponse:
     """Run policy, intent classification, and the bounded catalog agent loop."""
     settings = get_settings()
-    trace = TraceLogger(settings.trace_dir)
+    trace = TraceLogger(
+        settings.trace_dir,
+        content_mode=getattr(settings, "trace_content_mode", "metadata"),
+    )
     budget = budget_from_settings(settings)
     trace.record(
         "request.received",
@@ -92,7 +95,10 @@ async def answer_question(question: str) -> AskResponse:
             budget=budget,
         )
 
-    async with MCPToolBridge(settings.mcp_server_url) as mcp:
+    async with MCPToolBridge(
+        settings.mcp_server_url,
+        auth_token=getattr(settings, "mcp_auth_token", None),
+    ) as mcp:
         allowed_tools = tools_for_intent(classification.intent)
         try:
             discovered_tools = await discover_tools(
@@ -146,7 +152,10 @@ async def classify_request(
     budget = budget or budget_from_settings(settings)
     try:
         budget.reserve_tool_call("intent.classify_intent", {"question": question})
-        async with MCPToolBridge(settings.intent_mcp_url) as intent_mcp:
+        async with MCPToolBridge(
+            settings.intent_mcp_url,
+            auth_token=getattr(settings, "mcp_auth_token", None),
+        ) as intent_mcp:
             trace.record("intent.classification.request", mcp_url=settings.intent_mcp_url)
             intent_result = await asyncio.wait_for(
                 intent_mcp.call_tool("classify_intent", {"question": question}),
@@ -329,7 +338,10 @@ async def run_safe_sql_workflow(
     used_tools: list[str] = []
     trace.record("sql.workflow.started", intent=classification.model_dump())
 
-    async with MCPToolBridge(settings.mcp_server_url) as catalog_mcp:
+    async with MCPToolBridge(
+        settings.mcp_server_url,
+        auth_token=getattr(settings, "mcp_auth_token", None),
+    ) as catalog_mcp:
         search_result = await call_workflow_tool(
             catalog_mcp,
             "search_tables",
@@ -354,7 +366,10 @@ async def run_safe_sql_workflow(
         }
     )
 
-    async with MCPToolBridge(settings.sql_generation_mcp_url) as generation_mcp:
+    async with MCPToolBridge(
+        settings.sql_generation_mcp_url,
+        auth_token=getattr(settings, "mcp_auth_token", None),
+    ) as generation_mcp:
         generated = await call_workflow_tool(
             generation_mcp,
             "generate_sql",
@@ -383,7 +398,10 @@ async def run_safe_sql_workflow(
             classification,
         )
 
-    async with MCPToolBridge(settings.sql_validation_mcp_url) as validation_mcp:
+    async with MCPToolBridge(
+        settings.sql_validation_mcp_url,
+        auth_token=getattr(settings, "mcp_auth_token", None),
+    ) as validation_mcp:
         validation = await call_workflow_tool(
             validation_mcp,
             "validate_sql",
@@ -421,9 +439,26 @@ async def run_safe_sql_workflow(
             trace,
             classification,
         )
-    answer = f"Here is validated mock SQL for that aggregate request:\n\n```sql\n{sql}\n```"
-    trace.record("sql.workflow.completed", sql=sql, used_tools=used_tools)
-    return sql_workflow_response(answer, used_tools, trace, classification)
+    disclosure_status = validation.get("disclosure_status", "not_evaluated")
+    answer = (
+        "Here is structurally validated mock SQL for that aggregate request. "
+        "It was not executed, authorized, cost-checked, or evaluated for minimum "
+        f"cell-size disclosure (status: {disclosure_status}):\n\n"
+        f"```sql\n{sql}\n```"
+    )
+    trace.record(
+        "sql.workflow.completed",
+        sql=sql,
+        disclosure_status=disclosure_status,
+        used_tools=used_tools,
+    )
+    return sql_workflow_response(
+        answer,
+        used_tools,
+        trace,
+        classification,
+        disclosure_status=str(disclosure_status),
+    )
 
 
 async def call_workflow_tool(
@@ -522,14 +557,18 @@ def sql_workflow_response(
     used_tools: list[str],
     trace: TraceLogger,
     classification: IntentResult,
+    disclosure_status: str | None = None,
 ) -> AskResponse:
-    return screened_answer_response(
+    response = screened_answer_response(
         answer,
         trace,
         used_tools,
         intent=classification.intent,
         intent_confidence=classification.confidence,
     )
+    if disclosure_status is not None:
+        response.disclosure_status = disclosure_status
+    return response
 
 
 def build_model_client(settings: Settings) -> Anthropic:

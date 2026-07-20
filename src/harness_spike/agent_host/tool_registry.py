@@ -45,6 +45,8 @@ class SqlGenerationResult(_PermissiveModel):
 
 class SqlValidationResult(_PermissiveModel):
     allowed: bool
+    disclosure_status: str = "not_evaluated"
+    requires_authorized_execution: bool = True
     normalized_sql: str | None = None
     violations: list[dict[str, Any]] = Field(default_factory=list)
 

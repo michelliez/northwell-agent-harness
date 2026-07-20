@@ -22,3 +22,4 @@ evals/results/*
 pytest-cache-files-*
 pytest-cache-files-*/
 
+/ClarityDictionaryHTML-full

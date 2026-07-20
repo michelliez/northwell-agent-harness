@@ -229,8 +229,9 @@ Each node is built, tested, and signed off before the next begins.
 - Validates: (a) tool name is in the authorized set from L3; (b) parameters contain no injection payloads.
 - The host-owned `ToolContract` registry checks tool names, canonical schemas,
   arguments, results, and execution limits before forwarding.
-- MCP servers remain unauthenticated localhost services in this POC; server-side
-  identity and resource authorization are still required before real data.
+- MCP servers require the configured local service token in this POC; server-side
+  identity, principal/resource authorization, and rate limits are still required
+  before real data.
 
 ### Layer 6 — SQL Validation + Dry-Run *(partial)*
 
@@ -315,10 +316,9 @@ policy_modules_triggered  — list of module names that produced a verdict
 
 ### What never enters the log
 
-- Raw user prompt (unless `LOG_RAW_PROMPTS=true`, which must default false)
-- SQL query results
-- Tool call parameters
-- Final response text
+- Raw user prompt, SQL query results, tool call parameters, and final response
+  text in the default `TRACE_CONTENT_MODE=metadata`
+- Metadata-only HMAC digests and byte/item counts may be retained for correlation
 - API keys, environment variables, credentials
 - Any field that may contain PHI
 

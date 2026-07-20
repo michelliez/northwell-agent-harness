@@ -315,7 +315,12 @@ Settings are loaded from `.env` (see `.env.example`):
 - `MODEL_MAX_TOKENS`, `INTENT_MAX_TOKENS`, `SQL_GENERATION_MAX_TOKENS` — node output limits
 - `INTENT_MIN_CONFIDENCE` — configurable but uncalibrated routing threshold
 - `TRACE_DIR` — where to write trace JSONLs (default: `logs/runs`)
-- `LOG_RAW_PROMPTS` — log full prompts to trace (default: false, for privacy)
+- `LOG_RAW_PROMPTS` — legacy model-payload logging switch; it does not disable
+  centralized trace redaction
+- `TRACE_CONTENT_MODE` — `metadata` (default) redacts user/tool/SQL/answer
+  content; `debug` is an explicit local-only mode
+- `TRACE_HASH_KEY` — optional keyed HMAC secret for correlating redacted content
+- `MCP_AUTH_TOKEN` — shared local service token required by the POC MCP servers
 
 ## Development Guidelines
 

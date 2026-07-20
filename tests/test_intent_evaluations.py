@@ -89,7 +89,11 @@ async def test_direct_intent_runner_reports_differences_without_operational_fail
             assert name == "classify_intent"
             return _result(intent="schema_lookup", recommended_action="get_table_schema")
 
-    monkeypatch.setattr(runner, "MCPToolBridge", lambda _: FakeBridge())
+    monkeypatch.setattr(
+        runner,
+        "MCPToolBridge",
+        lambda _, **__: FakeBridge(),
+    )
     monkeypatch.setattr(
         runner,
         "get_settings",

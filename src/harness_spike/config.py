@@ -30,6 +30,7 @@ class Settings:
     intent_mcp_url: str = "http://localhost:8002/mcp"
     sql_generation_mcp_url: str = "http://localhost:8003/mcp"
     sql_validation_mcp_url: str = "http://localhost:8004/mcp"
+    mcp_auth_token: str | None = None
     max_tool_rounds: int = 3
     max_model_calls: int = 4
     max_tool_calls: int = 12
@@ -47,6 +48,7 @@ class Settings:
     intent_min_confidence: float = 0.70
     trace_dir: str = "logs/runs"
     log_raw_prompts: bool = False
+    trace_content_mode: str = "metadata"
 
     def require_anthropic_api_key(self) -> str:
         if not self.anthropic_api_key:
@@ -113,6 +115,10 @@ def get_settings() -> Settings:
     if not 0 <= intent_min_confidence <= 1:
         raise RuntimeError("INTENT_MIN_CONFIDENCE must be between 0 and 1.")
 
+    trace_content_mode = os.getenv("TRACE_CONTENT_MODE", "metadata").strip().lower()
+    if trace_content_mode not in {"metadata", "debug"}:
+        raise RuntimeError("TRACE_CONTENT_MODE must be 'metadata' or 'debug'.")
+
     return Settings(
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY") or os.getenv("AI_HUB_API_KEY"),
         anthropic_base_url=os.getenv("ANTHROPIC_BASE_URL") or None,
@@ -128,6 +134,7 @@ def get_settings() -> Settings:
         sql_validation_mcp_url=(
             os.getenv("SQL_VALIDATION_MCP_URL") or "http://localhost:8004/mcp"
         ),
+        mcp_auth_token=os.getenv("MCP_AUTH_TOKEN") or None,
         max_tool_rounds=parsed_ints["max_tool_rounds"],
         max_model_calls=parsed_ints["max_model_calls"],
         max_tool_calls=parsed_ints["max_tool_calls"],
@@ -145,6 +152,7 @@ def get_settings() -> Settings:
         intent_min_confidence=intent_min_confidence,
         trace_dir=os.getenv("TRACE_DIR", "logs/runs"),
         log_raw_prompts=_bool_env("LOG_RAW_PROMPTS", False),
+        trace_content_mode=trace_content_mode,
     )
 
 

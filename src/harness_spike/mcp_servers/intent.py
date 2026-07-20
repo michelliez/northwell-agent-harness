@@ -8,9 +8,10 @@ from fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
 from harness_spike.config import get_settings
+from harness_spike.mcp_servers.auth import build_service_auth
 
 
-mcp = FastMCP("intent_classifier")
+mcp = FastMCP("intent_classifier", auth=build_service_auth("intent"))
 INTENT_PROMPT_VERSION = "v3"
 
 IntentName = Literal[

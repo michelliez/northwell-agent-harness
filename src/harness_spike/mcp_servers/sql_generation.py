@@ -11,9 +11,10 @@ from harness_spike.config import get_settings
 
 # Mock data for now.
 from harness_spike.mcp_servers.data_catalog import TABLES
+from harness_spike.mcp_servers.auth import build_service_auth
 
 
-mcp = FastMCP("sql_generation")
+mcp = FastMCP("sql_generation", auth=build_service_auth("sql_generation"))
 
 
 class GenerateSqlArgs(BaseModel):

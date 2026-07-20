@@ -16,3 +16,4 @@ class AskResponse(BaseModel):
     matched_term: str | None = None
     intent: str | None = None
     intent_confidence: float | None = None
+    disclosure_status: str | None = None

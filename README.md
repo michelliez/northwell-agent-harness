@@ -289,9 +289,12 @@ and does not answer questions or access catalog data.
 
 ## Run The Mock SQL MCP Servers
 
-Safe aggregate SQL requests use a separate probabilistic generator followed by a
-deterministic SQLGlot validator. Both operate only on the checked-in dummy catalog;
-they do not connect to or execute against BigQuery.
+Aggregate SQL requests use a separate probabilistic generator followed by a
+deterministic SQLGlot structural validator. The validator proves only that a
+candidate matches the mock catalog and aggregate-shape rules; it does not grant
+authorization, estimate cost, execute SQL, enforce minimum cell sizes, or certify
+the result as disclosure-safe. Both nodes operate only on the checked-in dummy
+catalog.
 
 Terminals 3 and 4:
 
@@ -536,8 +539,11 @@ Build the red-team corpus in this order:
 5. **Known gaps to test and present:** the policy screen and context checks are
    deterministic lexical/structural defenses with possible false positives and
    false negatives; they are not authorization or complete prompt-injection
-   protection. MCP remains unauthenticated because this is a localhost-only
-   dummy-data POC.
+   protection. MCP calls now require the configured local service token, but
+   production still needs identity-aware authorization and resource checks at
+   each server. Trace metadata mode redacts content by default; debug mode is
+   local-only. SQL validation is structural only and does not certify analytics
+   disclosure safety.
 
 Track each case's expected policy decision, intent, catalog calls, final
 outcome, and trace. Do not put PHI, production prompts, or credentials in the

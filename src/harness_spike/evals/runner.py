@@ -111,7 +111,10 @@ async def run_intent_cases(
     results: list[dict[str, Any]] = []
     for repetition in range(1, repetitions + 1):
         try:
-            async with MCPToolBridge(settings.intent_mcp_url) as intent_mcp:
+            async with MCPToolBridge(
+                settings.intent_mcp_url,
+                auth_token=getattr(settings, "mcp_auth_token", None),
+            ) as intent_mcp:
                 for case in cases:
                     expected = {
                         "intent": case.expected_intent,

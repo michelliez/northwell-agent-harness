@@ -11,8 +11,9 @@ from harness_spike.agent_host.tool_registry import canonical_tools_for_server
 class FakeBridge:
     events: list[str] = []
 
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, *, auth_token: str | None = None) -> None:
         self.url = url
+        self.auth_token = auth_token
 
     async def __aenter__(self) -> "FakeBridge":
         return self
@@ -195,7 +196,7 @@ async def test_blocked_request_does_not_call_intent_node(
     monkeypatch.setattr(agent, "get_settings", lambda: _settings(str(tmp_path)))
 
     class UnexpectedBridge:
-        def __init__(self, _: str) -> None:
+        def __init__(self, _: str, *, auth_token: str | None = None) -> None:
             raise AssertionError("blocked requests must not open an MCP bridge")
 
     monkeypatch.setattr(agent, "MCPToolBridge", UnexpectedBridge)
@@ -224,7 +225,7 @@ async def test_refusing_intent_does_not_call_catalog(
     monkeypatch.setattr(agent, "classify_request", fake_classify_request)
 
     class UnexpectedBridge:
-        def __init__(self, _: str) -> None:
+        def __init__(self, _: str, *, auth_token: str | None = None) -> None:
             raise AssertionError("refused intents must not open a catalog bridge")
 
     monkeypatch.setattr(agent, "MCPToolBridge", UnexpectedBridge)

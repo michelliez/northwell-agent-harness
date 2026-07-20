@@ -72,7 +72,7 @@ def test_surface_screen_blocks_row_level_final_answer() -> None:
 class MetadataBridge:
     events: list[str] = []
 
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, *, auth_token: str | None = None) -> None:
         self.url = url
 
     async def __aenter__(self) -> "MetadataBridge":
