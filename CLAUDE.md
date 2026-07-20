@@ -172,6 +172,20 @@ uv run --no-editable nh-spike-eval --suite red_team
 uv run --no-editable nh-spike-eval --suite intent --repetitions 3
 ```
 
+### Full check (format + lint + types + tests)
+
+Run all static checks and the unit test suite in one shot — mirrors what CI runs:
+
+```bash
+uv run ruff format --check src tests && uv run ruff check src tests && uv run pyright && uv run pytest -q
+```
+
+To auto-fix formatting and lint issues before checking:
+
+```bash
+uv run ruff format src tests && uv run ruff check --fix src tests
+```
+
 ## Architecture
 
 The system is split into **five logical components** that communicate via REST/HTTP at fixed localhost ports:
@@ -396,3 +410,13 @@ controls must continue to expand.
 - **Production integration:** Add authenticated identity, server-side
   authorization, secure transport, network isolation, audit, output filtering,
   and human approval before any real data or consequential action.
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+Rules:
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).

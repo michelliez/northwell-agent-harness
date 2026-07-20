@@ -13,6 +13,8 @@ wheels/
 .venv
 
 .agents/
+.claude/
+/graphify-out
 claude-code.md
 .env
 logs/*
@@ -21,5 +23,6 @@ evals/results/*
 !evals/results/.gitkeep
 pytest-cache-files-*
 pytest-cache-files-*/
-
-/ClarityDictionaryHTML-full
+# Proprietary Clarity data — never commit
+ClarityDictionaryHTML-full*
+data/ClarityDictionaryHTML-full*
