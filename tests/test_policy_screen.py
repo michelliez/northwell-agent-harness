@@ -7,6 +7,9 @@ import pytest
 from anthropic.types import TextBlock, ToolUseBlock
 
 from harness_spike.agent_host import agent
+from harness_spike.agent_host.budget import ExecutionBudget
+from harness_spike.agent_host.model_runtime import run_agent_loop
+from harness_spike.agent_host.responses import final_answer_response
 from harness_spike.agent_host.trace_logger import TraceLogger
 from harness_spike.policy.screen import ContentSurface, screen_content
 
@@ -164,7 +167,7 @@ async def test_blocked_tool_result_stops_before_next_model_round(tmp_path: Path)
     settings = _settings(str(tmp_path))
     trace = TraceLogger(str(tmp_path))
 
-    result = await agent.run_agent_loop(
+    result = await run_agent_loop(
         question="Which tables support appointments?",
         client=client,
         model="test-model",
@@ -180,6 +183,7 @@ async def test_blocked_tool_result_stops_before_next_model_round(tmp_path: Path)
         trace=trace,
         system="",
         allowed_tools=frozenset({"search_tables"}),
+        budget=ExecutionBudget(),
     )
 
     assert result.allowed is False
@@ -194,7 +198,7 @@ def test_blocked_final_answer_is_not_returned_or_logged(tmp_path: Path) -> None:
     trace = TraceLogger(str(tmp_path))
     response = SimpleNamespace(content=[TextBlock(type="text", text="patient_name: Alice")])
 
-    result = agent.final_answer_response(response, trace, [])
+    result = final_answer_response(response, trace, [])
 
     assert result.allowed is False
     assert "Alice" not in result.answer

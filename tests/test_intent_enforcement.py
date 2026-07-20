@@ -178,7 +178,7 @@ async def test_safe_intent_is_not_refused(
         lambda: _fake_settings(tmp_path),
     )
     monkeypatch.setattr(
-        "harness_spike.agent_host.agent.Anthropic",
+        "harness_spike.agent_host.model_call.Anthropic",
         lambda **_: fake_client,
     )
 

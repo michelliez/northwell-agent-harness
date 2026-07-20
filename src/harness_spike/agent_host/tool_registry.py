@@ -7,7 +7,6 @@ here and derives route scopes from the same contract data.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -63,9 +62,6 @@ class ToolContract:
     input_schema: dict[str, Any]
     routes: frozenset[str]
     result_validator: ResultValidator
-    max_calls: int = 6
-    max_input_bytes: int = 16_000
-    max_result_bytes: int = 32_000
 
     def anthropic_tool(self) -> ToolParam:
         return {
@@ -81,18 +77,6 @@ class ToolContract:
                 tool=self.name,
             )
         _validate_object_schema(arguments, self.input_schema, self.name)
-        try:
-            encoded = json.dumps(arguments, ensure_ascii=False).encode("utf-8")
-        except (TypeError, ValueError) as exc:
-            raise ToolContractError(
-                "tool arguments were not JSON serializable",
-                tool=self.name,
-            ) from exc
-        if len(encoded) > self.max_input_bytes:
-            raise ToolContractError(
-                f"tool input exceeds {self.max_input_bytes} bytes",
-                tool=self.name,
-            )
         return arguments
 
     def validate_result(self, result: Any) -> Any:
