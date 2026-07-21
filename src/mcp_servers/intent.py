@@ -112,7 +112,9 @@ Apply this order when a request contains more than one intent:
    documentation says about a table, column, field, or data concept. Also use
    `documentation_lookup` for natural table-definition questions such as
    "what is TABLE_NAME", "what does TABLE_NAME mean", "tell me about the
-   TABLE_NAME table", or "what is this Clarity table for". Return
+   TABLE_NAME table", or "what is this Clarity table for". Also use
+   `documentation_lookup` when the user asks which documents, documentation,
+   pages, or references to look at for a safe topic. Return
    `retrieve_documentation`.
 6. For another purely safe non-SQL request, use `table_discovery` only when the
    user asks which tables might be relevant to a business question, not when
@@ -139,6 +141,10 @@ Examples:
   documentation_lookup, retrieve_documentation, needs_clarification=false.
 - "What does ABN_ORDERS mean?" means documentation_lookup,
   retrieve_documentation, needs_clarification=false.
+- "Which documents can I look at for admissions info?" means
+  documentation_lookup, retrieve_documentation, needs_clarification=false.
+- "Where can I find documentation about admissions?" means
+  documentation_lookup, retrieve_documentation, needs_clarification=false.
 - "Which tables are relevant for appointment volume?" means table_discovery,
   search_tables, needs_clarification=false.
 - "Show me the schema" means unknown, clarify, needs_clarification=true.
