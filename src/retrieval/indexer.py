@@ -159,9 +159,9 @@ def classify_table(table: Tag) -> str:
 def extract_table_content(table: Tag) -> str:
     """Render a small table (e.g. KeyValue) as a single pipe-delimited string."""
     parts: list[str] = []
-    for row in table.find_all("tr"):
+    for row in table.find_all("tr", recursive=False):
         row_text: list[str] = []
-        for cell in row.find_all(["th", "td"]):
+        for cell in row.find_all(["th", "td"], recursive=False):
             text = cell.get_text(" ", strip=True)
             if not text:
                 continue
@@ -181,10 +181,10 @@ def table_to_chunks(category: str, heading: str, table: Tag) -> list[IndexedChun
     header_rows: list[str] = []
     data_rows: list[str] = []
 
-    for row in table.find_all("tr"):
+    for row in table.find_all("tr", recursive=False):
         row_text: list[str] = []
         is_header = False
-        for cell in row.find_all(["th", "td"]):
+        for cell in row.find_all(["th", "td"], recursive=False):
             text = cell.get_text(" ", strip=True)
             if not text:
                 continue
