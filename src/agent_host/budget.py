@@ -38,7 +38,7 @@ class ExecutionBudget:
     max_context_bytes: int = 128_000
     max_wall_seconds: float = 60.0
     mcp_call_timeout_seconds: float = 10.0
-    model_max_tokens: int = 300
+    model_max_tokens: int = 800
     intent_max_tokens: int = 200
     sql_generation_max_tokens: int = 500
     started_at: float = field(default_factory=time.monotonic)
@@ -123,7 +123,7 @@ def budget_from_settings(settings: Any) -> ExecutionBudget:
         max_context_bytes=get("max_context_bytes", 128_000),
         max_wall_seconds=get("max_wall_seconds", 60.0),
         mcp_call_timeout_seconds=get("mcp_call_timeout_seconds", 10.0),
-        model_max_tokens=get("model_max_tokens", 300),
+        model_max_tokens=get("model_max_tokens", 800),
         intent_max_tokens=get("intent_max_tokens", 200),
         sql_generation_max_tokens=get("sql_generation_max_tokens", 500),
     )

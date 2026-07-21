@@ -25,7 +25,7 @@ class Settings:
     anthropic_api_key: str | None
     anthropic_base_url: str | None
     anthropic_custom_headers: dict[str, str] = field(default_factory=dict)
-    claude_model: str | None = "claude-haiku-4-5-20251001"
+    claude_model: str | None = "claude-sonnet-4-6"
     mcp_server_url: str = "http://localhost:8000/mcp"
     intent_mcp_url: str = "http://localhost:8002/mcp"
     sql_generation_mcp_url: str = "http://localhost:8003/mcp"
@@ -44,7 +44,7 @@ class Settings:
     max_wall_seconds: float = 60.0
     mcp_call_timeout_seconds: float = 10.0
     model_call_timeout_seconds: float = 30.0
-    model_max_tokens: int = 300
+    model_max_tokens: int = 800
     intent_max_tokens: int = 200
     sql_generation_max_tokens: int = 500
     intent_min_confidence: float = 0.70
@@ -83,7 +83,7 @@ def get_settings() -> Settings:
         "max_input_bytes": ("MAX_INPUT_BYTES", 16_000),
         "max_tool_result_bytes": ("MAX_TOOL_RESULT_BYTES", 32_000),
         "max_context_bytes": ("MAX_CONTEXT_BYTES", 128_000),
-        "model_max_tokens": ("MODEL_MAX_TOKENS", 300),
+        "model_max_tokens": ("MODEL_MAX_TOKENS", 800),
         "intent_max_tokens": ("INTENT_MAX_TOKENS", 200),
         "sql_generation_max_tokens": ("SQL_GENERATION_MAX_TOKENS", 500),
     }
@@ -119,7 +119,7 @@ def get_settings() -> Settings:
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY") or os.getenv("AI_HUB_API_KEY"),
         anthropic_base_url=os.getenv("ANTHROPIC_BASE_URL") or None,
         anthropic_custom_headers=parse_custom_headers(os.getenv("ANTHROPIC_CUSTOM_HEADERS", "")),
-        claude_model=os.getenv("CLAUDE_MODEL") or "claude-haiku-4-5-20251001",
+        claude_model=os.getenv("CLAUDE_MODEL") or "claude-sonnet-4-6",
         mcp_server_url=os.getenv("MCP_SERVER_URL") or "http://localhost:8000/mcp",
         intent_mcp_url=os.getenv("INTENT_MCP_URL") or "http://localhost:8002/mcp",
         sql_generation_mcp_url=(os.getenv("SQL_GENERATION_MCP_URL") or "http://localhost:8003/mcp"),

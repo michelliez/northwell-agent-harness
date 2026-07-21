@@ -11,7 +11,7 @@ from agent_host.config import get_settings
 from mcp_servers.auth import build_service_auth
 
 mcp = FastMCP("intent_classifier", auth=build_service_auth("intent"))
-INTENT_PROMPT_VERSION = "v4"
+INTENT_PROMPT_VERSION = "v5"
 
 IntentName = Literal[
     "table_discovery",
@@ -110,6 +110,8 @@ Apply this order when a request contains more than one intent:
    safe aggregate column. Return `generate_sql`.
 5. Use `documentation_lookup` when the user asks what approved HTML
    documentation says about a table, column, field, or data concept. Also use
+   `documentation_lookup` when the user asks which documentation pages or
+   documents cover a named concept. Use
    `documentation_lookup` for natural table-definition questions such as
    "what is TABLE_NAME", "what does TABLE_NAME mean", "tell me about the
    TABLE_NAME table", or "what is this Clarity table for". Return
@@ -134,6 +136,8 @@ Examples:
 - "What columns are in encounters?" means schema_lookup, get_table_schema,
   needs_clarification=false.
 - "What do the docs say about appointment status?" means
+  documentation_lookup, retrieve_documentation, needs_clarification=false.
+- "Which documents can I look at for admissions info?" means
   documentation_lookup, retrieve_documentation, needs_clarification=false.
 - "Can you tell me what the table ABN_ORDERS is?" means
   documentation_lookup, retrieve_documentation, needs_clarification=false.

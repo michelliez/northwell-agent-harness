@@ -249,7 +249,7 @@ def test_classify_intent_rejects_missing_or_duplicate_tool_results(
 
 
 def test_intent_tool_contract_is_closed_and_versioned() -> None:
-    assert intent.INTENT_PROMPT_VERSION == "v4"
+    assert intent.INTENT_PROMPT_VERSION == "v5"
     assert intent.INTENT_TOOL["name"] == "emit_intent"
     assert intent.INTENT_TOOL["input_schema"]["additionalProperties"] is False
     assert set(intent.INTENT_TOOL["input_schema"]["required"]) == {
@@ -275,6 +275,7 @@ def test_v2_prompt_covers_observed_adversarial_failure_modes() -> None:
     assert "force an intent label" in intent.CLASSIFIER_SYSTEM_PROMPT
     assert "metadata with patient-level output" in intent.CLASSIFIER_SYSTEM_PROMPT
     assert "safe_sql_generation" in intent.CLASSIFIER_SYSTEM_PROMPT
+    assert "Which documents can I look at for admissions info?" in intent.CLASSIFIER_SYSTEM_PROMPT
     assert "generate_sql" in intent.CLASSIFIER_SYSTEM_PROMPT
     assert "general_question" in intent.CLASSIFIER_SYSTEM_PROMPT
     assert "answer_without_tools" in intent.CLASSIFIER_SYSTEM_PROMPT

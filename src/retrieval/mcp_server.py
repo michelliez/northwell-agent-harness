@@ -35,23 +35,50 @@ STOPWORDS = {
     "an",
     "and",
     "are",
+    "at",
     "can",
+    "could",
+    "do",
     "does",
+    "document",
     "documentation",
+    "documents",
     "find",
     "for",
+    "hold",
+    "holds",
+    "i",
+    "info",
+    "information",
     "is",
+    "look",
+    "looking",
+    "mean",
+    "means",
     "me",
     "of",
     "on",
+    "please",
+    "represent",
+    "represents",
     "say",
     "says",
     "show",
     "tell",
+    "table",
+    "tables",
     "the",
     "to",
+    "use",
+    "used",
     "what",
+    "which",
+    "would",
 }
+
+MAX_FTS_QUERY_TOKENS = 8
+FTS_BM25_WEIGHTS = (0.0, 8.0, 10.0, 0.5, 5.0, 1.0)
+DOCUMENT_HINT_EXCLUSIONS = frozenset({"EHI", "ETL", "INI", "SQL"})
 
 
 class SearchDocsArgs(BaseModel):
@@ -204,23 +231,13 @@ def validate_rag_db(db_path: Path) -> None:
                 f" (chunk_id={orphan['chunk_id']!r})"
             )
 
-        missing_fts = cur.execute(
-            """
-            SELECT c.chunk_id
-            FROM chunks AS c
-            LEFT JOIN chunks_fts AS f ON c.chunk_id = f.chunk_id
-            WHERE f.chunk_id IS NULL
-            LIMIT 1
-            """
-        ).fetchone()
-        if missing_fts is not None:
-            raise SystemExit(
-                f"RAG database {db_path} has a chunk with no matching FTS entry"
-                f" (chunk_id={missing_fts['chunk_id']!r})"
-            )
-
         fts_count = cur.execute("SELECT COUNT(*) FROM chunks_fts").fetchone()[0]
-        if fts_count != chunk_count:
+        if fts_count < chunk_count:
+            raise SystemExit(
+                f"RAG database {db_path} has a chunk with no matching FTS entry "
+                f"({fts_count} FTS entries for {chunk_count} chunks)"
+            )
+        if fts_count > chunk_count:
             raise SystemExit(
                 f"RAG database {db_path} has {fts_count} FTS entries for "
                 f"{chunk_count} chunks"
@@ -243,16 +260,71 @@ def get_rag_connection() -> sqlite3.Connection:
     return conn
 
 
-def escape_fts5(query: str) -> str:
-    """Convert user text to a forgiving literal-token FTS5 query."""
-    tokens = [
-        token.lower()
-        for token in re.findall(r"\w+", query)
-        if token.lower() not in STOPWORDS
+def normalize_search_token(token: str) -> str | None:
+    """Normalize one user-query token without stemming clinical identifiers."""
+    normalized = token.casefold()
+    if normalized in STOPWORDS:
+        return None
+    if (
+        normalized.isalpha()
+        and len(normalized) > 4
+        and normalized.endswith("s")
+        and not normalized.endswith(("is", "ss", "us"))
+    ):
+        normalized = normalized[:-1]
+    if normalized in STOPWORDS:
+        return None
+    return normalized
+
+
+def search_tokens(query: str) -> list[str]:
+    """Return bounded, de-duplicated content tokens for FTS retrieval."""
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for raw_token in re.findall(r"\w+", query):
+        token = normalize_search_token(raw_token)
+        if token is None or token in seen:
+            continue
+        tokens.append(token)
+        seen.add(token)
+        if len(tokens) == MAX_FTS_QUERY_TOKENS:
+            break
+    return tokens
+
+
+def fts5_queries(query: str) -> list[str]:
+    """Build a precise FTS query followed by a broader fallback query."""
+    terms = [
+        f'"{token}"' if "_" in token or token.isdigit() else f'"{token}"*'
+        for token in search_tokens(query)
     ]
-    if not tokens:
-        tokens = [token.lower() for token in re.findall(r"\w+", query)]
-    return " OR ".join(f'"{token}"*' for token in tokens)
+    if not terms:
+        return []
+    strict = " AND ".join(terms)
+    if len(terms) == 1:
+        return [strict]
+    return [strict, " OR ".join(terms)]
+
+
+def document_hint(query: str) -> str | None:
+    """Extract an explicit table-like identifier for exact document promotion."""
+    candidates = [
+        candidate
+        for candidate in re.findall(r"\b[A-Z][A-Z0-9_]{2,}\b", query)
+        if candidate not in DOCUMENT_HINT_EXCLUSIONS
+    ]
+    table_match = re.search(r"\b([A-Za-z][A-Za-z0-9_]*)\s+table\b", query)
+    if table_match is not None:
+        candidates.append(table_match.group(1).upper())
+    if not candidates:
+        return None
+    return max(candidates, key=lambda candidate: ("_" in candidate, len(candidate)))
+
+
+def escape_fts5(query: str) -> str:
+    """Return the strict normalized FTS5 query for compatibility callers."""
+    queries = fts5_queries(query)
+    return queries[0] if queries else ""
 
 #DOC_NAME = doc name = DOC_NAME.html
 def normalize_lookup_text(text: str) -> str:
@@ -310,7 +382,9 @@ def keyword_search(
     *,
     fts_query: str,
     top_k: int,
+    document_name_hint: str | None = None,
 ) -> list[dict[str, object]]:
+    hint = document_name_hint or ""
     cur.execute(
         """
         SELECT
@@ -318,13 +392,29 @@ def keyword_search(
             title,
             heading_path,
             text,
-            bm25(chunks_fts) AS score
+            CASE
+                WHEN ? != '' AND (
+                    upper(source_path) = ?
+                    OR upper(source_path) LIKE ?
+                    OR upper(title) LIKE ?
+                ) THEN 0
+                ELSE 1
+            END AS document_rank,
+            bm25(chunks_fts, ?, ?, ?, ?, ?, ?) AS score
         FROM chunks_fts
         WHERE chunks_fts MATCH ?
-        ORDER BY score
+        ORDER BY document_rank, score
         LIMIT ?
         """,
-        (fts_query, top_k),
+        (
+            hint,
+            f"{hint}.HTML",
+            f"%/{hint}.HTML",
+            f"{hint} - %",
+            *FTS_BM25_WEIGHTS,
+            fts_query,
+            top_k,
+        ),
     )
 
     return [
@@ -345,15 +435,29 @@ def search_ranked_chunks(
     query: str,
     top_k: int,
 ) -> list[dict[str, object]]:
-    fts_query = escape_fts5(query)
-    if not fts_query:
+    queries = fts5_queries(query)
+    if not queries:
         return []
 
-    return keyword_search(
-        cur,
-        fts_query=fts_query,
-        top_k=top_k,
-    )
+    results: list[dict[str, object]] = []
+    seen_chunk_ids: set[str] = set()
+    hint = document_hint(query)
+    for fts_query in queries:
+        candidate_limit = max(top_k * 2, top_k + len(results))
+        for result in keyword_search(
+            cur,
+            fts_query=fts_query,
+            top_k=candidate_limit,
+            document_name_hint=hint,
+        ):
+            chunk_id = str(result["chunk_id"])
+            if chunk_id in seen_chunk_ids:
+                continue
+            results.append(result)
+            seen_chunk_ids.add(chunk_id)
+            if len(results) == top_k:
+                return results
+    return results
 
 
 
@@ -369,7 +473,7 @@ def search_docs(query: str, top_k: int) -> dict[str, object]:
 
         return {
             "query": args.query,
-            "retrieval_mode": "hybrid",
+            "retrieval_mode": "keyword",
             "results": results,
             "index_version": get_index_version(conn),
         }
