@@ -13,7 +13,7 @@ from retrieval.index_contract import INDEX_SCHEMA_VERSION
 
 mcp = FastMCP("rag_retrieval", auth=build_service_auth("rag"))
 
-DEFAULT_RAG_DB_PATH = Path(__file__).resolve().parents[3] / "var" / "rag" / "index.sqlite"
+DEFAULT_RAG_DB_RELATIVE_PATH = Path("var") / "rag" / "index.sqlite"
 
 REQUIRED_INDEX_METADATA = frozenset(
     {
@@ -81,7 +81,17 @@ class SearchColumnsArgs(BaseModel):
 
 
 def _db_path() -> Path:
-    return Path(os.getenv("RAG_DB_PATH") or DEFAULT_RAG_DB_PATH).resolve()
+    configured_path = os.getenv("RAG_DB_PATH")
+    if configured_path:
+        return Path(configured_path).expanduser().resolve()
+
+    cwd = Path.cwd().resolve()
+    for root in (cwd, *cwd.parents):
+        candidate = root / DEFAULT_RAG_DB_RELATIVE_PATH
+        if candidate.is_file():
+            return candidate.resolve()
+
+    return (cwd / DEFAULT_RAG_DB_RELATIVE_PATH).resolve()
 
 
 def validate_rag_db(db_path: Path) -> None:
