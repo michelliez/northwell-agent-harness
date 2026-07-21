@@ -48,8 +48,76 @@ class GetDocChunkArgs(BaseModel):
     chunk_id: str = Field(min_length=1)
 
 
+def _db_path() -> Path:
+    return Path(os.getenv("RAG_DB_PATH") or DEFAULT_RAG_DB_PATH).resolve()
+
+
+def validate_rag_db(db_path: Path) -> None:
+    """Validate the RAG database at startup. Raises SystemExit on any failure."""
+    if not db_path.is_file():
+        raise SystemExit(f"RAG database does not exist: {db_path}")
+    if db_path.stat().st_size == 0:
+        raise SystemExit(f"RAG database is empty (0 bytes): {db_path}")
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+    except sqlite3.OperationalError as exc:
+        raise SystemExit(f"Cannot open RAG database {db_path}: {exc}") from exc
+
+    try:
+        cur = conn.cursor()
+
+        present = {
+            row["name"]
+            for row in cur.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        missing = {"docs", "chunks", "chunks_fts", "index_metadata"} - present
+        if missing:
+            raise SystemExit(
+                f"RAG database {db_path} is missing tables: {', '.join(sorted(missing))}"
+            )
+
+        row = cur.execute(
+            "SELECT value FROM index_metadata WHERE key = 'index_version' LIMIT 1"
+        ).fetchone()
+        if row is None or not row["value"]:
+            raise SystemExit(f"RAG database {db_path} is missing index_version metadata")
+
+        doc_count = cur.execute("SELECT COUNT(*) FROM docs").fetchone()[0]
+        chunk_count = cur.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        if doc_count < 1:
+            raise SystemExit(f"RAG database {db_path} contains no indexed documents")
+        if chunk_count < 1:
+            raise SystemExit(f"RAG database {db_path} contains no indexed chunks")
+
+        orphan = cur.execute(
+            """
+            SELECT f.chunk_id
+            FROM chunks_fts AS f
+            LEFT JOIN chunks AS c ON f.chunk_id = c.chunk_id
+            WHERE c.chunk_id IS NULL
+            LIMIT 1
+            """
+        ).fetchone()
+        if orphan is not None:
+            raise SystemExit(
+                f"RAG database {db_path} has an FTS entry with no matching chunk"
+                f" (chunk_id={orphan['chunk_id']!r})"
+            )
+
+    except SystemExit:
+        raise
+    except sqlite3.DatabaseError as exc:
+        raise SystemExit(f"RAG database {db_path} is corrupt or unreadable: {exc}") from exc
+    finally:
+        conn.close()
+
+
 def get_rag_connection() -> sqlite3.Connection:
-    db_path = Path(os.getenv("RAG_DB_PATH") or DEFAULT_RAG_DB_PATH).resolve()
+    db_path = _db_path()
     if not db_path.is_file():
         raise RuntimeError(f"RAG index does not exist: {db_path}")
     conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
@@ -177,6 +245,7 @@ def get_doc_chunk(chunk_id: str) -> dict[str, object]:
 
 
 def main() -> None:
+    validate_rag_db(_db_path())
     mcp.run(transport="http", host="localhost", port=8005, path="/mcp")
 
 

@@ -9,6 +9,11 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 
+# ~800 tokens at 4 chars/token; rows are batched until this limit before a new chunk starts
+CHUNK_TARGET_CHARS = 3200
+# ~1200 tokens; a single indivisible row that exceeds this will still be emitted as-is
+CHUNK_HARD_MAX_CHARS = 4800
+
 
 @dataclass(frozen=True)
 class IndexedChunk:
@@ -19,6 +24,11 @@ class IndexedChunk:
 
 def sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def estimate_tokens(text: str) -> int:
+    """Rough token estimate: 4 chars per token (English prose approximation)."""
+    return max(1, len(text) // 4)
 
 
 def extract_chunks(html: str, *, fallback_title: str) -> tuple[str, list[IndexedChunk]]:
@@ -51,13 +61,11 @@ def extract_chunks(html: str, *, fallback_title: str) -> tuple[str, list[Indexed
             if value is None:
                 continue
             if isinstance(value, Tag) and value.name == "span" and "NA" in css_classes(value):
-                chunks.append(IndexedChunk("section_empty", heading, "No data"))
+                continue  # section_empty — no retrieval value
             elif isinstance(value, Tag) and value.name == "table":
-                text = extract_table_content(value)
-                if text:
-                    chunks.append(IndexedChunk(classify_table(value), heading, text))
+                chunks.extend(table_to_chunks(classify_table(value), heading, value))
             elif str(value).strip() == "None":
-                chunks.append(IndexedChunk("section_empty", heading, "No data"))
+                continue  # section_empty — no retrieval value
 
     if not chunks:
         text = soup.get_text(" ", strip=True)
@@ -87,6 +95,7 @@ def classify_table(table: Tag) -> str:
 
 
 def extract_table_content(table: Tag) -> str:
+    """Render a small table (e.g. KeyValue) as a single pipe-delimited string."""
     parts: list[str] = []
     for row in table.find_all("tr"):
         row_text: list[str] = []
@@ -99,12 +108,69 @@ def extract_table_content(table: Tag) -> str:
             parts.append(" ".join(row_text))
     return " | ".join(parts)
 
+
+def table_to_chunks(category: str, heading: str, table: Tag) -> list[IndexedChunk]:
+    """Split a content table into one or more chunks.
+
+    Column-header rows (T1Head cells) are identified and prepended to every
+    child chunk so that each chunk is self-contained.  Data rows are batched
+    until CHUNK_TARGET_CHARS before a new chunk starts.
+    """
+    header_rows: list[str] = []
+    data_rows: list[str] = []
+
+    for row in table.find_all("tr"):
+        row_text: list[str] = []
+        is_header = False
+        for cell in row.find_all(["th", "td"]):
+            text = cell.get_text(" ", strip=True)
+            if not text:
+                continue
+            if "T1Head" in css_classes(cell):
+                is_header = True
+                row_text.append(f"{text}:")
+            else:
+                row_text.append(text)
+        if row_text:
+            joined = " ".join(row_text)
+            if is_header:
+                header_rows.append(joined)
+            else:
+                data_rows.append(joined)
+
+    header_str = " | ".join(header_rows)
+
+    if not data_rows:
+        return [IndexedChunk(category=category, heading_path=heading, text=header_str)] if header_str else []
+
+    chunks: list[IndexedChunk] = []
+    batch: list[str] = []
+    batch_chars = len(header_str)
+
+    for row in data_rows:
+        row_chars = len(row) + 3  # 3 for the " | " separator
+        if batch and batch_chars + row_chars > CHUNK_TARGET_CHARS:
+            parts = ([header_str] + batch) if header_str else batch
+            chunks.append(IndexedChunk(category=category, heading_path=heading, text=" | ".join(parts)))
+            batch = []
+            batch_chars = len(header_str)
+        batch.append(row)
+        batch_chars += row_chars
+
+    if batch:
+        parts = ([header_str] + batch) if header_str else batch
+        chunks.append(IndexedChunk(category=category, heading_path=heading, text=" | ".join(parts)))
+
+    return chunks
+
+
 def discover_html_files(input_path: Path) -> list[Path]:
     if input_path.is_file():
         return [input_path]
     if input_path.is_dir():
         return sorted(input_path.rglob("*.html"))
     raise FileNotFoundError(input_path)
+
 
 def create_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(
@@ -130,6 +196,7 @@ def create_schema(conn: sqlite3.Connection) -> None:
             category TEXT NOT NULL,
             heading_path TEXT NOT NULL,
             text TEXT NOT NULL,
+            token_count INTEGER NOT NULL,
             text_hash TEXT NOT NULL,
             FOREIGN KEY (doc_id) REFERENCES docs(doc_id)
         );
@@ -139,6 +206,7 @@ def create_schema(conn: sqlite3.Connection) -> None:
         );
         """
     )
+
 
 def index_one_document(
     conn: sqlite3.Connection,
@@ -156,23 +224,32 @@ def index_one_document(
     except ValueError:
         source_path = html_path.name
 
-    document_id = sha256_text(f"{source_path}:{source_hash}")
+    # doc_id is path-only so it survives content changes across re-indexing runs
+    document_id = sha256_text(source_path)
 
     conn.execute(
         "INSERT INTO docs (doc_id, source_path, title, source_hash) VALUES (?, ?, ?, ?)",
         (document_id, source_path, title, source_hash),
     )
 
+    # occurrence counts how many prior chunks share the same (heading_path, category) pair.
+    # Chunks produced by splitting one large table all share the same heading+category, so
+    # occurrence=0,1,2,… distinguishes them.  A chunk retains its chunk_id across re-indexing
+    # as long as its text, heading, category, and occurrence position are unchanged.
+    occurrence_counter: dict[tuple[str, str], int] = {}
     for chunk_index, chunk in enumerate(chunks):
         text_hash = sha256_text(chunk.text)
+        occ_key = (chunk.heading_path, chunk.category)
+        occurrence = occurrence_counter.get(occ_key, 0)
+        occurrence_counter[occ_key] = occurrence + 1
         chunk_id = sha256_text(
-            f"{document_id}:{chunk_index}:{chunk.category}:{chunk.heading_path}:{text_hash}"
+            f"{document_id}:{chunk.heading_path}:{chunk.category}:{occurrence}:{text_hash}"
         )
 
         conn.execute(
             """INSERT INTO chunks
-               (chunk_id, doc_id, chunk_index, category, heading_path, text, text_hash)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+               (chunk_id, doc_id, chunk_index, category, heading_path, text, token_count, text_hash)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 chunk_id,
                 document_id,
@@ -180,6 +257,7 @@ def index_one_document(
                 chunk.category,
                 chunk.heading_path,
                 chunk.text,
+                estimate_tokens(chunk.text),
                 text_hash,
             ),
         )
@@ -199,6 +277,7 @@ def index_one_document(
         )
 
     return source_hash, len(chunks)
+
 
 def build_index(
     input_path: Path,
@@ -244,7 +323,7 @@ def build_index(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Index one approved HTML documentation file.")
     parser.add_argument("input_path", type=Path)
-    parser.add_argument("--limit", type=int, default=None)    
+    parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--db", type=Path, default=Path("var/rag/index.sqlite"))
     args = parser.parse_args()
     if args.input_path.is_file() and args.input_path.suffix.lower() not in {".html", ".htm"}:
