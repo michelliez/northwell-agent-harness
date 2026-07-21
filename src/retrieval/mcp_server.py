@@ -14,6 +14,19 @@ mcp = FastMCP("rag_retrieval", auth=build_service_auth("rag"))
 
 DEFAULT_RAG_DB_PATH = Path(__file__).resolve().parents[3] / "var" / "rag" / "index.sqlite"
 
+REQUIRED_INDEX_METADATA = frozenset(
+    {
+        "index_version",
+        "schema_version",
+        "parser_version",
+        "chunker_version",
+        "chunk_target_chars",
+        "chunk_hard_max_chars",
+        "doc_count",
+        "chunk_count",
+    }
+)
+
 STOPWORDS = {
     "a",
     "about",
@@ -65,8 +78,124 @@ class SearchColumnsArgs(BaseModel):
     top_k: int = Field(default=10, ge=1)
 
 
+def _db_path() -> Path:
+    return Path(os.getenv("RAG_DB_PATH") or DEFAULT_RAG_DB_PATH).resolve()
+
+
+def validate_rag_db(db_path: Path) -> None:
+    """Validate the RAG database at startup. Raises SystemExit on any failure."""
+    if not db_path.is_file():
+        raise SystemExit(f"RAG database does not exist: {db_path}")
+    if db_path.stat().st_size == 0:
+        raise SystemExit(f"RAG database is empty (0 bytes): {db_path}")
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+    except sqlite3.OperationalError as exc:
+        raise SystemExit(f"Cannot open RAG database {db_path}: {exc}") from exc
+
+    try:
+        cur = conn.cursor()
+
+        present = {
+            row["name"]
+            for row in cur.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        missing = {"docs", "chunks", "chunks_fts", "index_metadata"} - present
+        if missing:
+            raise SystemExit(
+                f"RAG database {db_path} is missing tables: {', '.join(sorted(missing))}"
+            )
+
+        metadata = {
+            str(row["key"]): str(row["value"])
+            for row in cur.execute("SELECT key, value FROM index_metadata").fetchall()
+            if row["value"]
+        }
+        missing_metadata = REQUIRED_INDEX_METADATA - metadata.keys()
+        if missing_metadata:
+            raise SystemExit(
+                f"RAG database {db_path} is missing index metadata: "
+                f"{', '.join(sorted(missing_metadata))}"
+            )
+
+        doc_count = cur.execute("SELECT COUNT(*) FROM docs").fetchone()[0]
+        chunk_count = cur.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        if doc_count < 1:
+            raise SystemExit(f"RAG database {db_path} contains no indexed documents")
+        if chunk_count < 1:
+            raise SystemExit(f"RAG database {db_path} contains no indexed chunks")
+
+        if metadata["doc_count"] != str(doc_count):
+            raise SystemExit(f"RAG database {db_path} document count does not match metadata")
+        if metadata["chunk_count"] != str(chunk_count):
+            raise SystemExit(f"RAG database {db_path} chunk count does not match metadata")
+
+        orphaned_chunk = cur.execute(
+            """
+            SELECT c.chunk_id
+            FROM chunks AS c
+            LEFT JOIN docs AS d ON c.doc_id = d.doc_id
+            WHERE d.doc_id IS NULL
+            LIMIT 1
+            """
+        ).fetchone()
+        if orphaned_chunk is not None:
+            raise SystemExit(
+                f"RAG database {db_path} has a chunk with no matching document"
+                f" (chunk_id={orphaned_chunk['chunk_id']!r})"
+            )
+
+        orphan = cur.execute(
+            """
+            SELECT f.chunk_id
+            FROM chunks_fts AS f
+            LEFT JOIN chunks AS c ON f.chunk_id = c.chunk_id
+            WHERE c.chunk_id IS NULL
+            LIMIT 1
+            """
+        ).fetchone()
+        if orphan is not None:
+            raise SystemExit(
+                f"RAG database {db_path} has an FTS entry with no matching chunk"
+                f" (chunk_id={orphan['chunk_id']!r})"
+            )
+
+        missing_fts = cur.execute(
+            """
+            SELECT c.chunk_id
+            FROM chunks AS c
+            LEFT JOIN chunks_fts AS f ON c.chunk_id = f.chunk_id
+            WHERE f.chunk_id IS NULL
+            LIMIT 1
+            """
+        ).fetchone()
+        if missing_fts is not None:
+            raise SystemExit(
+                f"RAG database {db_path} has a chunk with no matching FTS entry"
+                f" (chunk_id={missing_fts['chunk_id']!r})"
+            )
+
+        fts_count = cur.execute("SELECT COUNT(*) FROM chunks_fts").fetchone()[0]
+        if fts_count != chunk_count:
+            raise SystemExit(
+                f"RAG database {db_path} has {fts_count} FTS entries for "
+                f"{chunk_count} chunks"
+            )
+
+    except SystemExit:
+        raise
+    except sqlite3.DatabaseError as exc:
+        raise SystemExit(f"RAG database {db_path} is corrupt or unreadable: {exc}") from exc
+    finally:
+        conn.close()
+
+
 def get_rag_connection() -> sqlite3.Connection:
-    db_path = Path(os.getenv("RAG_DB_PATH") or DEFAULT_RAG_DB_PATH).resolve()
+    db_path = _db_path()
     if not db_path.is_file():
         raise RuntimeError(f"RAG index does not exist: {db_path}")
     conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
@@ -447,6 +576,7 @@ def search_columns(query: str, top_k: int = 10) -> dict[str, object]:
 
 
 def main() -> None:
+    validate_rag_db(_db_path())
     mcp.run(transport="http", host="localhost", port=8005, path="/mcp")
 
 
