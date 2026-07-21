@@ -24,6 +24,7 @@ agent-harness-eval = "evals.runner:main"
 agent-harness-traces = "trace_viewer.__main__:main"
 agent-harness-rag = "retrieval.mcp_server:main"
 agent-harness-rag-index = "retrieval.indexer:main"
+agent-harness-rag-audit = "retrieval.audit:main"
 
 [build-system]
 requires = ["hatchling"]

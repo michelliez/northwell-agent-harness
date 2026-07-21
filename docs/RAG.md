@@ -245,16 +245,36 @@ chunk_id is the source of truth.
 row_id is not.
 ```
 
-Use deterministic chunk IDs:
+Use deterministic, embedding-stable IDs:
 
 ```text
+doc_id = sha256(normalized_source_path)
+
 chunk_id = sha256(
-  normalized_source_path
+  doc_id
   + heading_path
-  + chunk_index
+  + category
+  + occurrence      (0-based count of prior chunks with the same heading_path + category)
   + text_hash
 )
 ```
+
+Why `doc_id` excludes the file hash:
+
+- Re-indexing a file (content change) must not invalidate all its embeddings.
+- `source_hash` is still stored in `docs` for change detection but not baked into IDs.
+
+Why `chunk_id` uses occurrence instead of chunk_index:
+
+- `chunk_index` is global position in the document and shifts when any earlier chunk is
+  added or removed.
+- `occurrence` is local to a `(heading_path, category)` group and is stable unless chunks
+  within that group change order.
+- A large table split into N child chunks all share the same `heading_path` and `category`;
+  `occurrence=0,1,2,…` distinguishes them without coupling to position elsewhere in the doc.
+
+A chunk retains its `chunk_id` — and therefore its stored embedding — across a re-index run
+as long as its text, heading path, category, and occurrence position are all unchanged.
 
 Why:
 
@@ -262,6 +282,7 @@ Why:
 - FAISS row IDs are internal.
 - NumPy array row positions are internal.
 - Citations and traces need stable IDs.
+- Embeddings are expensive; stable IDs let incremental re-indexing skip unchanged chunks.
 
 Every retrieval result must include:
 
