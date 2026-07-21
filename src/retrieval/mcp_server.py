@@ -9,6 +9,7 @@ from fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
 from mcp_servers.auth import build_service_auth
+from retrieval.index_contract import INDEX_SCHEMA_VERSION
 
 mcp = FastMCP("rag_retrieval", auth=build_service_auth("rag"))
 
@@ -24,6 +25,7 @@ REQUIRED_INDEX_METADATA = frozenset(
         "chunk_hard_max_chars",
         "doc_count",
         "chunk_count",
+        "section_fact_count",
     }
 )
 
@@ -105,8 +107,16 @@ def validate_rag_db(db_path: Path) -> None:
                 f"{', '.join(sorted(missing_metadata))}"
             )
 
+        if metadata["schema_version"] != INDEX_SCHEMA_VERSION:
+            raise SystemExit(
+                f"RAG database {db_path} uses incompatible schema_version "
+                f"{metadata['schema_version']!r}; expected {INDEX_SCHEMA_VERSION!r}. "
+                "Rebuild the index."
+            )
+
         doc_count = cur.execute("SELECT COUNT(*) FROM docs").fetchone()[0]
         chunk_count = cur.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        section_fact_count = cur.execute("SELECT COUNT(*) FROM section_facts").fetchone()[0]
         if doc_count < 1:
             raise SystemExit(f"RAG database {db_path} contains no indexed documents")
         if chunk_count < 1:
@@ -116,6 +126,10 @@ def validate_rag_db(db_path: Path) -> None:
             raise SystemExit(f"RAG database {db_path} document count does not match metadata")
         if metadata["chunk_count"] != str(chunk_count):
             raise SystemExit(f"RAG database {db_path} chunk count does not match metadata")
+        if metadata["section_fact_count"] != str(section_fact_count):
+            raise SystemExit(
+                f"RAG database {db_path} section fact count does not match metadata"
+            )
 
         orphaned_chunk = cur.execute(
             """
@@ -130,6 +144,22 @@ def validate_rag_db(db_path: Path) -> None:
             raise SystemExit(
                 f"RAG database {db_path} has a chunk with no matching document"
                 f" (chunk_id={orphaned_chunk['chunk_id']!r})"
+            )
+
+        orphaned_fact = cur.execute(
+            """
+            SELECT f.doc_id, f.heading_path
+            FROM section_facts AS f
+            LEFT JOIN docs AS d ON f.doc_id = d.doc_id
+            WHERE d.doc_id IS NULL
+            LIMIT 1
+            """
+        ).fetchone()
+        if orphaned_fact is not None:
+            raise SystemExit(
+                f"RAG database {db_path} has a section fact with no matching document"
+                f" (doc_id={orphaned_fact['doc_id']!r}, "
+                f"heading_path={orphaned_fact['heading_path']!r})"
             )
 
         orphan = cur.execute(

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from retrieval.index_contract import INDEX_SCHEMA_VERSION
 from retrieval.indexer import build_index
 from retrieval.mcp_server import validate_rag_db
 
@@ -98,6 +99,50 @@ def test_missing_section_facts_table_raises(tmp_path: Path, valid_db: Path) -> N
     conn.commit()
     conn.close()
     with pytest.raises(SystemExit, match="missing tables"):
+        validate_rag_db(db)
+
+
+def test_incompatible_schema_version_raises(tmp_path: Path, valid_db: Path) -> None:
+    db = _copy(valid_db, tmp_path / "old-schema.sqlite")
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "UPDATE index_metadata SET value = ? WHERE key = 'schema_version'",
+        (f"{INDEX_SCHEMA_VERSION}-old",),
+    )
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(SystemExit, match="incompatible schema_version"):
+        validate_rag_db(db)
+
+
+def test_section_fact_count_mismatch_raises(tmp_path: Path, valid_db: Path) -> None:
+    db = _copy(valid_db, tmp_path / "fact-count.sqlite")
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "UPDATE index_metadata SET value = '99' WHERE key = 'section_fact_count'"
+    )
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(SystemExit, match="section fact count does not match metadata"):
+        validate_rag_db(db)
+
+
+def test_orphaned_section_fact_raises(tmp_path: Path, valid_db: Path) -> None:
+    db = _copy(valid_db, tmp_path / "orphan-fact.sqlite")
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "INSERT INTO section_facts (doc_id, heading_path, fact) VALUES (?, ?, ?)",
+        ("missing-doc", "Missing > Section", "present_but_unavailable"),
+    )
+    conn.execute(
+        "UPDATE index_metadata SET value = '1' WHERE key = 'section_fact_count'"
+    )
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(SystemExit, match="section fact with no matching document"):
         validate_rag_db(db)
 
 

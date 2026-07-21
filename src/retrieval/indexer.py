@@ -10,12 +10,13 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 
+from retrieval.index_contract import INDEX_SCHEMA_VERSION
+
 # ~800 tokens at 4 chars/token; rows are batched until this limit before a new chunk starts
 CHUNK_TARGET_CHARS = 3200
 # ~1200 tokens; no indexed chunk may exceed this value
 CHUNK_HARD_MAX_CHARS = 4800
 
-INDEX_SCHEMA_VERSION = "rag-sqlite-v3"
 PARSER_VERSION = "clarity-html-v2"
 CHUNKER_VERSION = "section-table-v3"
 
@@ -133,6 +134,12 @@ def extract_chunks(
             heading = f"{document_title} > {section}"
             value = subheader.find_next_sibling()
             if value is None:
+                facts.append(
+                    SectionFact(
+                        heading_path=heading,
+                        fact="present_but_unavailable",
+                    )
+                )
                 continue
             if isinstance(value, Tag) and value.name == "span" and "NA" in css_classes(value):
                 facts.append(SectionFact(heading_path=heading, fact="present_but_unavailable"))
@@ -273,11 +280,11 @@ def discover_html_files(input_path: Path) -> list[Path]:
 def create_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
-        DROP TABLE IF EXISTS index_metadata;
-        DROP TABLE IF EXISTS docs;
-        DROP TABLE IF EXISTS chunks;
-        DROP TABLE IF EXISTS chunks_fts;
         DROP TABLE IF EXISTS section_facts;
+        DROP TABLE IF EXISTS chunks_fts;
+        DROP TABLE IF EXISTS chunks;
+        DROP TABLE IF EXISTS docs;
+        DROP TABLE IF EXISTS index_metadata;
 
         CREATE TABLE index_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
@@ -409,6 +416,7 @@ def build_index(
     total_chunks = 0
 
     with sqlite3.connect(db_path) as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
         create_schema(conn)
 
         for html_file in html_files:
@@ -424,6 +432,10 @@ def build_index(
                 }
             )
             total_chunks += chunk_count
+
+        total_section_facts = conn.execute(
+            "SELECT COUNT(*) FROM section_facts"
+        ).fetchone()[0]
 
         version_manifest = {
             "schema_version": INDEX_SCHEMA_VERSION,
@@ -445,6 +457,7 @@ def build_index(
             "chunk_hard_max_chars": str(CHUNK_HARD_MAX_CHARS),
             "doc_count": str(len(html_files)),
             "chunk_count": str(total_chunks),
+            "section_fact_count": str(total_section_facts),
         }
         conn.executemany(
             "INSERT INTO index_metadata (key, value) VALUES (?, ?)",

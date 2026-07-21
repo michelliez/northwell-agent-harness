@@ -347,11 +347,16 @@ def test_extract_chunks_skips_none_sibling(tmp_path: Path) -> None:
 
 
 def test_every_content_row_covered_by_chunk() -> None:
-    """Every data row in a content table must appear in at least one chunk."""
-    markers = [f"COVERAGE_ROW_{i:03d}" for i in range(12)]
+    """Every owned cell must appear exactly once in the chunk output."""
+    markers = [
+        marker
+        for i in range(12)
+        for marker in (f"COVERAGE_FIELD_{i:03d}", f"COVERAGE_VALUE_{i:03d}")
+    ]
     rows_html = "".join(
-        f"<tr><td>Field{i}</td><td>{m} description text</td></tr>"
-        for i, m in enumerate(markers)
+        f"<tr><td>COVERAGE_FIELD_{i:03d}</td>"
+        f"<td>COVERAGE_VALUE_{i:03d} description text</td></tr>"
+        for i in range(12)
     )
     _title, chunks, _facts = extract_chunks(
         f"""<html><head><title>Coverage</title></head><body>
@@ -363,17 +368,22 @@ def test_every_content_row_covered_by_chunk() -> None:
         fallback_title="coverage",
     )
     all_text = " ".join(c.text for c in chunks)
-    missing = [m for m in markers if m not in all_text]
-    assert not missing, f"rows with no chunk coverage: {missing}"
+    wrong_counts = {marker: all_text.count(marker) for marker in markers if all_text.count(marker) != 1}
+    assert not wrong_counts, f"cells with incorrect chunk coverage: {wrong_counts}"
 
 
 def test_every_content_row_covered_after_split() -> None:
-    """No row must be lost when a large table is split across multiple chunks."""
+    """Every owned cell must appear once after a table is split into chunks."""
     count = 120  # enough rows to force table_to_chunks to split
-    markers = [f"SPLIT_ROW_{i:04d}" for i in range(count)]
+    markers = [
+        marker
+        for i in range(count)
+        for marker in (f"SPLIT_FIELD_{i:04d}", f"SPLIT_VALUE_{i:04d}")
+    ]
     rows_html = "".join(
-        f"<tr><td>Field{i}</td><td>{m} extra text to push past the split threshold</td></tr>"
-        for i, m in enumerate(markers)
+        f"<tr><td>SPLIT_FIELD_{i:04d}</td>"
+        f"<td>SPLIT_VALUE_{i:04d} extra text to push past the split threshold</td></tr>"
+        for i in range(count)
     )
     _title, chunks, _facts = extract_chunks(
         f"""<html><head><title>Split</title></head><body>
@@ -386,8 +396,8 @@ def test_every_content_row_covered_after_split() -> None:
     )
     assert len(chunks) > 1, "test requires splitting to occur"
     all_text = " ".join(c.text for c in chunks)
-    missing = [m for m in markers if m not in all_text]
-    assert not missing, f"rows lost after splitting: {missing}"
+    wrong_counts = {marker: all_text.count(marker) for marker in markers if all_text.count(marker) != 1}
+    assert not wrong_counts, f"cells with incorrect split coverage: {wrong_counts}"
 
 
 # ---------------------------------------------------------------------------
@@ -409,6 +419,23 @@ def test_section_fact_recorded_for_na_span() -> None:
     assert chunks == []
     assert len(facts) == 1
     assert facts[0] == SectionFact(heading_path="T > Missing", fact="present_but_unavailable")
+
+
+def test_section_fact_recorded_when_section_has_no_sibling() -> None:
+    """A declared section with no following value must produce a SectionFact."""
+    _title, chunks, facts = extract_chunks(
+        """<html><head><title>T</title></head><body>
+        <div class="header">T</div>
+        <div id="oContent">
+          <table class="SubHeader3"><tr><td id="_Missing">Missing</td></tr></table>
+        </div></body></html>""",
+        fallback_title="t",
+    )
+
+    assert chunks == []
+    assert facts == [
+        SectionFact(heading_path="T > Missing", fact="present_but_unavailable")
+    ]
 
 
 def test_section_facts_stored_in_db(tmp_path: Path) -> None:
