@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
 
-from retrieval.audit import AuditReport, run_audit
+from retrieval.audit import AuditReport, _pct, print_report, run_audit
 from retrieval.indexer import CHUNK_HARD_MAX_CHARS, build_index
 
 _SAMPLE_HTML = """\
@@ -40,6 +41,23 @@ def test_run_audit_returns_report(indexed_db: Path) -> None:
     assert report.over_limit_count == 0  # sample data is small
 
 
+def test_print_report_accepts_character_percentiles(
+    indexed_db: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    print_report(run_audit(indexed_db))
+
+    output = capsys.readouterr().out
+    assert "RAG Corpus Audit" in output
+    assert "~tokens" in output
+
+
+def test_percentile_uses_nearest_rank() -> None:
+    assert _pct([10, 20], 50) == 10
+    assert _pct([10, 20], 100) == 20
+    with pytest.raises(ValueError, match="between 1 and 100"):
+        _pct([10], 0)
+
+
 def test_audit_category_breakdown(indexed_db: Path) -> None:
     report = run_audit(indexed_db)
 
@@ -60,9 +78,8 @@ def test_audit_raises_on_missing_db(tmp_path: Path) -> None:
 
 
 def test_audit_detects_over_limit(tmp_path: Path) -> None:
-    """A chunk exceeding CHUNK_HARD_MAX_CHARS must be counted in over_limit_count."""
-    # Build an index with a single very-long text (fallback document chunk)
-    long_text = "word " * (CHUNK_HARD_MAX_CHARS // 4)  # guaranteed to exceed limit
+    """A malformed legacy chunk above the hard limit must be reported."""
+    long_text = "word " * (CHUNK_HARD_MAX_CHARS // 4)
     html_path = tmp_path / "long.html"
     html_path.write_text(
         f"<html><body>{long_text}</body></html>",
@@ -70,6 +87,14 @@ def test_audit_detects_over_limit(tmp_path: Path) -> None:
     )
     db_path = tmp_path / "rag.sqlite"
     build_index(html_path, db_path)
+
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "UPDATE chunks SET text = ? WHERE chunk_index = 0",
+        ("x" * (CHUNK_HARD_MAX_CHARS + 1),),
+    )
+    conn.commit()
+    conn.close()
 
     report = run_audit(db_path)
     assert report.over_limit_count >= 1

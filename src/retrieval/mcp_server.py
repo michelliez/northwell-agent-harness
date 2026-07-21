@@ -14,6 +14,19 @@ mcp = FastMCP("rag_retrieval", auth=build_service_auth("rag"))
 
 DEFAULT_RAG_DB_PATH = Path(__file__).resolve().parents[3] / "var" / "rag" / "index.sqlite"
 
+REQUIRED_INDEX_METADATA = frozenset(
+    {
+        "index_version",
+        "schema_version",
+        "parser_version",
+        "chunker_version",
+        "chunk_target_chars",
+        "chunk_hard_max_chars",
+        "doc_count",
+        "chunk_count",
+    }
+)
+
 STOPWORDS = {
     "a",
     "about",
@@ -80,11 +93,17 @@ def validate_rag_db(db_path: Path) -> None:
                 f"RAG database {db_path} is missing tables: {', '.join(sorted(missing))}"
             )
 
-        row = cur.execute(
-            "SELECT value FROM index_metadata WHERE key = 'index_version' LIMIT 1"
-        ).fetchone()
-        if row is None or not row["value"]:
-            raise SystemExit(f"RAG database {db_path} is missing index_version metadata")
+        metadata = {
+            str(row["key"]): str(row["value"])
+            for row in cur.execute("SELECT key, value FROM index_metadata").fetchall()
+            if row["value"]
+        }
+        missing_metadata = REQUIRED_INDEX_METADATA - metadata.keys()
+        if missing_metadata:
+            raise SystemExit(
+                f"RAG database {db_path} is missing index metadata: "
+                f"{', '.join(sorted(missing_metadata))}"
+            )
 
         doc_count = cur.execute("SELECT COUNT(*) FROM docs").fetchone()[0]
         chunk_count = cur.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
@@ -92,6 +111,26 @@ def validate_rag_db(db_path: Path) -> None:
             raise SystemExit(f"RAG database {db_path} contains no indexed documents")
         if chunk_count < 1:
             raise SystemExit(f"RAG database {db_path} contains no indexed chunks")
+
+        if metadata["doc_count"] != str(doc_count):
+            raise SystemExit(f"RAG database {db_path} document count does not match metadata")
+        if metadata["chunk_count"] != str(chunk_count):
+            raise SystemExit(f"RAG database {db_path} chunk count does not match metadata")
+
+        orphaned_chunk = cur.execute(
+            """
+            SELECT c.chunk_id
+            FROM chunks AS c
+            LEFT JOIN docs AS d ON c.doc_id = d.doc_id
+            WHERE d.doc_id IS NULL
+            LIMIT 1
+            """
+        ).fetchone()
+        if orphaned_chunk is not None:
+            raise SystemExit(
+                f"RAG database {db_path} has a chunk with no matching document"
+                f" (chunk_id={orphaned_chunk['chunk_id']!r})"
+            )
 
         orphan = cur.execute(
             """
@@ -106,6 +145,28 @@ def validate_rag_db(db_path: Path) -> None:
             raise SystemExit(
                 f"RAG database {db_path} has an FTS entry with no matching chunk"
                 f" (chunk_id={orphan['chunk_id']!r})"
+            )
+
+        missing_fts = cur.execute(
+            """
+            SELECT c.chunk_id
+            FROM chunks AS c
+            LEFT JOIN chunks_fts AS f ON c.chunk_id = f.chunk_id
+            WHERE f.chunk_id IS NULL
+            LIMIT 1
+            """
+        ).fetchone()
+        if missing_fts is not None:
+            raise SystemExit(
+                f"RAG database {db_path} has a chunk with no matching FTS entry"
+                f" (chunk_id={missing_fts['chunk_id']!r})"
+            )
+
+        fts_count = cur.execute("SELECT COUNT(*) FROM chunks_fts").fetchone()[0]
+        if fts_count != chunk_count:
+            raise SystemExit(
+                f"RAG database {db_path} has {fts_count} FTS entries for "
+                f"{chunk_count} chunks"
             )
 
     except SystemExit:

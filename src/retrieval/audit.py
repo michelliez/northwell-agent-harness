@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from retrieval.indexer import CHUNK_HARD_MAX_CHARS, estimate_tokens
+from retrieval.indexer import CHUNK_HARD_MAX_CHARS, estimate_tokens_from_chars
 
 DEFAULT_RAG_DB_PATH = Path(__file__).resolve().parents[3] / "var" / "rag" / "index.sqlite"
 
@@ -34,7 +35,9 @@ def _pct(sorted_vals: list[int], p: int) -> int:
     """p-th percentile (1–100) from a sorted list using the nearest-rank method."""
     if not sorted_vals:
         return 0
-    idx = min(len(sorted_vals) - 1, (len(sorted_vals) * p) // 100)
+    if not 1 <= p <= 100:
+        raise ValueError("p must be between 1 and 100")
+    idx = math.ceil(len(sorted_vals) * p / 100) - 1
     return sorted_vals[idx]
 
 
@@ -119,7 +122,7 @@ def print_report(report: AuditReport) -> None:
         ("p99", report.char_p99),
         ("max", report.char_max),
     ]:
-        tok = estimate_tokens(val)  # type: ignore[arg-type]
+        tok = estimate_tokens_from_chars(val)
         flag = "  *** OVER LIMIT" if val > CHUNK_HARD_MAX_CHARS else ""
         print(f"  {label}  : {val:6,} chars  ~{tok:5,} tok{flag}")
 

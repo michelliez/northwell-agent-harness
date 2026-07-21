@@ -5,8 +5,14 @@ from pathlib import Path
 
 import pytest
 
+from retrieval import indexer as indexer_module
 from retrieval import mcp_server
-from retrieval.indexer import CHUNK_TARGET_CHARS, build_index, extract_chunks
+from retrieval.indexer import (
+    CHUNK_HARD_MAX_CHARS,
+    CHUNK_TARGET_CHARS,
+    build_index,
+    extract_chunks,
+)
 
 
 def test_build_and_search_rag_index(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -80,6 +86,22 @@ def test_section_empty_not_indexed(tmp_path: Path) -> None:
     assert "section_empty" not in categories
 
 
+def test_document_with_only_empty_structured_sections_has_no_fallback_chunk() -> None:
+    _title, chunks = extract_chunks(
+        """
+        <html><head><title>Empty</title></head><body>
+        <div class="header">Empty</div>
+        <div id="oContent">
+          <table class="SubHeader3"><tr><td id="_Empty">Empty</td></tr></table>
+          <span class="NA">No data</span>
+        </div></body></html>
+        """,
+        fallback_title="empty",
+    )
+
+    assert chunks == []
+
+
 def test_large_table_splits_into_multiple_chunks(tmp_path: Path) -> None:
     """A table whose rows sum past CHUNK_TARGET_CHARS must produce more than one chunk."""
     # Each row ~65 chars; 80 rows ≈ 5,200 chars > CHUNK_TARGET_CHARS
@@ -108,7 +130,32 @@ def test_large_table_splits_into_multiple_chunks(tmp_path: Path) -> None:
     conn = sqlite3.connect(str(db_path))
     max_chars = conn.execute("SELECT MAX(length(text)) FROM chunks").fetchone()[0]
     conn.close()
-    assert max_chars <= CHUNK_TARGET_CHARS * 2  # no runaway chunk
+    assert max_chars <= CHUNK_TARGET_CHARS
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        "<html><body>" + ("fallback text " * 1000) + "</body></html>",
+        (
+            "<html><body><div id='oContent'><table class='KeyValue'>"
+            f"<tr><td>{'metadata value ' * 1000}</td></tr>"
+            "</table></div></body></html>"
+        ),
+        (
+            "<html><body><div id='oContent'>"
+            "<table class='SubHeader3'><tr><td id='_Long'>Long</td></tr></table>"
+            f"<table class='SubList'><tr><td>{'single row value ' * 1000}</td></tr></table>"
+            "</div></body></html>"
+        ),
+    ],
+)
+def test_all_chunk_sources_enforce_size_limit(html: str) -> None:
+    _title, chunks = extract_chunks(html, fallback_title="long")
+
+    assert len(chunks) > 1
+    assert all(0 < len(chunk.text) <= CHUNK_TARGET_CHARS for chunk in chunks)
+    assert all(len(chunk.text) <= CHUNK_HARD_MAX_CHARS for chunk in chunks)
 
 
 def test_token_count_stored(tmp_path: Path) -> None:
@@ -209,6 +256,32 @@ def test_chunk_id_stable_across_reindex(tmp_path: Path) -> None:
         conn2.close()
 
     assert id_v1 == id_v2
+
+
+def test_index_version_changes_with_chunker_version(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    html_path = tmp_path / "page.html"
+    html_path.write_text("<html><body>stable content</body></html>", encoding="utf-8")
+
+    version_v1, _, _ = build_index(html_path, tmp_path / "v1.sqlite")
+    monkeypatch.setattr(indexer_module, "CHUNKER_VERSION", "section-table-test-v3")
+    version_v2, _, _ = build_index(html_path, tmp_path / "v2.sqlite")
+
+    assert version_v1 != version_v2
+
+
+def test_index_version_changes_when_source_path_changes(tmp_path: Path) -> None:
+    first = tmp_path / "first.html"
+    second = tmp_path / "second.html"
+    content = "<html><body>identical content</body></html>"
+    first.write_text(content, encoding="utf-8")
+    second.write_text(content, encoding="utf-8")
+
+    version_first, _, _ = build_index(first, tmp_path / "first.sqlite")
+    version_second, _, _ = build_index(second, tmp_path / "second.sqlite")
+
+    assert version_first != version_second
 
 
 def test_extract_chunks_skips_none_sibling(tmp_path: Path) -> None:

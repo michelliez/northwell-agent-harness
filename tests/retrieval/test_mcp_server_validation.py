@@ -102,3 +102,66 @@ def test_orphaned_fts_raises(tmp_path: Path, valid_db: Path) -> None:
     conn.close()
     with pytest.raises(SystemExit, match="FTS entry with no matching chunk"):
         validate_rag_db(db)
+
+
+def test_chunk_without_fts_entry_raises(tmp_path: Path, valid_db: Path) -> None:
+    db = _copy(valid_db, tmp_path / "missing-fts.sqlite")
+    conn = sqlite3.connect(str(db))
+    conn.execute("DELETE FROM chunks_fts")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(SystemExit, match="chunk with no matching FTS entry"):
+        validate_rag_db(db)
+
+
+def test_chunk_without_document_raises(tmp_path: Path, valid_db: Path) -> None:
+    db = _copy(valid_db, tmp_path / "orphan-chunk.sqlite")
+    conn = sqlite3.connect(str(db))
+    chunk_id = "orphan-chunk"
+    conn.execute(
+        """INSERT INTO chunks
+           (chunk_id, doc_id, chunk_index, category, heading_path, text, token_count, text_hash)
+           VALUES (?, 'missing-doc', 2, 'general', 'Missing', 'orphan text', 3, 'hash')""",
+        (chunk_id,),
+    )
+    conn.execute(
+        "INSERT INTO chunks_fts(chunk_id, source_path, title, category, heading_path, text) "
+        "VALUES (?, 'missing.html', 'Missing', 'general', 'Missing', 'orphan text')",
+        (chunk_id,),
+    )
+    conn.execute("UPDATE index_metadata SET value = '2' WHERE key = 'chunk_count'")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(SystemExit, match="chunk with no matching document"):
+        validate_rag_db(db)
+
+
+def test_duplicate_fts_entry_raises(tmp_path: Path, valid_db: Path) -> None:
+    db = _copy(valid_db, tmp_path / "duplicate-fts.sqlite")
+    conn = sqlite3.connect(str(db))
+    row = conn.execute(
+        "SELECT chunk_id, source_path, title, category, heading_path, text FROM chunks_fts LIMIT 1"
+    ).fetchone()
+    conn.execute(
+        "INSERT INTO chunks_fts(chunk_id, source_path, title, category, heading_path, text) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        row,
+    )
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(SystemExit, match="FTS entries"):
+        validate_rag_db(db)
+
+
+def test_manifest_count_mismatch_raises(tmp_path: Path, valid_db: Path) -> None:
+    db = _copy(valid_db, tmp_path / "count-mismatch.sqlite")
+    conn = sqlite3.connect(str(db))
+    conn.execute("UPDATE index_metadata SET value = '99' WHERE key = 'chunk_count'")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(SystemExit, match="chunk count does not match metadata"):
+        validate_rag_db(db)

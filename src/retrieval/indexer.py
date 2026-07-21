@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,8 +12,12 @@ from bs4.element import Tag
 
 # ~800 tokens at 4 chars/token; rows are batched until this limit before a new chunk starts
 CHUNK_TARGET_CHARS = 3200
-# ~1200 tokens; a single indivisible row that exceeds this will still be emitted as-is
+# ~1200 tokens; no indexed chunk may exceed this value
 CHUNK_HARD_MAX_CHARS = 4800
+
+INDEX_SCHEMA_VERSION = "rag-sqlite-v2"
+PARSER_VERSION = "clarity-html-v2"
+CHUNKER_VERSION = "section-table-v2"
 
 
 @dataclass(frozen=True)
@@ -28,7 +33,52 @@ def sha256_text(text: str) -> str:
 
 def estimate_tokens(text: str) -> int:
     """Rough token estimate: 4 chars per token (English prose approximation)."""
-    return max(1, len(text) // 4)
+    return estimate_tokens_from_chars(len(text))
+
+
+def estimate_tokens_from_chars(char_count: int) -> int:
+    """Estimate tokens from a non-negative character count."""
+    if char_count < 0:
+        raise ValueError("char_count must be non-negative")
+    return max(1, char_count // 4)
+
+
+def split_text_to_limit(text: str, *, max_chars: int = CHUNK_TARGET_CHARS) -> list[str]:
+    """Split text at table separators or whitespace without exceeding max_chars."""
+    if max_chars < 1:
+        raise ValueError("max_chars must be at least 1")
+    remaining = text.strip()
+    pieces: list[str] = []
+    while len(remaining) > max_chars:
+        separator_cut = remaining.rfind(" | ", 0, max_chars + 1)
+        whitespace_cut = remaining.rfind(" ", 0, max_chars + 1)
+        cut = max(separator_cut, whitespace_cut)
+        if cut < 1:
+            cut = max_chars
+        piece = remaining[:cut].strip()
+        if piece:
+            pieces.append(piece)
+        remaining = remaining[cut:].lstrip(" |").strip()
+    if remaining:
+        pieces.append(remaining)
+    return pieces
+
+
+def bound_chunks(chunks: list[IndexedChunk]) -> list[IndexedChunk]:
+    """Enforce the configured target and hard maximum on every indexed chunk."""
+    bounded: list[IndexedChunk] = []
+    for chunk in chunks:
+        for text in split_text_to_limit(chunk.text):
+            if len(text) > CHUNK_HARD_MAX_CHARS:
+                raise ValueError("chunk splitting produced text above CHUNK_HARD_MAX_CHARS")
+            bounded.append(
+                IndexedChunk(
+                    category=chunk.category,
+                    heading_path=chunk.heading_path,
+                    text=text,
+                )
+            )
+    return bounded
 
 
 def extract_chunks(html: str, *, fallback_title: str) -> tuple[str, list[IndexedChunk]]:
@@ -39,6 +89,7 @@ def extract_chunks(html: str, *, fallback_title: str) -> tuple[str, list[Indexed
 
     title = soup.title.get_text(" ", strip=True) if soup.title else fallback_title
     chunks: list[IndexedChunk] = []
+    saw_structured_section = False
     for content_div in soup.find_all("div", id="oContent"):
         header = content_div.find_previous("div", class_="header")
         document_title = header.get_text(" ", strip=True) if header else title
@@ -50,6 +101,7 @@ def extract_chunks(html: str, *, fallback_title: str) -> tuple[str, list[Indexed
                 chunks.append(IndexedChunk("metadata", document_title, text))
 
         for subheader in content_div.find_all("table", class_="SubHeader3"):
+            saw_structured_section = True
             section_cell = subheader.find("td", id=True)
             section = (
                 str(section_cell.get("id", "unnamed")).strip("_")
@@ -67,11 +119,11 @@ def extract_chunks(html: str, *, fallback_title: str) -> tuple[str, list[Indexed
             elif str(value).strip() == "None":
                 continue  # section_empty — no retrieval value
 
-    if not chunks:
+    if not chunks and not saw_structured_section:
         text = soup.get_text(" ", strip=True)
         if text:
             chunks.append(IndexedChunk("document", title, text))
-    return title, chunks
+    return title, bound_chunks(chunks)
 
 
 def css_classes(tag: Tag) -> list[str]:
@@ -161,7 +213,16 @@ def table_to_chunks(category: str, heading: str, table: Tag) -> list[IndexedChun
         parts = ([header_str] + batch) if header_str else batch
         chunks.append(IndexedChunk(category=category, heading_path=heading, text=" | ".join(parts)))
 
-    return chunks
+    return bound_chunks(chunks)
+
+
+def normalized_source_path(html_path: Path, corpus_root: Path) -> str:
+    """Return a stable, platform-independent corpus-relative source path."""
+    try:
+        relative_path = html_path.relative_to(corpus_root)
+    except ValueError:
+        relative_path = Path(html_path.name)
+    return relative_path.as_posix()
 
 
 def discover_html_files(input_path: Path) -> list[Path]:
@@ -219,10 +280,7 @@ def index_one_document(
     source_hash = hashlib.sha256(html_bytes).hexdigest()
     title, chunks = extract_chunks(html, fallback_title=html_path.stem)
 
-    try:
-        source_path = str(html_path.relative_to(corpus_root))
-    except ValueError:
-        source_path = html_path.name
+    source_path = normalized_source_path(html_path, corpus_root)
 
     # doc_id is path-only so it survives content changes across re-indexing runs
     document_id = sha256_text(source_path)
@@ -296,7 +354,7 @@ def build_index(
     corpus_root = input_path if input_path.is_dir() else input_path.parent
 
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    source_hashes: list[str] = []
+    source_fingerprints: list[dict[str, str]] = []
     total_chunks = 0
 
     with sqlite3.connect(db_path) as conn:
@@ -308,13 +366,38 @@ def build_index(
                 html_file,
                 corpus_root=corpus_root,
             )
-            source_hashes.append(source_hash)
+            source_fingerprints.append(
+                {
+                    "source_path": normalized_source_path(html_file, corpus_root),
+                    "source_hash": source_hash,
+                }
+            )
             total_chunks += chunk_count
 
-        index_version = sha256_text("".join(source_hashes))
-        conn.execute(
-            "INSERT INTO index_metadata (key, value) VALUES ('index_version', ?)",
-            (index_version,),
+        version_manifest = {
+            "schema_version": INDEX_SCHEMA_VERSION,
+            "parser_version": PARSER_VERSION,
+            "chunker_version": CHUNKER_VERSION,
+            "chunk_target_chars": CHUNK_TARGET_CHARS,
+            "chunk_hard_max_chars": CHUNK_HARD_MAX_CHARS,
+            "sources": source_fingerprints,
+        }
+        index_version = sha256_text(
+            json.dumps(version_manifest, sort_keys=True, separators=(",", ":"))
+        )
+        metadata = {
+            "index_version": index_version,
+            "schema_version": INDEX_SCHEMA_VERSION,
+            "parser_version": PARSER_VERSION,
+            "chunker_version": CHUNKER_VERSION,
+            "chunk_target_chars": str(CHUNK_TARGET_CHARS),
+            "chunk_hard_max_chars": str(CHUNK_HARD_MAX_CHARS),
+            "doc_count": str(len(html_files)),
+            "chunk_count": str(total_chunks),
+        }
+        conn.executemany(
+            "INSERT INTO index_metadata (key, value) VALUES (?, ?)",
+            metadata.items(),
         )
 
     return index_version, len(html_files), total_chunks
