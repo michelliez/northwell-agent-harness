@@ -168,6 +168,7 @@ def test_nested_table_rows_and_cells_are_processed_once() -> None:
     soup = BeautifulSoup(
         """
         <table class="SubList List">
+          <tbody>
           <tr><th>Name</th><th>Value</th></tr>
           <tr>
             <td class="T1Head">Outer row one</td>
@@ -178,6 +179,7 @@ def test_nested_table_rows_and_cells_are_processed_once() -> None:
             </td>
           </tr>
           <tr><td>Outer row two</td><td>Second value</td></tr>
+          </tbody>
         </table>
         """,
         "html.parser",
