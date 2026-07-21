@@ -10,6 +10,10 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 
+#Parallel parsing
+import os
+from concurrent.futures import ProcessPoolExecutor
+
 # ~800 tokens at 4 chars/token; rows are batched until this limit before a new chunk starts
 CHUNK_TARGET_CHARS = 3200
 # ~1200 tokens; no indexed chunk may exceed this value
@@ -25,6 +29,13 @@ class IndexedChunk:
     category: str
     heading_path: str
     text: str
+
+@dataclass(frozen=True)
+class ParsedDocument:
+    source_path: str
+    source_hash: str
+    title: str
+    chunks: list[IndexedChunk]
 
 
 def sha256_text(text: str) -> str:
@@ -268,26 +279,39 @@ def create_schema(conn: sqlite3.Connection) -> None:
         """
     )
 
-
-def index_one_document(
-    conn: sqlite3.Connection,
+def parse_one_document(
     html_path: Path,
     *,
     corpus_root: Path,
-) -> tuple[str, int]:
+) -> ParsedDocument:
     html_bytes = html_path.read_bytes()
     html = html_bytes.decode("utf-8", errors="replace")
     source_hash = hashlib.sha256(html_bytes).hexdigest()
     title, chunks = extract_chunks(html, fallback_title=html_path.stem)
-
     source_path = normalized_source_path(html_path, corpus_root)
 
+    return ParsedDocument(
+        source_path=source_path,
+        source_hash=source_hash,
+        title=title,
+        chunks=chunks,
+    )
+
+def parse_one_document_task(args: tuple[Path, Path]) -> ParsedDocument:
+    html_path, corpus_root = args
+    return parse_one_document(html_path, corpus_root=corpus_root)
+
+
+def insert_parsed_document(
+    conn: sqlite3.Connection,
+    parsed: ParsedDocument,
+) -> tuple[str, int]:
     # doc_id is path-only so it survives content changes across re-indexing runs
-    document_id = sha256_text(source_path)
+    document_id = sha256_text(parsed.source_path)
 
     conn.execute(
         "INSERT INTO docs (doc_id, source_path, title, source_hash) VALUES (?, ?, ?, ?)",
-        (document_id, source_path, title, source_hash),
+        (document_id, parsed.source_path, parsed.title, parsed.source_hash),
     )
 
     # occurrence counts how many prior chunks share the same (heading_path, category) pair.
@@ -295,7 +319,7 @@ def index_one_document(
     # occurrence=0,1,2,… distinguishes them.  A chunk retains its chunk_id across re-indexing
     # as long as its text, heading, category, and occurrence position are unchanged.
     occurrence_counter: dict[tuple[str, str], int] = {}
-    for chunk_index, chunk in enumerate(chunks):
+    for chunk_index, chunk in enumerate(parsed.chunks):
         text_hash = sha256_text(chunk.text)
         occ_key = (chunk.heading_path, chunk.category)
         occurrence = occurrence_counter.get(occ_key, 0)
@@ -326,15 +350,18 @@ def index_one_document(
                VALUES (?, ?, ?, ?, ?, ?)""",
             (
                 chunk_id,
-                source_path,
-                title,
+                parsed.source_path,
+                parsed.title,
                 chunk.category,
                 chunk.heading_path,
                 chunk.text,
             ),
         )
 
-    return source_hash, len(chunks)
+    return parsed.source_hash, len(parsed.chunks)
+
+def batched(items: list[Path], size: int) -> list[list[Path]]:
+    return [items[i : i + size] for i in range(0, len(items), size)]
 
 
 def build_index(
@@ -342,6 +369,8 @@ def build_index(
     db_path: Path,
     *,
     limit: int | None = None,
+    workers: int | None = None,
+    batch_size: int = 500,
 ) -> tuple[str, int, int]:
     html_files = discover_html_files(input_path)
 
@@ -350,6 +379,13 @@ def build_index(
 
     if not html_files:
         raise ValueError(f"No HTML files found under {input_path}")
+
+    if batch_size < 1:
+        raise ValueError("batch_size must be at least 1")
+
+    worker_count = workers or min(os.cpu_count() or 1, 8)
+    if worker_count < 1:
+        raise ValueError("workers must be at least 1")
 
     corpus_root = input_path if input_path.is_dir() else input_path.parent
 
@@ -360,19 +396,33 @@ def build_index(
     with sqlite3.connect(db_path) as conn:
         create_schema(conn)
 
-        for html_file in html_files:
-            source_hash, chunk_count = index_one_document(
-                conn,
-                html_file,
-                corpus_root=corpus_root,
-            )
-            source_fingerprints.append(
-                {
-                    "source_path": normalized_source_path(html_file, corpus_root),
-                    "source_hash": source_hash,
-                }
-            )
-            total_chunks += chunk_count
+        for batch in batched(html_files, batch_size):
+            tasks = [(html_file, corpus_root) for html_file in batch]
+
+            if worker_count == 1:
+                parsed_documents = (parse_one_document_task(task) for task in tasks)
+                for parsed in parsed_documents:
+                    source_hash, chunk_count = insert_parsed_document(conn, parsed)
+                    source_fingerprints.append(
+                        {
+                            "source_path": parsed.source_path,
+                            "source_hash": source_hash,
+                        }
+                    )
+                    total_chunks += chunk_count
+            else:
+                with ProcessPoolExecutor(max_workers=worker_count) as pool:
+                    for parsed in pool.map(parse_one_document_task, tasks):
+                        source_hash, chunk_count = insert_parsed_document(conn, parsed)
+                        source_fingerprints.append(
+                            {
+                                "source_path": parsed.source_path,
+                                "source_hash": source_hash,
+                            }
+                        )
+                        total_chunks += chunk_count
+
+            conn.commit()
 
         version_manifest = {
             "schema_version": INDEX_SCHEMA_VERSION,
@@ -406,7 +456,9 @@ def build_index(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Index one approved HTML documentation file.")
     parser.add_argument("input_path", type=Path)
-    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--limit", type=int, default=None)    
+    parser.add_argument("--workers", type=int, default=None)
+    parser.add_argument("--bs", type=int, default=500)
     parser.add_argument("--db", type=Path, default=Path("var/rag/index.sqlite"))
     args = parser.parse_args()
     if args.input_path.is_file() and args.input_path.suffix.lower() not in {".html", ".htm"}:
@@ -416,6 +468,8 @@ def main() -> None:
         args.input_path,
         args.db,
         limit=args.limit,
+        workers=args.workers,
+        batch_size=args.bs,
     )
 
     print(
