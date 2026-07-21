@@ -15,9 +15,9 @@ CHUNK_TARGET_CHARS = 3200
 # ~1200 tokens; no indexed chunk may exceed this value
 CHUNK_HARD_MAX_CHARS = 4800
 
-INDEX_SCHEMA_VERSION = "rag-sqlite-v2"
+INDEX_SCHEMA_VERSION = "rag-sqlite-v3"
 PARSER_VERSION = "clarity-html-v2"
-CHUNKER_VERSION = "section-table-v2"
+CHUNKER_VERSION = "section-table-v3"
 
 
 @dataclass(frozen=True)
@@ -25,6 +25,19 @@ class IndexedChunk:
     category: str
     heading_path: str
     text: str
+
+
+@dataclass(frozen=True)
+class SectionFact:
+    """A structured fact about a section that exists but carries no chunk text.
+
+    Stored in the `section_facts` table rather than `chunks` so that
+    "present but unavailable" information is queryable without polluting
+    FTS or embedding indexes with useless placeholder text.
+    """
+
+    heading_path: str
+    fact: str  # "present_but_unavailable"
 
 
 def sha256_text(text: str) -> str:
@@ -81,14 +94,23 @@ def bound_chunks(chunks: list[IndexedChunk]) -> list[IndexedChunk]:
     return bounded
 
 
-def extract_chunks(html: str, *, fallback_title: str) -> tuple[str, list[IndexedChunk]]:
-    """Extract Clarity-style documentation sections from one HTML file."""
+def extract_chunks(
+    html: str, *, fallback_title: str
+) -> tuple[str, list[IndexedChunk], list[SectionFact]]:
+    """Extract Clarity-style documentation sections from one HTML file.
+
+    Returns (title, chunks, facts).  Facts record sections that are present in
+    the document structure but carry no data (NA spans, None siblings).  They
+    are stored separately so downstream consumers can answer "does this field
+    exist?" without polluting FTS or embedding indexes.
+    """
     soup = BeautifulSoup(html, "html.parser")
     for tag in soup(["script", "style", "template", "nav", "footer", "header"]):
         tag.decompose()
 
     title = soup.title.get_text(" ", strip=True) if soup.title else fallback_title
     chunks: list[IndexedChunk] = []
+    facts: list[SectionFact] = []
     saw_structured_section = False
     for content_div in soup.find_all("div", id="oContent"):
         header = content_div.find_previous("div", class_="header")
@@ -113,17 +135,17 @@ def extract_chunks(html: str, *, fallback_title: str) -> tuple[str, list[Indexed
             if value is None:
                 continue
             if isinstance(value, Tag) and value.name == "span" and "NA" in css_classes(value):
-                continue  # section_empty — no retrieval value
+                facts.append(SectionFact(heading_path=heading, fact="present_but_unavailable"))
             elif isinstance(value, Tag) and value.name == "table":
                 chunks.extend(table_to_chunks(classify_table(value), heading, value))
             elif str(value).strip() == "None":
-                continue  # section_empty — no retrieval value
+                facts.append(SectionFact(heading_path=heading, fact="present_but_unavailable"))
 
     if not chunks and not saw_structured_section:
         text = soup.get_text(" ", strip=True)
         if text:
             chunks.append(IndexedChunk("document", title, text))
-    return title, bound_chunks(chunks)
+    return title, bound_chunks(chunks), facts
 
 
 def css_classes(tag: Tag) -> list[str]:
@@ -146,12 +168,26 @@ def classify_table(table: Tag) -> str:
     return "table_generic"
 
 
+def owned_rows(table: Tag) -> list[Tag]:
+    """Return only rows whose nearest containing table is table."""
+    return [row for row in table.find_all("tr") if row.find_parent("table") is table]
+
+
+def owned_cells(row: Tag) -> list[Tag]:
+    """Return only cells whose nearest containing row is row."""
+    return [
+        cell
+        for cell in row.find_all(["th", "td"])
+        if cell.find_parent("tr") is row
+    ]
+
+
 def extract_table_content(table: Tag) -> str:
     """Render a small table (e.g. KeyValue) as a single pipe-delimited string."""
     parts: list[str] = []
-    for row in table.find_all("tr"):
+    for row in owned_rows(table):
         row_text: list[str] = []
-        for cell in row.find_all(["th", "td"]):
+        for cell in owned_cells(row):
             text = cell.get_text(" ", strip=True)
             if not text:
                 continue
@@ -171,15 +207,16 @@ def table_to_chunks(category: str, heading: str, table: Tag) -> list[IndexedChun
     header_rows: list[str] = []
     data_rows: list[str] = []
 
-    for row in table.find_all("tr"):
+    for row in owned_rows(table):
         row_text: list[str] = []
         is_header = False
-        for cell in row.find_all(["th", "td"]):
+        for cell in owned_cells(row):
             text = cell.get_text(" ", strip=True)
             if not text:
                 continue
-            if "T1Head" in css_classes(cell):
+            if cell.name == "th":
                 is_header = True
+            if "T1Head" in css_classes(cell):
                 row_text.append(f"{text}:")
             else:
                 row_text.append(text)
@@ -240,6 +277,7 @@ def create_schema(conn: sqlite3.Connection) -> None:
         DROP TABLE IF EXISTS docs;
         DROP TABLE IF EXISTS chunks;
         DROP TABLE IF EXISTS chunks_fts;
+        DROP TABLE IF EXISTS section_facts;
 
         CREATE TABLE index_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
@@ -265,6 +303,13 @@ def create_schema(conn: sqlite3.Connection) -> None:
         CREATE VIRTUAL TABLE chunks_fts USING fts5(
             chunk_id, source_path, title, category, heading_path, text
         );
+
+        CREATE TABLE section_facts (
+            doc_id TEXT NOT NULL REFERENCES docs(doc_id),
+            heading_path TEXT NOT NULL,
+            fact TEXT NOT NULL,
+            PRIMARY KEY (doc_id, heading_path)
+        );
         """
     )
 
@@ -278,7 +323,7 @@ def index_one_document(
     html_bytes = html_path.read_bytes()
     html = html_bytes.decode("utf-8", errors="replace")
     source_hash = hashlib.sha256(html_bytes).hexdigest()
-    title, chunks = extract_chunks(html, fallback_title=html_path.stem)
+    title, chunks, facts = extract_chunks(html, fallback_title=html_path.stem)
 
     source_path = normalized_source_path(html_path, corpus_root)
 
@@ -332,6 +377,12 @@ def index_one_document(
                 chunk.heading_path,
                 chunk.text,
             ),
+        )
+
+    for fact in facts:
+        conn.execute(
+            "INSERT OR IGNORE INTO section_facts (doc_id, heading_path, fact) VALUES (?, ?, ?)",
+            (document_id, fact.heading_path, fact.fact),
         )
 
     return source_hash, len(chunks)

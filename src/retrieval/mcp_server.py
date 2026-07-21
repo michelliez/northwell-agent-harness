@@ -87,7 +87,7 @@ def validate_rag_db(db_path: Path) -> None:
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             ).fetchall()
         }
-        missing = {"docs", "chunks", "chunks_fts", "index_metadata"} - present
+        missing = {"docs", "chunks", "chunks_fts", "index_metadata", "section_facts"} - present
         if missing:
             raise SystemExit(
                 f"RAG database {db_path} is missing tables: {', '.join(sorted(missing))}"

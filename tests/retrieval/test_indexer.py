@@ -4,14 +4,18 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from bs4 import BeautifulSoup
 
 from retrieval import indexer as indexer_module
 from retrieval import mcp_server
 from retrieval.indexer import (
     CHUNK_HARD_MAX_CHARS,
     CHUNK_TARGET_CHARS,
+    SectionFact,
     build_index,
     extract_chunks,
+    extract_table_content,
+    table_to_chunks,
 )
 
 
@@ -79,15 +83,17 @@ def test_section_empty_not_indexed(tmp_path: Path) -> None:
     categories = {
         row[0] for row in conn.execute("SELECT DISTINCT category FROM chunks").fetchall()
     }
+    fact_count = conn.execute("SELECT COUNT(*) FROM section_facts").fetchone()[0]
     conn.close()
 
     assert doc_count == 1
     assert chunk_count == 1  # only the SubList chunk; the NA section is dropped
     assert "section_empty" not in categories
+    assert fact_count == 1  # NA section preserved as a structured fact, not discarded
 
 
 def test_document_with_only_empty_structured_sections_has_no_fallback_chunk() -> None:
-    _title, chunks = extract_chunks(
+    _title, chunks, _facts = extract_chunks(
         """
         <html><head><title>Empty</title></head><body>
         <div class="header">Empty</div>
@@ -151,11 +157,44 @@ def test_large_table_splits_into_multiple_chunks(tmp_path: Path) -> None:
     ],
 )
 def test_all_chunk_sources_enforce_size_limit(html: str) -> None:
-    _title, chunks = extract_chunks(html, fallback_title="long")
+    _title, chunks, _facts = extract_chunks(html, fallback_title="long")
 
     assert len(chunks) > 1
     assert all(0 < len(chunk.text) <= CHUNK_TARGET_CHARS for chunk in chunks)
     assert all(len(chunk.text) <= CHUNK_HARD_MAX_CHARS for chunk in chunks)
+
+
+def test_nested_table_rows_and_cells_are_processed_once() -> None:
+    soup = BeautifulSoup(
+        """
+        <table class="SubList List">
+          <tr><th>Name</th><th>Value</th></tr>
+          <tr>
+            <td class="T1Head">Outer row one</td>
+            <td>
+              <table class="SubList">
+                <tr><td class="T1Head">Nested heading</td><td>Nested value</td></tr>
+              </table>
+            </td>
+          </tr>
+          <tr><td>Outer row two</td><td>Second value</td></tr>
+        </table>
+        """,
+        "html.parser",
+    )
+    table = soup.find("table")
+    assert table is not None
+
+    rendered = extract_table_content(table)
+    chunks = table_to_chunks("column_info", "Example > Columns", table)
+    chunk_text = " | ".join(chunk.text for chunk in chunks)
+
+    assert rendered.count("Nested heading") == 1
+    assert chunk_text.count("Nested heading") == 1
+    assert chunk_text.count("Outer row one") == 1
+    assert chunk_text.count("Outer row two") == 1
+    assert chunk_text.startswith("Name Value | Outer row one:")
+    assert not chunk_text.startswith("Outer row one:")
 
 
 def test_token_count_stored(tmp_path: Path) -> None:
@@ -286,7 +325,7 @@ def test_index_version_changes_when_source_path_changes(tmp_path: Path) -> None:
 
 def test_extract_chunks_skips_none_sibling(tmp_path: Path) -> None:
     """A SubHeader3 whose next sibling stringifies to 'None' must be dropped."""
-    _title, chunks = extract_chunks(
+    _title, chunks, _facts = extract_chunks(
         """
         <html><head><title>X</title></head><body>
         <div class="header">X</div>
@@ -300,3 +339,100 @@ def test_extract_chunks_skips_none_sibling(tmp_path: Path) -> None:
     categories = {c.category for c in chunks}
     assert "section_empty" not in categories
     assert any("Real" in c.text for c in chunks)
+
+
+# ---------------------------------------------------------------------------
+# Coverage: every owned content-table row must appear in at least one chunk
+# ---------------------------------------------------------------------------
+
+
+def test_every_content_row_covered_by_chunk() -> None:
+    """Every data row in a content table must appear in at least one chunk."""
+    markers = [f"COVERAGE_ROW_{i:03d}" for i in range(12)]
+    rows_html = "".join(
+        f"<tr><td>Field{i}</td><td>{m} description text</td></tr>"
+        for i, m in enumerate(markers)
+    )
+    _title, chunks, _facts = extract_chunks(
+        f"""<html><head><title>Coverage</title></head><body>
+        <div class="header">Coverage</div>
+        <div id="oContent">
+          <table class="SubHeader3"><tr><td id="_F">Fields</td></tr></table>
+          <table class="SubList">{rows_html}</table>
+        </div></body></html>""",
+        fallback_title="coverage",
+    )
+    all_text = " ".join(c.text for c in chunks)
+    missing = [m for m in markers if m not in all_text]
+    assert not missing, f"rows with no chunk coverage: {missing}"
+
+
+def test_every_content_row_covered_after_split() -> None:
+    """No row must be lost when a large table is split across multiple chunks."""
+    count = 120  # enough rows to force table_to_chunks to split
+    markers = [f"SPLIT_ROW_{i:04d}" for i in range(count)]
+    rows_html = "".join(
+        f"<tr><td>Field{i}</td><td>{m} extra text to push past the split threshold</td></tr>"
+        for i, m in enumerate(markers)
+    )
+    _title, chunks, _facts = extract_chunks(
+        f"""<html><head><title>Split</title></head><body>
+        <div class="header">Split</div>
+        <div id="oContent">
+          <table class="SubHeader3"><tr><td id="_F">Fields</td></tr></table>
+          <table class="SubList">{rows_html}</table>
+        </div></body></html>""",
+        fallback_title="split",
+    )
+    assert len(chunks) > 1, "test requires splitting to occur"
+    all_text = " ".join(c.text for c in chunks)
+    missing = [m for m in markers if m not in all_text]
+    assert not missing, f"rows lost after splitting: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# Section facts: present-but-unavailable sections must be recorded
+# ---------------------------------------------------------------------------
+
+
+def test_section_fact_recorded_for_na_span() -> None:
+    """An NA span must produce a SectionFact and no chunk."""
+    _title, chunks, facts = extract_chunks(
+        """<html><head><title>T</title></head><body>
+        <div class="header">T</div>
+        <div id="oContent">
+          <table class="SubHeader3"><tr><td id="_Missing">Missing</td></tr></table>
+          <span class="NA">No data</span>
+        </div></body></html>""",
+        fallback_title="t",
+    )
+    assert chunks == []
+    assert len(facts) == 1
+    assert facts[0] == SectionFact(heading_path="T > Missing", fact="present_but_unavailable")
+
+
+def test_section_facts_stored_in_db(tmp_path: Path) -> None:
+    """section_facts rows must be written to the database by build_index."""
+    html_path = tmp_path / "page.html"
+    html_path.write_text(
+        """<html><head><title>Mixed</title></head><body>
+        <div class="header">Mixed</div>
+        <div id="oContent">
+          <table class="SubHeader3"><tr><td id="_Empty">Empty</td></tr></table>
+          <span class="NA">No data</span>
+          <table class="SubHeader3"><tr><td id="_Data">Data</td></tr></table>
+          <table class="SubList"><tr><td>Field</td><td>Value</td></tr></table>
+        </div></body></html>""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "rag.sqlite"
+    build_index(html_path, db_path)
+
+    conn = sqlite3.connect(str(db_path))
+    rows = conn.execute("SELECT heading_path, fact FROM section_facts").fetchall()
+    conn.close()
+
+    assert len(rows) == 1
+    heading_path, fact = rows[0]
+    assert "Empty" in heading_path
+    assert fact == "present_but_unavailable"

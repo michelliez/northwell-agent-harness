@@ -39,6 +39,7 @@ def test_run_audit_returns_report(indexed_db: Path) -> None:
     assert report.char_max > 0
     assert report.char_p50 <= report.char_p90 <= report.char_p95 <= report.char_p99 <= report.char_max
     assert report.over_limit_count == 0  # sample data is small
+    assert report.section_fact_count >= 0  # no NA sections in _SAMPLE_HTML
 
 
 def test_print_report_accepts_character_percentiles(
@@ -98,3 +99,25 @@ def test_audit_detects_over_limit(tmp_path: Path) -> None:
 
     report = run_audit(db_path)
     assert report.over_limit_count >= 1
+
+
+def test_audit_counts_section_facts(tmp_path: Path) -> None:
+    """Section facts from NA sections must appear in the audit report."""
+    html_path = tmp_path / "page.html"
+    html_path.write_text(
+        """\
+<html><head><title>Fact Test</title></head><body>
+<div class="header">Fact Test</div>
+<div id="oContent">
+  <table class="SubHeader3"><tr><td id="_NA">Unavailable</td></tr></table>
+  <span class="NA">No data</span>
+  <table class="SubHeader3"><tr><td id="_Data">Data</td></tr></table>
+  <table class="SubList"><tr><td>Col</td><td>Value here</td></tr></table>
+</div></body></html>""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "rag.sqlite"
+    build_index(html_path, db_path)
+
+    report = run_audit(db_path)
+    assert report.section_fact_count == 1

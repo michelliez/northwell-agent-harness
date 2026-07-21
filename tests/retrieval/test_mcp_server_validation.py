@@ -91,6 +91,16 @@ def test_no_chunks_raises(tmp_path: Path, valid_db: Path) -> None:
         validate_rag_db(db)
 
 
+def test_missing_section_facts_table_raises(tmp_path: Path, valid_db: Path) -> None:
+    db = _copy(valid_db, tmp_path / "nofacts.sqlite")
+    conn = sqlite3.connect(str(db))
+    conn.execute("DROP TABLE IF EXISTS section_facts")
+    conn.commit()
+    conn.close()
+    with pytest.raises(SystemExit, match="missing tables"):
+        validate_rag_db(db)
+
+
 def test_orphaned_fts_raises(tmp_path: Path, valid_db: Path) -> None:
     db = _copy(valid_db, tmp_path / "orphan.sqlite")
     conn = sqlite3.connect(str(db))

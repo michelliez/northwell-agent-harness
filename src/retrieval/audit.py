@@ -29,6 +29,7 @@ class AuditReport:
     duplicate_text_hash_count: int
     over_limit_count: int
     by_category: dict[str, int]
+    section_fact_count: int
 
 
 def _pct(sorted_vals: list[int], p: int) -> int:
@@ -51,6 +52,7 @@ def run_audit(db_path: Path) -> AuditReport:
     try:
         cur = conn.cursor()
         doc_count: int = cur.execute("SELECT COUNT(*) FROM docs").fetchone()[0]
+        section_fact_count: int = cur.execute("SELECT COUNT(*) FROM section_facts").fetchone()[0]
 
         rows = cur.execute(
             "SELECT category, text, text_hash FROM chunks ORDER BY length(text)"
@@ -94,6 +96,7 @@ def run_audit(db_path: Path) -> AuditReport:
         duplicate_text_hash_count=duplicate_text_hash_count,
         over_limit_count=over_limit_count,
         by_category=by_category,
+        section_fact_count=section_fact_count,
     )
 
 
@@ -111,8 +114,9 @@ def print_report(report: AuditReport) -> None:
     print(sep)
 
     print("\nCorpus")
-    print(f"  Documents : {report.doc_count:,}")
-    print(f"  Chunks    : {report.chunk_count:,}")
+    print(f"  Documents                    : {report.doc_count:,}")
+    print(f"  Chunks                       : {report.chunk_count:,}")
+    print(f"  Present-but-unavailable facts: {report.section_fact_count:,}")
 
     print("\nSize distribution  (chars / ~tokens at 4 chars/token)")
     for label, val in [
