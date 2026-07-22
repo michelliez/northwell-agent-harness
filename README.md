@@ -186,6 +186,17 @@ uv run --no-editable agent-harness-eval --suite red_team
 uv run --no-editable agent-harness-eval --suite intent --repetitions 3
 ```
 
+The retrieval suite runs deterministically against the local SQLite index. It
+does not require MCP services or make model calls:
+
+```powershell
+uv run agent-harness-eval --suite retrieval --retriever fts --db var\rag\index.sqlite --k 5 10
+```
+
+It reads `evals/retrieval_queries.jsonl` and `evals/retrieval_qrels.jsonl`,
+reports document- and chunk-level ranking metrics, and fails if the active index
+version differs from the labels or a returned chunk has not been judged.
+
 Evaluation results are written under `evals/results/` and are ignored by Git.
 
 ## Scope Boundary

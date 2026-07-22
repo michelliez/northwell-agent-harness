@@ -19,6 +19,7 @@ from evals.intent_assertions import (
     evaluate_intent_case,
     summarize_intent_results,
 )
+from evals.retrieval_evaluator import run_retrieval_evaluation
 from mcp_servers.intent import INTENT_PROMPT_VERSION, IntentResult
 
 DEFAULT_CASE_DIR = Path("evals")
@@ -203,7 +204,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--suite",
-        choices=("smoke", "red_team", "intent"),
+        choices=("smoke", "red_team", "intent", "retrieval"),
         default="smoke",
         help="Case suite to run.",
     )
@@ -225,9 +226,53 @@ def main() -> None:
         default=1,
         help="Repeat the intent suite to measure model variability.",
     )
+    parser.add_argument(
+        "--retriever",
+        choices=("fts",),
+        default="fts",
+        help="Retriever implementation for the retrieval suite.",
+    )
+    parser.add_argument(
+        "--db",
+        type=Path,
+        default=Path("var/rag/index.sqlite"),
+        help="SQLite RAG index for the retrieval suite.",
+    )
+    parser.add_argument(
+        "--k",
+        type=int,
+        nargs="+",
+        default=(5, 10),
+        help="Ranking cutoffs for the retrieval suite.",
+    )
     args = parser.parse_args()
     if args.repetitions < 1:
         parser.error("--repetitions must be at least 1")
+    if any(k < 1 for k in args.k):
+        parser.error("every --k value must be at least 1")
+
+    if args.suite == "retrieval":
+        report = run_retrieval_evaluation(
+            db_path=args.db,
+            queries_path=args.case_dir / "retrieval_queries.jsonl",
+            qrels_path=args.case_dir / "retrieval_qrels.jsonl",
+            retriever=args.retriever,
+            k_values=args.k,
+        )
+        report_path = write_report(report, args.results_dir, prefix="retrieval-evaluation")
+        chunk_metrics = report["metrics"]["chunk"]
+        document_metrics = report["metrics"]["document"]
+        largest_k = max(args.k)
+        print(f"Evaluated {report['query_count']} retrieval queries with {args.retriever}")
+        print(f"Document Recall@{largest_k}: {document_metrics[f'recall@{largest_k}']}")
+        print(f"Document nDCG@{largest_k}: {document_metrics[f'ndcg@{largest_k}']}")
+        print(f"Chunk Recall@{largest_k}: {chunk_metrics[f'recall@{largest_k}']}")
+        print(f"Chunk nDCG@{largest_k}: {chunk_metrics[f'ndcg@{largest_k}']}")
+        print(f"Unjudged results: {report['unjudged_total']}")
+        print(f"Report: {report_path}")
+        if not report["judgment_complete"]:
+            raise SystemExit(1)
+        return
 
     if args.suite == "intent":
         cases = load_intent_cases(args.case_dir / "intent.jsonl")

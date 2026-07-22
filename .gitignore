@@ -14,6 +14,7 @@ wheels/
 
 .agents/
 .claude/
+.worktrees/
 /graphify-out
 claude-code.md
 .env
