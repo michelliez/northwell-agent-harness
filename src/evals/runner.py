@@ -101,6 +101,59 @@ async def run_cases(cases: list[EvaluationCase]) -> dict[str, Any]:
     }
 
 
+def _print_retrieval_report(report: dict[str, Any], report_path: Path) -> None:
+    metrics = report["metrics"]
+    k_values = report["k_values"]
+
+    print("\n" + "=" * 80)
+    print("RETRIEVAL EVALUATION REPORT")
+    print("=" * 80)
+    print(f"Report: {report_path.name}")
+    print(f"Total Queries: {report['query_count']}")
+    print(f"Answerable: {report['answerable_query_count']}, Unanswerable: {report['unanswerable_query_count']}")
+    print(f"Judgment Complete: {report['judgment_complete']}")
+    print(f"Unjudged Results: {report['unjudged_total']}")
+    print("=" * 80 + "\n")
+
+    print(f"{'METRIC':<20} {'@5':<15} {'@10':<15}")
+    print("-" * 50)
+
+    # Document metrics
+    print("\nDOCUMENT-LEVEL METRICS:")
+    print("-" * 50)
+    for metric in ["precision", "recall", "ndcg", "hit"]:
+        values = []
+        for k in k_values:
+            val = metrics["document"].get(f"{metric}@{k}")
+            if val is None:
+                values.append("N/A")
+            else:
+                values.append(f"{val:.3f}")
+        print(f"{metric.upper():<20} {values[0]:<15} {values[1]:<15}")
+
+    # Chunk metrics
+    print("\nCHUNK-LEVEL METRICS:")
+    print("-" * 50)
+    for metric in ["precision", "recall", "ndcg", "hit"]:
+        values = []
+        for k in k_values:
+            val = metrics["chunk"].get(f"{metric}@{k}")
+            if val is None:
+                values.append("N/A")
+            else:
+                values.append(f"{val:.3f}")
+        print(f"{metric.upper():<20} {values[0]:<15} {values[1]:<15}")
+
+    # Latency
+    print("\nLATENCY METRICS (ms):")
+    print("-" * 50)
+    print(f"{'Median':<20} {metrics['latency_ms']['median']:.1f}")
+    print(f"{'P95':<20} {metrics['latency_ms']['p95']:.1f}")
+    print(f"{'Max':<20} {metrics['latency_ms']['max']:.1f}")
+
+    print("\n" + "=" * 80 + "\n")
+
+
 async def run_intent_cases(cases: list[IntentEvaluationCase], repetitions: int) -> dict[str, Any]:
     """Run synthetic labels against the intent MCP without invoking the host."""
     settings = get_settings()
@@ -260,16 +313,7 @@ def main() -> None:
             k_values=args.k,
         )
         report_path = write_report(report, args.results_dir, prefix="retrieval-evaluation")
-        chunk_metrics = report["metrics"]["chunk"]
-        document_metrics = report["metrics"]["document"]
-        largest_k = max(args.k)
-        print(f"Evaluated {report['query_count']} retrieval queries with {args.retriever}")
-        print(f"Document Recall@{largest_k}: {document_metrics[f'recall@{largest_k}']}")
-        print(f"Document nDCG@{largest_k}: {document_metrics[f'ndcg@{largest_k}']}")
-        print(f"Chunk Recall@{largest_k}: {chunk_metrics[f'recall@{largest_k}']}")
-        print(f"Chunk nDCG@{largest_k}: {chunk_metrics[f'ndcg@{largest_k}']}")
-        print(f"Unjudged results: {report['unjudged_total']}")
-        print(f"Report: {report_path}")
+        _print_retrieval_report(report, report_path)
         if not report["judgment_complete"]:
             raise SystemExit(1)
         return
