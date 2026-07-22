@@ -11,6 +11,7 @@ IntentSafetyClass = Literal["safe", "must_clarify", "must_refuse"]
 VALID_INTENTS = {
     "table_discovery",
     "schema_lookup",
+    "documentation_lookup",
     "aggregate_definition",
     "safe_sql_generation",
     "general_question",
@@ -22,6 +23,7 @@ VALID_INTENTS = {
 VALID_ACTIONS = {
     "search_tables",
     "get_table_schema",
+    "retrieve_documentation",
     "generate_sql",
     "answer_without_tools",
     "clarify",

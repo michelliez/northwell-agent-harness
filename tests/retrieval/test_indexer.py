@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from bs4 import BeautifulSoup
+from pydantic import ValidationError
 
 from retrieval import indexer as indexer_module
 from retrieval import mcp_server
@@ -45,6 +46,21 @@ def test_build_and_search_rag_index(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     assert chunk["source_path"] == "appointments.html"
     assert "Scheduled or completed" in chunk["text"]
 
+    context = mcp_server.retrieve_documentation_context("appointment status", top_k=5)
+    assert context["chunks"][0]["source_path"] == "appointments.html"
+
+    table_docs = mcp_server.find_table_doc("appointments")
+    assert table_docs["matches"] == [
+        {
+            "doc_id": chunk["doc_id"],
+            "source_path": "appointments.html",
+            "title": "Appointments",
+        }
+    ]
+
+    section = mcp_server.get_doc_section("appointments", "Status")
+    assert "Scheduled or completed" in section["chunks"][0]["text"]
+
 
 def test_search_with_no_fts_tokens_returns_no_results(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -58,6 +74,11 @@ def test_search_with_no_fts_tokens_returns_no_results(
     result = mcp_server.search_docs("---", top_k=5)
 
     assert result["results"] == []
+
+
+def test_public_retrieval_tool_rejects_unbounded_top_k() -> None:
+    with pytest.raises(ValidationError):
+        mcp_server.retrieve_documentation_context("admissions", top_k=26)
 
 
 def test_section_empty_not_indexed(tmp_path: Path) -> None:

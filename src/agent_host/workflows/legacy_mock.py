@@ -9,95 +9,16 @@ for real schemas. Nothing in ``documentation.py``, ``sql.py``, or
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
 from typing import Any
-
-from anthropic import Anthropic
 
 from agent_host.budget import ExecutionBudget
 from agent_host.config import Settings
 from agent_host.mcp_bridge import MCPToolBridge
-from agent_host.model_call import tool_names
-from agent_host.model_runtime import run_agent_loop
-from agent_host.responses import (
-    content_blocked_response,
-    screened_answer_response,
-    tool_contract_error_response,
-)
+from agent_host.responses import screened_answer_response
 from agent_host.schemas import AskResponse
-from agent_host.tool_execution import (
-    call_workflow_tool,
-    discover_tools,
-)
-from agent_host.tool_registry import (
-    ToolContractError,
-    tools_for_intent,
-)
+from agent_host.tool_execution import call_workflow_tool
 from agent_host.trace_logger import TraceLogger
 from mcp_servers.intent import IntentResult
-from policy.screen import ContentScreenBlocked
-
-BridgeFactory = Callable[..., MCPToolBridge]
-ModelClientFactory = Callable[[Settings], Anthropic]
-
-
-async def run_legacy_catalog_workflow(
-    question: str,
-    classification: IntentResult,
-    settings: Settings,
-    trace: TraceLogger,
-    *,
-    budget: ExecutionBudget,
-    bridge_factory: BridgeFactory,
-    model_client_factory: ModelClientFactory,
-    system: str,
-) -> AskResponse:
-    """Preserve the model-driven workflow over fabricated catalog metadata."""
-    async with bridge_factory(
-        settings.mcp_server_url,
-        auth_token=getattr(settings, "mcp_auth_token", None),
-    ) as mcp:
-        allowed_tools = tools_for_intent(classification.intent)
-        try:
-            discovered_tools = await discover_tools(
-                mcp,
-                trace,
-                server="catalog",
-                mcp_url=settings.mcp_server_url,
-                required_tools=allowed_tools,
-                log_raw_prompts=settings.log_raw_prompts,
-            )
-        except ContentScreenBlocked as exc:
-            return content_blocked_response(trace, exc)
-        except ToolContractError as exc:
-            return tool_contract_error_response(trace, exc)
-        tools = [tool for tool in discovered_tools if tool.get("name") in allowed_tools]
-        trace.record(
-            "mcp.tools.scoped",
-            intent=classification.intent,
-            allowed_tools=sorted(allowed_tools),
-            tools=tool_names(tools),
-        )
-        response = await run_agent_loop(
-            question=question,
-            client=model_client_factory(settings),
-            model=settings.require_claude_model(),
-            tools=tools,
-            mcp=mcp,
-            settings=settings,
-            trace=trace,
-            system=system,
-            allowed_tools=allowed_tools,
-            budget=budget,
-            server="catalog",
-        )
-
-    return response.model_copy(
-        update={
-            "intent": classification.intent,
-            "intent_confidence": classification.confidence,
-        }
-    )
 
 
 async def run_legacy_sql_workflow(
@@ -107,7 +28,7 @@ async def run_legacy_sql_workflow(
     trace: TraceLogger,
     *,
     budget: ExecutionBudget,
-    bridge_factory: BridgeFactory,
+    bridge_factory: type[MCPToolBridge],
 ) -> AskResponse:
     """Preserve the mock catalog → generation → validation SQL chain."""
     used_tools: list[str] = []

@@ -4,6 +4,7 @@ import os
 import re
 import sqlite3
 from pathlib import Path
+from typing import Annotated
 
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
@@ -77,34 +78,41 @@ STOPWORDS = {
 }
 
 MAX_FTS_QUERY_TOKENS = 8
+MAX_RAG_TOP_K = 25
+MAX_RAG_QUERY_CHARS = 4_000
+MAX_RAG_IDENTIFIER_CHARS = 256
 FTS_BM25_WEIGHTS = (0.0, 8.0, 10.0, 0.5, 5.0, 1.0)
 DOCUMENT_HINT_EXCLUSIONS = frozenset({"EHI", "ETL", "INI", "SQL"})
 
+RagQuery = Annotated[str, Field(min_length=1, max_length=MAX_RAG_QUERY_CHARS)]
+RagIdentifier = Annotated[str, Field(min_length=1, max_length=MAX_RAG_IDENTIFIER_CHARS)]
+RagTopK = Annotated[int, Field(ge=1, le=MAX_RAG_TOP_K)]
+
 
 class SearchDocsArgs(BaseModel):
-    query: str = Field(min_length=1)
-    top_k: int = Field(ge=1)
+    query: str = Field(min_length=1, max_length=MAX_RAG_QUERY_CHARS)
+    top_k: int = Field(ge=1, le=MAX_RAG_TOP_K)
 
 
 class GetDocChunkArgs(BaseModel):
-    chunk_id: str = Field(min_length=1)
+    chunk_id: str = Field(min_length=1, max_length=MAX_RAG_IDENTIFIER_CHARS)
 
 class RetrieveDocumentationContextArgs(BaseModel):
-    query: str = Field(min_length=1)
-    top_k: int = Field(default=5, ge=1)
+    query: str = Field(min_length=1, max_length=MAX_RAG_QUERY_CHARS)
+    top_k: int = Field(default=5, ge=1, le=MAX_RAG_TOP_K)
 
 class FindTableDocArgs(BaseModel):
-    table_name: str = Field(min_length=1)
-    top_k: int = Field(default=5, ge=1)
+    table_name: str = Field(min_length=1, max_length=MAX_RAG_IDENTIFIER_CHARS)
+    top_k: int = Field(default=5, ge=1, le=MAX_RAG_TOP_K)
 
 class GetDocSectionArgs(BaseModel):
-    doc_query: str = Field(min_length=1)
-    section_query: str = Field(min_length=1)
-    top_k: int = Field(default=10, ge=1)
+    doc_query: str = Field(min_length=1, max_length=MAX_RAG_IDENTIFIER_CHARS)
+    section_query: str = Field(min_length=1, max_length=MAX_RAG_IDENTIFIER_CHARS)
+    top_k: int = Field(default=10, ge=1, le=MAX_RAG_TOP_K)
 
 class SearchColumnsArgs(BaseModel):
-    query: str = Field(min_length=1)
-    top_k: int = Field(default=10, ge=1)
+    query: str = Field(min_length=1, max_length=MAX_RAG_QUERY_CHARS)
+    top_k: int = Field(default=10, ge=1, le=MAX_RAG_TOP_K)
 
 
 def _db_path() -> Path:
@@ -461,8 +469,7 @@ def search_ranked_chunks(
 
 
 
-# Retrieval tool
-@mcp.tool
+# Internal retrieval primitive. The bounded composite tool is the public MCP API.
 def search_docs(query: str, top_k: int) -> dict[str, object]:
     """Search indexed HTML documentation chunks."""
     args = SearchDocsArgs(query=query.strip(), top_k=top_k)
@@ -481,8 +488,7 @@ def search_docs(query: str, top_k: int) -> dict[str, object]:
         conn.close()
 
 
-# Fetch one chunk
-@mcp.tool
+# Internal retrieval primitive. Direct arbitrary chunk access is not exposed.
 def get_doc_chunk(chunk_id: str) -> dict[str, object]:
     """Fetch the full text and metadata for one retrieved documentation chunk."""
     args = GetDocChunkArgs(chunk_id=chunk_id.strip())
@@ -503,7 +509,7 @@ def get_doc_chunk(chunk_id: str) -> dict[str, object]:
 
 #One call to search and fetch chunks
 @mcp.tool
-def retrieve_documentation_context(query: str, top_k: int = 5) -> dict[str, object]:
+def retrieve_documentation_context(query: RagQuery, top_k: RagTopK = 5) -> dict[str, object]:
     """Search documentation and return full bounded chunks for answer generation."""
     args = RetrieveDocumentationContextArgs(query=query.strip(), top_k=top_k)
     conn = get_rag_connection()
@@ -531,7 +537,7 @@ def retrieve_documentation_context(query: str, top_k: int = 5) -> dict[str, obje
         conn.close()
 
 @mcp.tool
-def find_table_doc(table_name: str, top_k: int = 5) -> dict[str, object]:
+def find_table_doc(table_name: RagIdentifier, top_k: RagTopK = 5) -> dict[str, object]:
     """Find documentation pages by Clarity table/document name."""
     args = FindTableDocArgs(table_name=table_name.strip(), top_k=top_k)
     normalized = normalize_lookup_text(args.table_name)
@@ -546,14 +552,11 @@ def find_table_doc(table_name: str, top_k: int = 5) -> dict[str, object]:
             SELECT
                 d.doc_id,
                 d.source_path,
-                d.title,
-                COUNT(c.chunk_id) AS chunk_count
+                d.title
             FROM docs d
-            LEFT JOIN chunks c ON d.doc_id = c.doc_id
             WHERE
                 upper(d.source_path) LIKE ?
                 OR upper(d.title) LIKE ?
-            GROUP BY d.doc_id, d.source_path, d.title
             ORDER BY
                 CASE
                     WHEN upper(d.source_path) = ? THEN 0
@@ -579,7 +582,6 @@ def find_table_doc(table_name: str, top_k: int = 5) -> dict[str, object]:
                     "doc_id": row["doc_id"],
                     "source_path": row["source_path"],
                     "title": row["title"],
-                    "chunk_count": row["chunk_count"],
                 }
                 for row in cur.fetchall()
             ],
@@ -591,9 +593,9 @@ def find_table_doc(table_name: str, top_k: int = 5) -> dict[str, object]:
 
 @mcp.tool
 def get_doc_section(
-    doc_query: str,
-    section_query: str,
-    top_k: int = 10,
+    doc_query: RagIdentifier,
+    section_query: RagIdentifier,
+    top_k: RagTopK = 10,
 ) -> dict[str, object]:
     """Fetch chunks from a specific documentation page section."""
     args = GetDocSectionArgs(
@@ -603,7 +605,9 @@ def get_doc_section(
     )
 
     doc_pattern = f"%{normalize_lookup_text(args.doc_query)}%"
-    section_pattern = f"%{args.section_query.upper()}%"
+    normalized_section = re.sub(r"[-_\s]+", " ", args.section_query.upper()).strip()
+    section_pattern = f"%{normalized_section}%"
+    doc_fts_query = escape_fts5(args.doc_query)
 
     conn = get_rag_connection()
     cur = conn.cursor()
@@ -612,28 +616,33 @@ def get_doc_section(
         cur.execute(
             """
             SELECT
-                c.chunk_id,
+                chunks_fts.chunk_id,
                 c.doc_id,
-                c.category,
-                c.heading_path,
-                c.text,
-                d.source_path,
-                d.title
-            FROM chunks c
-            JOIN docs d ON c.doc_id = d.doc_id
+                chunks_fts.category,
+                chunks_fts.heading_path,
+                chunks_fts.text,
+                chunks_fts.source_path,
+                chunks_fts.title
+            FROM chunks_fts
+            JOIN chunks AS c ON c.chunk_id = chunks_fts.chunk_id
             WHERE
+                chunks_fts MATCH ?
+                AND
                 (
-                    upper(d.source_path) LIKE ?
-                    OR upper(d.title) LIKE ?
+                    upper(chunks_fts.source_path) LIKE ?
+                    OR upper(chunks_fts.title) LIKE ?
                 )
                 AND (
-                    upper(c.heading_path) LIKE ?
-                    OR upper(c.category) LIKE ?
+                    replace(replace(upper(chunks_fts.heading_path), '-', ' '), '_', ' ')
+                        LIKE ?
+                    OR replace(replace(upper(chunks_fts.category), '-', ' '), '_', ' ')
+                        LIKE ?
                 )
             ORDER BY c.chunk_index
             LIMIT ?
             """,
             (
+                doc_fts_query,
                 doc_pattern,
                 doc_pattern,
                 section_pattern,
@@ -664,7 +673,7 @@ def get_doc_section(
 
 
 @mcp.tool
-def search_columns(query: str, top_k: int = 10) -> dict[str, object]:
+def search_columns(query: RagQuery, top_k: RagTopK = 10) -> dict[str, object]:
     """Search column-information documentation chunks."""
     args = SearchColumnsArgs(query=query.strip(), top_k=top_k)
     fts_query = escape_fts5(args.query)

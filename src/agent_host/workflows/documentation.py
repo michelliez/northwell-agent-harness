@@ -44,8 +44,7 @@ async def run_documentation_workflow(
         budget=budget,
         top_k=budget.max_retrieved_chunks,
     )
-    used_tools = ["search_docs"]
-    used_tools.extend("get_doc_chunk" for _ in retrieval.chunks)
+    used_tools = ["retrieve_documentation_context"]
     if not retrieval.chunks:
         return screened_answer_response(
             "I couldn't find relevant approved documentation for that question.",

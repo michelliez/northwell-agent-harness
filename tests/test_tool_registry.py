@@ -9,10 +9,16 @@ from agent_host.tool_registry import (
     tools_for_intent,
     validate_live_inventory,
 )
+from retrieval.mcp_server import mcp as rag_mcp
 
 
 def test_route_scope_is_derived_from_one_host_registry() -> None:
-    assert tools_for_intent("schema_lookup") == {"get_table_schema"}
+    assert tools_for_intent("schema_lookup") == {
+        "retrieve_documentation_context",
+        "find_table_doc",
+        "get_doc_section",
+        "search_columns",
+    }
     assert tools_for_intent("safe_sql_generation") == {
         "search_tables",
         "get_table_schema",
@@ -20,6 +26,46 @@ def test_route_scope_is_derived_from_one_host_registry() -> None:
         "validate_sql",
     }
     assert tools_for_intent("patient_specific_request") == set()
+
+
+def test_contract_enforces_integer_bounds() -> None:
+    contract = contract_for_tool("retrieve_documentation_context", server="rag")
+
+    assert contract.validate_input({"query": "admissions", "top_k": 5})["top_k"] == 5
+    with pytest.raises(ToolContractError, match="integer"):
+        contract.validate_input({"query": "admissions", "top_k": "5"})
+    with pytest.raises(ToolContractError, match="at most"):
+        contract.validate_input({"query": "admissions", "top_k": 26})
+
+
+@pytest.mark.asyncio
+async def test_rag_mcp_exposes_only_registered_production_tools() -> None:
+    live_tools = await rag_mcp.list_tools()
+    live_names = {tool.name for tool in live_tools}
+    registered_names = {
+        tool["name"] for tool in canonical_tools_for_server("rag")
+    }
+
+    assert live_names == registered_names == {
+        "retrieve_documentation_context",
+        "find_table_doc",
+        "get_doc_section",
+        "search_columns",
+    }
+
+    validated = validate_live_inventory(
+        [
+            {
+                "name": tool.name,
+                "description": tool.description or "",
+                "input_schema": tool.parameters,
+            }
+            for tool in live_tools
+        ],
+        server="rag",
+        required_tools=frozenset(live_names),
+    )
+    assert {tool["name"] for tool in validated} == live_names
 
 
 def test_live_inventory_returns_canonical_host_definitions() -> None:

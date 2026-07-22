@@ -55,7 +55,7 @@ TABLES: dict[str, dict[str, object]] = {
         ],
     },
     "patients": {
-        "description": "One row per patient in the dummy catalog.",
+        "description": "Deprecated compatibility fixture with one synthetic row per patient.",
         "columns": [
             {
                 "name": "patient_id",
@@ -175,7 +175,8 @@ def search_tables(question: str) -> dict[str, object]:
 
     Use this first when the user asks what data could answer a question,
     which tables might be relevant, or where to start exploring.
-    This returns dummy catalog data, not real patient or operational data.
+    This deprecated compatibility endpoint returns synthetic metadata, not
+    real patient or operational data.
     """
     args = SearchTablesArgs(question=question.strip())
     return {

@@ -1,11 +1,13 @@
 # Agent Harness
 
-A policy-gated agent host for observable workflows, documentation retrieval,
-SQL planning experiments, and deterministic evaluation.
+A policy-gated agent host for observable data-science and analyst workflows,
+real-schema documentation retrieval, SQL planning experiments, and
+deterministic evaluation.
 
-This repository uses synthetic data and localhost services. Do not commit
-credentials, PHI, proprietary schemas, production prompts, or sensitive trace
-content.
+This repository does not execute against production data. Approved real-schema
+documentation is indexed locally and remains uncommitted. Do not commit
+credentials, PHI, proprietary schemas, production prompts, indexes, or
+sensitive trace content.
 
 ## Documentation
 
@@ -28,14 +30,16 @@ request
   -> host-owned workflow dispatch and execution budget
        -> general response
        -> approved documentation retrieval over local RAG index
+       -> table, column, and metric exploration over real indexed schemas
        -> SQL generation and validation services
   -> final output screen
   -> response plus JSONL trace
 ```
 
-The model may propose an action; the host owns execution authority. Tool
-contracts and execution limits are deterministic and are not inferred from
-model output or live MCP descriptions.
+The classifier proposes a typed intent, not tools or execution actions. The
+host derives the workflow and permitted tool contracts from its registry.
+Execution limits are deterministic and are not inferred from model output or
+live MCP descriptions.
 
 Source code is organized directly by responsibility under `src/`:
 
@@ -107,6 +111,16 @@ Terminal 1, HTML retrieval MCP server:
 ```powershell
 uv run --no-editable agent-harness-rag
 ```
+
+The production RAG MCP surface is intentionally limited to:
+
+- `retrieve_documentation_context`: bounded search plus cited chunk fetch.
+- `find_table_doc`: exact table-document discovery.
+- `get_doc_section`: bounded section retrieval for a named document.
+- `search_columns`: bounded search over real indexed column information.
+
+Lower-level search and arbitrary chunk-fetch helpers remain internal and are
+not remotely callable MCP tools.
 
 Terminal 2, intent classifier MCP server:
 

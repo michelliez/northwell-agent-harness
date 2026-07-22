@@ -2,9 +2,10 @@
 
 ## Purpose
 
-Build a local documentation-retrieval workflow for approved Epic-style HTML
-documentation. The goal is not just to answer questions from docs, but to make
-retrieval observable, testable, and safe enough for the evaluation harness.
+Build a local documentation-retrieval workflow for approved HTML containing
+real table and column schemas. The goal is not just to answer questions from
+docs, but to support observable, testable, evidence-grounded data-science and
+analyst exploration.
 
 The MVP should prove:
 
@@ -560,14 +561,18 @@ Add a new MCP server later:
 src/retrieval/mcp_server.py
 ```
 
-Expose:
+Expose only the host-registered production capabilities:
 
 ```text
-search_docs(query: str, top_k: int = 5) -> dict
-get_doc_chunk(chunk_id: str) -> dict
+retrieve_documentation_context(query: str, top_k: int = 5) -> dict
+find_table_doc(table_name: str, top_k: int = 5) -> dict
+get_doc_section(doc_query: str, section_query: str, top_k: int = 10) -> dict
+search_columns(query: str, top_k: int = 10) -> dict
 ```
 
-Do not expose arbitrary filesystem reads.
+Do not expose arbitrary filesystem reads, raw chunk fetch by caller-supplied
+identifier, or unregistered experimental helpers. All `top_k` values have a
+server-side maximum in addition to host execution budgets.
 
 Response shape:
 
@@ -616,9 +621,9 @@ Future host route:
 
 ```text
 policy gate
--> intent classifier
+-> intent classifier (goal only; host derives workflow and tools)
 -> retrieval permission gate
--> search_docs
+-> retrieve_documentation_context or schema-exploration tools
 -> context selection
 -> Claude answer with citations
 -> grounding checks
@@ -653,7 +658,7 @@ Scenario fields:
   "id": "docs_appointment_status",
   "prompt": "What does appointment status mean?",
   "expected_intent": "documentation_lookup",
-  "required_tool_calls": ["search_docs"],
+  "required_tool_calls": ["retrieve_documentation_context"],
   "required_retrieved_chunks": ["appointments_status"],
   "forbidden_retrieved_docs": ["billing"],
   "required_claims": ["scheduled", "completed", "cancelled", "no-show"],
@@ -666,7 +671,7 @@ Deterministic graders:
 
 - Did policy allow/block correctly?
 - Did intent equal `documentation_lookup`?
-- Did `search_docs` run?
+- Did the expected registered retrieval capability run?
 - Did retrieved results include required chunk/doc IDs?
 - Did retrieved results avoid forbidden docs?
 - Did answer include citations?
