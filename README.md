@@ -193,9 +193,15 @@ does not require MCP services or make model calls:
 uv run agent-harness-eval --suite retrieval --retriever fts --db var\rag\index.sqlite --k 5 10
 ```
 
-It reads `evals/retrieval_queries.jsonl` and `evals/retrieval_qrels.jsonl`,
-reports document- and chunk-level ranking metrics, and fails if the active index
-version differs from the labels or a returned chunk has not been judged.
+It reads `evals/retrieval_queries.jsonl`, document judgments from
+`evals/retrieval_qrels.jsonl`, chunk judgments from
+`evals/retrieval_chunk_qrels.jsonl`, and identities from
+`evals/retrieval_catalog.jsonl`. Qrels refer to stable
+`epic_clarity:<object-type>:<object-name>` document keys; the catalog maps each
+key to a corpus-relative source path, which is resolved to the active index's
+generated document ID at runtime. Chunk judgments resolve portable semantic
+selectors (heading, category, and required terms) to the active index's chunk
+IDs. The suite reports both document- and chunk-level ranking metrics.
 
 Evaluation results are written under `evals/results/` and are ignored by Git.
 

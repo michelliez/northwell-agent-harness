@@ -110,9 +110,12 @@ def _print_retrieval_report(report: dict[str, Any], report_path: Path) -> None:
     print("=" * 80)
     print(f"Report: {report_path.name}")
     print(f"Total Queries: {report['query_count']}")
-    print(f"Answerable: {report['answerable_query_count']}, Unanswerable: {report['unanswerable_query_count']}")
+    print(
+        f"Answerable: {report['answerable_query_count']}, Unanswerable: {report['unanswerable_query_count']}"
+    )
     print(f"Judgment Complete: {report['judgment_complete']}")
-    print(f"Unjudged Results: {report['unjudged_total']}")
+    print(f"Unjudged Documents: {report['unjudged_document_total']}")
+    print(f"Unjudged Chunks: {report['unjudged_chunk_total']}")
     print("=" * 80 + "\n")
 
     print(f"{'METRIC':<20} {'@5':<15} {'@10':<15}")
@@ -309,13 +312,19 @@ def main() -> None:
             db_path=args.db,
             queries_path=args.case_dir / "retrieval_queries.jsonl",
             qrels_path=args.case_dir / "retrieval_qrels.jsonl",
+            chunk_qrels_path=args.case_dir / "retrieval_chunk_qrels.jsonl",
+            catalog_path=args.case_dir / "retrieval_catalog.jsonl",
             retriever=args.retriever,
             k_values=args.k,
         )
         report_path = write_report(report, args.results_dir, prefix="retrieval-evaluation")
         _print_retrieval_report(report, report_path)
-        if not report["judgment_complete"]:
-            raise SystemExit(1)
+        print(
+            f"\nResolution: {report['resolved_query_count']} resolved, {report['unresolved_query_count']} unresolved"
+        )
+        if report["resolution_summary"]:
+            print(f"Unresolved states: {report['resolution_summary']}")
+        print(f"\n{report['metrics_note']}")
         return
 
     if args.suite == "intent":

@@ -656,13 +656,21 @@ evaluation. Run it directly against the local index:
 uv run agent-harness-eval --suite retrieval --retriever fts --db var\rag\index.sqlite --k 5 10
 ```
 
-The suite loads the version-pinned queries and graded candidate judgments from
-`evals/retrieval_queries.jsonl` and `evals/retrieval_qrels.jsonl`. It reports
-document-level metrics (did retrieval find the right tables?) and chunk-level
-metrics (did it rank the strongest evidence sections?). An unjudged returned
-chunk invalidates that query's metrics rather than being silently treated as
-irrelevant. Embedding and hybrid retrievers must add their new candidates to
-the judgment pool before their scores are compared with FTS.
+The suite loads queries from `evals/retrieval_queries.jsonl`, graded document
+judgments from `evals/retrieval_qrels.jsonl`, portable chunk judgments from
+`evals/retrieval_chunk_qrels.jsonl`, and stable document identities from
+`evals/retrieval_catalog.jsonl`. Catalog records use
+`epic_clarity:<object-type>:<object-name>` keys and corpus-relative source
+paths. At runtime, the evaluator resolves those paths to the active index's
+generated document IDs, so labels remain portable across users and re-indexing.
+
+The suite reports document-level metrics (did retrieval find the right tables?)
+and chunk-level metrics (did it find the right evidence sections?). Chunk
+judgments resolve heading, category, and required-term selectors to current
+chunk IDs. Their `match_policy` is `exactly_one` unless overlapping chunks
+intentionally make every match relevant, in which case it is `all`.
+`corpus_complete` queries treat items absent from qrels as non-relevant;
+narrower judgment scopes leave unmatched results unjudged and withhold metrics.
 
 Answer and workflow scenarios remain a separate layer.
 
