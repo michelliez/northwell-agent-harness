@@ -24,11 +24,14 @@ evals/results/*
 !evals/results/.gitkeep
 pytest-cache-files-*
 pytest-cache-files-*/
-# Proprietary Clarity data — never commit
+# Proprietary Clarity source data — never commit
 ClarityDictionaryHTML-full*
 data/ClarityDictionaryHTML-full*
 
-
+# Generated retrieval indexes and HTML-derived ML artifacts — never commit
 var/rag/*.sqlite
 rag/*.sqlite
 *.sqlite
+/var/genq/
+/data/genq/
+/artifacts/genq/
