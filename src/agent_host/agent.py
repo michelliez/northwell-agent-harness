@@ -14,6 +14,7 @@ from agent_host.budget import (
 )
 from agent_host.config import Settings, get_settings
 from agent_host.mcp_bridge import MCPToolBridge
+from agent_host.mcp_process_manager import MCPServerManager, services_for_intent
 from agent_host.responses import (
     blocked_response_if_needed,
     budget_exceeded_response,
@@ -41,13 +42,25 @@ EXPLORATION_INTENTS = frozenset({"table_discovery", "schema_lookup", "aggregate_
 
 async def ask(question: str) -> dict[str, Any]:
     """CLI-friendly wrapper around the same host logic used by HTTP."""
-    response = await answer_question(question)
+    settings = get_settings()
+    if not settings.mcp_auto_start:
+        response = await answer_question(question, settings=settings)
+        return response.model_dump()
+
+    async with MCPServerManager(settings) as servers:
+        await servers.ensure_started(["intent"])
+        response = await answer_question(question, settings=settings, server_manager=servers)
     return response.model_dump()
 
 
-async def answer_question(question: str) -> AskResponse:
+async def answer_question(
+    question: str,
+    *,
+    settings: Settings | None = None,
+    server_manager: MCPServerManager | None = None,
+) -> AskResponse:
     """Screen and classify one request, then dispatch one bounded workflow."""
-    settings = get_settings()
+    settings = settings or get_settings()
     trace = TraceLogger(
         settings.trace_dir,
         content_mode=getattr(settings, "trace_content_mode", "metadata"),
@@ -74,6 +87,9 @@ async def answer_question(question: str) -> AskResponse:
 
     if classification.recommended_action == "refuse":
         return refused_intent_response(classification, trace)
+
+    if server_manager is not None:
+        await server_manager.ensure_started(services_for_intent(classification.intent))
 
     return await dispatch_workflow(
         question,

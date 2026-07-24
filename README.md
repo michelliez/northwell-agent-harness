@@ -103,8 +103,14 @@ use another local path. Do not commit SQLite index files.
 
 ### Start Services
 
-Start only the processes needed for the workflow being exercised, each in its
-own terminal.
+The `agent-harness` CLI automatically starts the local MCP servers required by
+each request and stops only the subprocesses it owns. It starts intent
+classification first, then lazily starts retrieval or SQL services after
+routing. Server output is written to `logs/mcp/`.
+
+Set `MCP_AUTO_START=false` to connect to MCP services that you manage
+separately. When auto-start is disabled, start only the processes needed for
+the workflow being exercised, each in its own terminal.
 
 Terminal 1, HTML retrieval MCP server:
 
@@ -142,7 +148,7 @@ uv run --no-editable agent-harness-sql-validation
 
 ### Ask The Agent
 
-Terminal 5, prompt agent:
+Prompt the agent:
 
 ```powershell
 uv run --no-editable agent-harness "<question>" --json
