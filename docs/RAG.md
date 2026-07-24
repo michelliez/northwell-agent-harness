@@ -2,9 +2,10 @@
 
 ## Purpose
 
-Build a local documentation-retrieval workflow for approved Epic-style HTML
-documentation. The goal is not just to answer questions from docs, but to make
-retrieval observable, testable, and safe enough for the evaluation harness.
+Build a local documentation-retrieval workflow for approved HTML containing
+real table and column schemas. The goal is not just to answer questions from
+docs, but to support observable, testable, evidence-grounded data-science and
+analyst exploration.
 
 The MVP should prove:
 
@@ -245,16 +246,36 @@ chunk_id is the source of truth.
 row_id is not.
 ```
 
-Use deterministic chunk IDs:
+Use deterministic, embedding-stable IDs:
 
 ```text
+doc_id = sha256(normalized_source_path)
+
 chunk_id = sha256(
-  normalized_source_path
+  doc_id
   + heading_path
-  + chunk_index
+  + category
+  + occurrence      (0-based count of prior chunks with the same heading_path + category)
   + text_hash
 )
 ```
+
+Why `doc_id` excludes the file hash:
+
+- Re-indexing a file (content change) must not invalidate all its embeddings.
+- `source_hash` is still stored in `docs` for change detection but not baked into IDs.
+
+Why `chunk_id` uses occurrence instead of chunk_index:
+
+- `chunk_index` is global position in the document and shifts when any earlier chunk is
+  added or removed.
+- `occurrence` is local to a `(heading_path, category)` group and is stable unless chunks
+  within that group change order.
+- A large table split into N child chunks all share the same `heading_path` and `category`;
+  `occurrence=0,1,2,…` distinguishes them without coupling to position elsewhere in the doc.
+
+A chunk retains its `chunk_id` — and therefore its stored embedding — across a re-index run
+as long as its text, heading path, category, and occurrence position are all unchanged.
 
 Why:
 
@@ -262,6 +283,7 @@ Why:
 - FAISS row IDs are internal.
 - NumPy array row positions are internal.
 - Citations and traces need stable IDs.
+- Embeddings are expensive; stable IDs let incremental re-indexing skip unchanged chunks.
 
 Every retrieval result must include:
 
@@ -539,14 +561,18 @@ Add a new MCP server later:
 src/retrieval/mcp_server.py
 ```
 
-Expose:
+Expose only the host-registered production capabilities:
 
 ```text
-search_docs(query: str, top_k: int = 5) -> dict
-get_doc_chunk(chunk_id: str) -> dict
+retrieve_documentation_context(query: str, top_k: int = 5) -> dict
+find_table_doc(table_name: str, top_k: int = 5) -> dict
+get_doc_section(doc_query: str, section_query: str, top_k: int = 10) -> dict
+search_columns(query: str, top_k: int = 10) -> dict
 ```
 
-Do not expose arbitrary filesystem reads.
+Do not expose arbitrary filesystem reads, raw chunk fetch by caller-supplied
+identifier, or unregistered experimental helpers. All `top_k` values have a
+server-side maximum in addition to host execution budgets.
 
 Response shape:
 
@@ -595,9 +621,9 @@ Future host route:
 
 ```text
 policy gate
--> intent classifier
+-> intent classifier (goal only; host derives workflow and tools)
 -> retrieval permission gate
--> search_docs
+-> retrieve_documentation_context or schema-exploration tools
 -> context selection
 -> Claude answer with citations
 -> grounding checks
@@ -621,9 +647,32 @@ Retrieved HTML text cannot override policy, tools, roles, or system
 instructions.
 ```
 
-## Phase 11: Evaluation Plan
+## Phase 11: Evaluation
 
-Add RAG scenarios after the workflow exists.
+The retrieval-only baseline is intentionally separate from agent and answer
+evaluation. Run it directly against the local index:
+
+```powershell
+uv run agent-harness-eval --suite retrieval --retriever fts --db var\rag\index.sqlite --k 5 10
+```
+
+The suite loads queries from `evals/retrieval_queries.jsonl`, graded document
+judgments from `evals/retrieval_qrels.jsonl`, portable chunk judgments from
+`evals/retrieval_chunk_qrels.jsonl`, and stable document identities from
+`evals/retrieval_catalog.jsonl`. Catalog records use
+`epic_clarity:<object-type>:<object-name>` keys and corpus-relative source
+paths. At runtime, the evaluator resolves those paths to the active index's
+generated document IDs, so labels remain portable across users and re-indexing.
+
+The suite reports document-level metrics (did retrieval find the right tables?)
+and chunk-level metrics (did it find the right evidence sections?). Chunk
+judgments resolve heading, category, and required-term selectors to current
+chunk IDs. Their `match_policy` is `exactly_one` unless overlapping chunks
+intentionally make every match relevant, in which case it is `all`.
+`corpus_complete` queries treat items absent from qrels as non-relevant;
+narrower judgment scopes leave unmatched results unjudged and withhold metrics.
+
+Answer and workflow scenarios remain a separate layer.
 
 Scenario fields:
 
@@ -632,7 +681,7 @@ Scenario fields:
   "id": "docs_appointment_status",
   "prompt": "What does appointment status mean?",
   "expected_intent": "documentation_lookup",
-  "required_tool_calls": ["search_docs"],
+  "required_tool_calls": ["retrieve_documentation_context"],
   "required_retrieved_chunks": ["appointments_status"],
   "forbidden_retrieved_docs": ["billing"],
   "required_claims": ["scheduled", "completed", "cancelled", "no-show"],
@@ -645,7 +694,7 @@ Deterministic graders:
 
 - Did policy allow/block correctly?
 - Did intent equal `documentation_lookup`?
-- Did `search_docs` run?
+- Did the expected registered retrieval capability run?
 - Did retrieved results include required chunk/doc IDs?
 - Did retrieved results avoid forbidden docs?
 - Did answer include citations?

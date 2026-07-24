@@ -10,6 +10,7 @@ from agent_host.budget import ExecutionBudget
 from agent_host.schemas import AskResponse
 from agent_host.tool_registry import canonical_tools_for_server
 from agent_host.trace_logger import TraceLogger
+from agent_host.workflows import exploration as exploration_workflow
 from agent_host.workflows import general as general_workflow
 
 
@@ -27,8 +28,9 @@ class FakeBridge:
         return None
 
     async def list_anthropic_tools(self) -> list[dict[str, object]]:
-        self.events.append("catalog:list")
-        return canonical_tools_for_server("catalog")
+        server = "rag" if "rag" in self.url else "catalog"
+        self.events.append(f"{server}:list")
+        return canonical_tools_for_server(server)
 
     async def call_tool(self, name: str, arguments: object) -> dict[str, object]:
         if "intent" in self.url:
@@ -53,7 +55,7 @@ class FakeBridge:
                 "intent": "aggregate_definition",
                 "confidence": 0.93,
                 "risk_flags": [],
-                "recommended_action": "search_tables",
+                "recommended_action": "retrieve_documentation",
                 "needs_clarification": False,
             }
         if "catalog" in self.url:
@@ -154,6 +156,7 @@ def _settings(trace_dir: str) -> SimpleNamespace:
         trace_dir=trace_dir,
         log_raw_prompts=False,
         intent_mcp_url="http://intent.test/mcp",
+        rag_mcp_url="http://rag.test/mcp",
         mcp_server_url="http://catalog.test/mcp",
         sql_generation_mcp_url="http://sql-generation.test/mcp",
         sql_validation_mcp_url="http://sql-validation.test/mcp",
@@ -180,7 +183,7 @@ async def test_documentation_lookup_dispatches_registered_workflow(
     async def fake_workflow(*_: object, **__: object) -> AskResponse:
         return AskResponse(
             answer="retrieved documentation",
-            used_tools=["search_docs", "get_doc_chunk"],
+            used_tools=["retrieve_documentation_context"],
             run_id="run",
             trace_file="trace",
             intent="documentation_lookup",
@@ -198,26 +201,27 @@ async def test_documentation_lookup_dispatches_registered_workflow(
 
     assert result.allowed is True
     assert result.answer == "retrieved documentation"
-    assert result.used_tools == ["search_docs", "get_doc_chunk"]
+    assert result.used_tools == ["retrieve_documentation_context"]
 
 
 @pytest.mark.asyncio
-async def test_allowed_request_classifies_before_catalog(
+async def test_allowed_request_classifies_before_real_index_exploration(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     FakeBridge.events = []
     client = FakeClient()
     monkeypatch.setattr(agent, "get_settings", lambda: _settings(str(tmp_path)))
     monkeypatch.setattr(agent, "MCPToolBridge", FakeBridge)
-    monkeypatch.setattr(agent, "build_model_client", lambda _: client)
+    monkeypatch.setattr(exploration_workflow, "MCPToolBridge", FakeBridge)
+    monkeypatch.setattr(exploration_workflow, "build_model_client", lambda _: client)
 
     result = await agent.answer_question("What data supports a visit count?")
 
     assert result.intent == "aggregate_definition"
     assert result.intent_confidence == 0.93
-    assert FakeBridge.events == ["intent:classify_intent", "catalog:list", "model:create"]
+    assert FakeBridge.events == ["intent:classify_intent", "rag:list", "model:create"]
     assert client.messages.kwargs is not None
-    assert "intent=aggregate_definition" in str(client.messages.kwargs["system"])
+    assert "data science and analyst pipeline" in str(client.messages.kwargs["system"])
 
     events = [
         line.split('"event": "', 1)[1].split('"', 1)[0]

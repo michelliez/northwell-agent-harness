@@ -62,31 +62,19 @@ async def retrieve_documentation(
         settings.rag_mcp_url,
         auth_token=getattr(settings, "mcp_auth_token", None),
     ) as rag_mcp:
-        search_result = await call_workflow_tool(
+        context_result = await call_workflow_tool(
             rag_mcp,
-            "search_docs",
+            "retrieve_documentation_context",
             {"query": query, "top_k": bounded_top_k},
             trace,
             used_tools,
             budget=budget,
             server="rag",
         )
-        candidates = search_result.get("results", [])
         chunks: list[RetrievedChunk] = []
-        for rank, candidate in enumerate(candidates[:bounded_top_k], start=1):
-            chunk_id = candidate.get("chunk_id") if isinstance(candidate, dict) else None
-            if not isinstance(chunk_id, str) or not chunk_id:
-                continue
-            chunk = await call_workflow_tool(
-                rag_mcp,
-                "get_doc_chunk",
-                {"chunk_id": chunk_id},
-                trace,
-                used_tools,
-                budget=budget,
-                server="rag",
-            )
-            if chunk.get("error"):
+        candidates = context_result.get("chunks", [])
+        for fallback_rank, chunk in enumerate(candidates[:bounded_top_k], start=1):
+            if not isinstance(chunk, dict):
                 continue
             chunks.append(
                 RetrievedChunk(
@@ -95,15 +83,15 @@ async def retrieve_documentation(
                     source_path=chunk["source_path"],
                     heading_path=chunk.get("heading_path"),
                     text=chunk["text"],
-                    rank=rank,
-                    score=candidate.get("score"),
+                    rank=chunk.get("rank", fallback_rank),
+                    score=chunk.get("score"),
                 )
             )
 
     return RetrievalResult(
         query=query,
         chunks=chunks,
-        index_version=search_result["index_version"],
+        index_version=context_result["index_version"],
     )
 
 

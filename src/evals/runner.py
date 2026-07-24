@@ -19,6 +19,7 @@ from evals.intent_assertions import (
     evaluate_intent_case,
     summarize_intent_results,
 )
+from evals.retrieval_evaluator import run_retrieval_evaluation
 from mcp_servers.intent import INTENT_PROMPT_VERSION, IntentResult
 
 DEFAULT_CASE_DIR = Path("evals")
@@ -98,6 +99,62 @@ async def run_cases(cases: list[EvaluationCase]) -> dict[str, Any]:
         "failed": sum(1 for result in results if not result["passed"]),
         "results": results,
     }
+
+
+def _print_retrieval_report(report: dict[str, Any], report_path: Path) -> None:
+    metrics = report["metrics"]
+    k_values = report["k_values"]
+
+    print("\n" + "=" * 80)
+    print("RETRIEVAL EVALUATION REPORT")
+    print("=" * 80)
+    print(f"Report: {report_path.name}")
+    print(f"Total Queries: {report['query_count']}")
+    print(
+        f"Answerable: {report['answerable_query_count']}, Unanswerable: {report['unanswerable_query_count']}"
+    )
+    print(f"Judgment Complete: {report['judgment_complete']}")
+    print(f"Unjudged Documents: {report['unjudged_document_total']}")
+    print(f"Unjudged Chunks: {report['unjudged_chunk_total']}")
+    print("=" * 80 + "\n")
+
+    print(f"{'METRIC':<20} {'@5':<15} {'@10':<15}")
+    print("-" * 50)
+
+    # Document metrics
+    print("\nDOCUMENT-LEVEL METRICS:")
+    print("-" * 50)
+    for metric in ["precision", "recall", "ndcg", "hit"]:
+        values = []
+        for k in k_values:
+            val = metrics["document"].get(f"{metric}@{k}")
+            if val is None:
+                values.append("N/A")
+            else:
+                values.append(f"{val:.3f}")
+        print(f"{metric.upper():<20} {values[0]:<15} {values[1]:<15}")
+
+    # Chunk metrics
+    print("\nCHUNK-LEVEL METRICS:")
+    print("-" * 50)
+    for metric in ["precision", "recall", "ndcg", "hit"]:
+        values = []
+        for k in k_values:
+            val = metrics["chunk"].get(f"{metric}@{k}")
+            if val is None:
+                values.append("N/A")
+            else:
+                values.append(f"{val:.3f}")
+        print(f"{metric.upper():<20} {values[0]:<15} {values[1]:<15}")
+
+    # Latency
+    print("\nLATENCY METRICS (ms):")
+    print("-" * 50)
+    print(f"{'Median':<20} {metrics['latency_ms']['median']:.1f}")
+    print(f"{'P95':<20} {metrics['latency_ms']['p95']:.1f}")
+    print(f"{'Max':<20} {metrics['latency_ms']['max']:.1f}")
+
+    print("\n" + "=" * 80 + "\n")
 
 
 async def run_intent_cases(cases: list[IntentEvaluationCase], repetitions: int) -> dict[str, Any]:
@@ -203,7 +260,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--suite",
-        choices=("smoke", "red_team", "intent"),
+        choices=("smoke", "red_team", "intent", "retrieval"),
         default="smoke",
         help="Case suite to run.",
     )
@@ -225,9 +282,50 @@ def main() -> None:
         default=1,
         help="Repeat the intent suite to measure model variability.",
     )
+    parser.add_argument(
+        "--retriever",
+        choices=("fts",),
+        default="fts",
+        help="Retriever implementation for the retrieval suite.",
+    )
+    parser.add_argument(
+        "--db",
+        type=Path,
+        default=Path("var/rag/index.sqlite"),
+        help="SQLite RAG index for the retrieval suite.",
+    )
+    parser.add_argument(
+        "--k",
+        type=int,
+        nargs="+",
+        default=(5, 10),
+        help="Ranking cutoffs for the retrieval suite.",
+    )
     args = parser.parse_args()
     if args.repetitions < 1:
         parser.error("--repetitions must be at least 1")
+    if any(k < 1 for k in args.k):
+        parser.error("every --k value must be at least 1")
+
+    if args.suite == "retrieval":
+        report = run_retrieval_evaluation(
+            db_path=args.db,
+            queries_path=args.case_dir / "retrieval_queries.jsonl",
+            qrels_path=args.case_dir / "retrieval_qrels.jsonl",
+            chunk_qrels_path=args.case_dir / "retrieval_chunk_qrels.jsonl",
+            catalog_path=args.case_dir / "retrieval_catalog.jsonl",
+            retriever=args.retriever,
+            k_values=args.k,
+        )
+        report_path = write_report(report, args.results_dir, prefix="retrieval-evaluation")
+        _print_retrieval_report(report, report_path)
+        print(
+            f"\nResolution: {report['resolved_query_count']} resolved, {report['unresolved_query_count']} unresolved"
+        )
+        if report["resolution_summary"]:
+            print(f"Unresolved states: {report['resolution_summary']}")
+        print(f"\n{report['metrics_note']}")
+        return
 
     if args.suite == "intent":
         cases = load_intent_cases(args.case_dir / "intent.jsonl")

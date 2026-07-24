@@ -37,19 +37,57 @@ class TableSchemaResult(_PermissiveModel):
     columns: list[dict[str, Any]] = Field(default_factory=list)
 
 
-class DocumentationSearchResult(_PermissiveModel):
+class IndexedDocumentationChunk(_PermissiveModel):
+    chunk_id: str = Field(min_length=1)
+    doc_id: str = Field(min_length=1)
+    source_path: str = Field(min_length=1)
+    title: str
+    heading_path: str | None = None
+    text: str = Field(min_length=1)
+
+
+class RankedDocumentationChunk(IndexedDocumentationChunk):
+    rank: int = Field(ge=1)
+    score: float | None = None
+
+
+class DocumentationContextResult(_PermissiveModel):
     query: str
-    results: list[dict[str, Any]] = Field(default_factory=list)
+    chunks: list[RankedDocumentationChunk] = Field(default_factory=list)
     index_version: str
 
 
-class DocumentationChunkResult(_PermissiveModel):
-    chunk_id: str
-    doc_id: str
+class TableDocumentMatch(_PermissiveModel):
+    doc_id: str = Field(min_length=1)
+    source_path: str = Field(min_length=1)
+    title: str
+
+
+class TableDocumentSearchResult(_PermissiveModel):
+    query: str
+    matches: list[TableDocumentMatch] = Field(default_factory=list)
+    index_version: str
+
+
+class DocumentSectionResult(_PermissiveModel):
+    doc_query: str
+    section_query: str
+    chunks: list[IndexedDocumentationChunk] = Field(default_factory=list)
+    index_version: str
+
+
+class ColumnSearchMatch(_PermissiveModel):
+    chunk_id: str = Field(min_length=1)
     title: str
     heading_path: str | None = None
-    source_path: str
-    text: str
+    score: float | None = None
+    preview: str
+
+
+class ColumnSearchResult(_PermissiveModel):
+    query: str
+    matches: list[ColumnSearchMatch] = Field(default_factory=list)
+    index_version: str
 
 
 class SqlGenerationResult(_PermissiveModel):
@@ -139,6 +177,8 @@ def _validate_value_type(
     allowed = schema.get("type")
     if allowed == "string" and not isinstance(value, str):
         raise ToolContractError(f"{field_name} must be a string", tool=tool_name)
+    if allowed == "integer" and (not isinstance(value, int) or isinstance(value, bool)):
+        raise ToolContractError(f"{field_name} must be an integer", tool=tool_name)
     if allowed == "array" and not isinstance(value, list):
         raise ToolContractError(f"{field_name} must be an array", tool=tool_name)
     if allowed == "object" and not isinstance(value, dict):
@@ -155,53 +195,116 @@ def _validate_value_type(
         )
         if not valid:
             raise ToolContractError(f"{field_name} has an invalid type", tool=tool_name)
+    if isinstance(value, str):
+        min_length = schema.get("minLength")
+        max_length = schema.get("maxLength")
+        if min_length is not None and len(value) < min_length:
+            raise ToolContractError(
+                f"{field_name} must contain at least {min_length} characters",
+                tool=tool_name,
+            )
+        if max_length is not None and len(value) > max_length:
+            raise ToolContractError(
+                f"{field_name} must contain at most {max_length} characters",
+                tool=tool_name,
+            )
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        minimum = schema.get("minimum")
+        maximum = schema.get("maximum")
+        if minimum is not None and value < minimum:
+            raise ToolContractError(
+                f"{field_name} must be at least {minimum}", tool=tool_name
+            )
+        if maximum is not None and value > maximum:
+            raise ToolContractError(
+                f"{field_name} must be at most {maximum}", tool=tool_name
+            )
 
 
 def _model_result(model: type[BaseModel], result: Any) -> Any:
     return model.model_validate(result).model_dump()
 
 
-def _documentation_chunk_result(result: Any) -> Any:
-    if isinstance(result, dict) and result.get("error") == "chunk_not_found":
-        return result
-    return _model_result(DocumentationChunkResult, result)
-
-
 TOOL_CONTRACTS: dict[str, ToolContract] = {
-    "search_docs": ToolContract(
-        name="search_docs",
+    "retrieve_documentation_context": ToolContract(
+        name="retrieve_documentation_context",
         server="rag",
-        description="Search approved indexed HTML documentation for relevant chunks.",
+        description=(
+            "Search approved indexed documentation and return bounded, fully cited chunks."
+        ),
         input_schema={
             "type": "object",
             "properties": {
-                "query": {"type": "string"},
-                "top_k": {"type": "integer"},
+                "query": {"type": "string", "minLength": 1, "maxLength": 4_000},
+                "top_k": {"type": "integer", "minimum": 1, "maximum": 25},
             },
-            "required": ["query", "top_k"],
+            "required": ["query"],
             "additionalProperties": False,
         },
-        routes=frozenset({"documentation_lookup"}),
-        result_validator=lambda result: _model_result(DocumentationSearchResult, result),
+        routes=frozenset(
+            {
+                "documentation_lookup",
+                "table_discovery",
+                "schema_lookup",
+                "aggregate_definition",
+            }
+        ),
+        result_validator=lambda result: _model_result(DocumentationContextResult, result),
     ),
-    "get_doc_chunk": ToolContract(
-        name="get_doc_chunk",
+    "find_table_doc": ToolContract(
+        name="find_table_doc",
         server="rag",
-        description="Fetch one full documentation chunk selected by retrieval.",
+        description="Find indexed documentation pages for an explicit table name.",
         input_schema={
             "type": "object",
-            "properties": {"chunk_id": {"type": "string"}},
-            "required": ["chunk_id"],
+            "properties": {
+                "table_name": {"type": "string", "minLength": 1, "maxLength": 256},
+                "top_k": {"type": "integer", "minimum": 1, "maximum": 25},
+            },
+            "required": ["table_name"],
             "additionalProperties": False,
         },
-        routes=frozenset({"documentation_lookup"}),
-        result_validator=_documentation_chunk_result,
+        routes=frozenset({"schema_lookup"}),
+        result_validator=lambda result: _model_result(TableDocumentSearchResult, result),
+    ),
+    "get_doc_section": ToolContract(
+        name="get_doc_section",
+        server="rag",
+        description="Fetch bounded chunks from a named section of an indexed table document.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "doc_query": {"type": "string", "minLength": 1, "maxLength": 256},
+                "section_query": {"type": "string", "minLength": 1, "maxLength": 256},
+                "top_k": {"type": "integer", "minimum": 1, "maximum": 25},
+            },
+            "required": ["doc_query", "section_query"],
+            "additionalProperties": False,
+        },
+        routes=frozenset({"schema_lookup", "aggregate_definition"}),
+        result_validator=lambda result: _model_result(DocumentSectionResult, result),
+    ),
+    "search_columns": ToolContract(
+        name="search_columns",
+        server="rag",
+        description="Search real indexed column-information chunks.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "minLength": 1, "maxLength": 4_000},
+                "top_k": {"type": "integer", "minimum": 1, "maximum": 25},
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+        routes=frozenset({"schema_lookup", "aggregate_definition"}),
+        result_validator=lambda result: _model_result(ColumnSearchResult, result),
     ),
     "search_tables": ToolContract(
         name="search_tables",
         server="catalog",
         description=(
-            "Find candidate tables for a natural-language data question in the dummy catalog."
+            "Find candidate tables in the deprecated compatibility catalog."
         ),
         input_schema={
             "type": "object",
@@ -209,26 +312,26 @@ TOOL_CONTRACTS: dict[str, ToolContract] = {
             "required": ["question"],
             "additionalProperties": False,
         },
-        routes=frozenset({"table_discovery", "aggregate_definition", "safe_sql_generation"}),
+        routes=frozenset({"safe_sql_generation"}),
         result_validator=lambda result: _model_result(SearchTablesResult, result),
     ),
     "get_table_schema": ToolContract(
         name="get_table_schema",
         server="catalog",
-        description="Get the dummy schema for one candidate table.",
+        description="Get one schema from the deprecated compatibility catalog.",
         input_schema={
             "type": "object",
             "properties": {"table_name": {"type": "string"}},
             "required": ["table_name"],
             "additionalProperties": False,
         },
-        routes=frozenset({"schema_lookup", "aggregate_definition", "safe_sql_generation"}),
+        routes=frozenset({"safe_sql_generation"}),
         result_validator=lambda result: _model_result(TableSchemaResult, result),
     ),
     "generate_sql": ToolContract(
         name="generate_sql",
         server="sql_generation",
-        description="Generate structured aggregate SQL for the dummy catalog.",
+        description="Generate structured aggregate SQL from supplied schema evidence.",
         input_schema={
             "type": "object",
             "properties": {
@@ -247,7 +350,7 @@ TOOL_CONTRACTS: dict[str, ToolContract] = {
     "validate_sql": ToolContract(
         name="validate_sql",
         server="sql_validation",
-        description="Validate one aggregate SQL query against the dummy catalog.",
+        description="Structurally validate one aggregate SQL query.",
         input_schema={
             "type": "object",
             "properties": {

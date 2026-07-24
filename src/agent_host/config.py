@@ -25,13 +25,16 @@ class Settings:
     anthropic_api_key: str | None
     anthropic_base_url: str | None
     anthropic_custom_headers: dict[str, str] = field(default_factory=dict)
-    claude_model: str | None = "claude-haiku-4-5-20251001"
+    claude_model: str | None = "claude-sonnet-4-6"
     mcp_server_url: str = "http://localhost:8000/mcp"
     intent_mcp_url: str = "http://localhost:8002/mcp"
     sql_generation_mcp_url: str = "http://localhost:8003/mcp"
     sql_validation_mcp_url: str = "http://localhost:8004/mcp"
     rag_mcp_url: str = "http://localhost:8005/mcp"
     mcp_auth_token: str | None = None
+    mcp_auto_start: bool = True
+    mcp_startup_timeout_seconds: float = 10.0
+    mcp_log_dir: str = "logs/mcp"
     max_tool_rounds: int = 3
     max_model_calls: int = 4
     max_tool_calls: int = 12
@@ -44,7 +47,7 @@ class Settings:
     max_wall_seconds: float = 60.0
     mcp_call_timeout_seconds: float = 10.0
     model_call_timeout_seconds: float = 30.0
-    model_max_tokens: int = 300
+    model_max_tokens: int = 800
     intent_max_tokens: int = 200
     sql_generation_max_tokens: int = 500
     intent_min_confidence: float = 0.70
@@ -83,7 +86,7 @@ def get_settings() -> Settings:
         "max_input_bytes": ("MAX_INPUT_BYTES", 16_000),
         "max_tool_result_bytes": ("MAX_TOOL_RESULT_BYTES", 32_000),
         "max_context_bytes": ("MAX_CONTEXT_BYTES", 128_000),
-        "model_max_tokens": ("MODEL_MAX_TOKENS", 300),
+        "model_max_tokens": ("MODEL_MAX_TOKENS", 800),
         "intent_max_tokens": ("INTENT_MAX_TOKENS", 200),
         "sql_generation_max_tokens": ("SQL_GENERATION_MAX_TOKENS", 500),
     }
@@ -100,13 +103,19 @@ def get_settings() -> Settings:
         max_wall_seconds = float(os.getenv("MAX_WALL_SECONDS", "60"))
         mcp_call_timeout_seconds = float(os.getenv("MCP_CALL_TIMEOUT_SECONDS", "10"))
         model_call_timeout_seconds = float(os.getenv("MODEL_CALL_TIMEOUT_SECONDS", "30"))
+        mcp_startup_timeout_seconds = float(os.getenv("MCP_STARTUP_TIMEOUT_SECONDS", "10"))
         intent_min_confidence = float(os.getenv("INTENT_MIN_CONFIDENCE", "0.70"))
     except ValueError as exc:
         raise RuntimeError(
             "MAX_WALL_SECONDS, MCP_CALL_TIMEOUT_SECONDS, MODEL_CALL_TIMEOUT_SECONDS, and "
-            "INTENT_MIN_CONFIDENCE must be numeric."
+            "MCP_STARTUP_TIMEOUT_SECONDS, and INTENT_MIN_CONFIDENCE must be numeric."
         ) from exc
-    if max_wall_seconds <= 0 or mcp_call_timeout_seconds <= 0 or model_call_timeout_seconds <= 0:
+    if (
+        max_wall_seconds <= 0
+        or mcp_call_timeout_seconds <= 0
+        or model_call_timeout_seconds <= 0
+        or mcp_startup_timeout_seconds <= 0
+    ):
         raise RuntimeError("execution timeouts must be greater than 0.")
     if not 0 <= intent_min_confidence <= 1:
         raise RuntimeError("INTENT_MIN_CONFIDENCE must be between 0 and 1.")
@@ -119,13 +128,16 @@ def get_settings() -> Settings:
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY") or os.getenv("AI_HUB_API_KEY"),
         anthropic_base_url=os.getenv("ANTHROPIC_BASE_URL") or None,
         anthropic_custom_headers=parse_custom_headers(os.getenv("ANTHROPIC_CUSTOM_HEADERS", "")),
-        claude_model=os.getenv("CLAUDE_MODEL") or "claude-haiku-4-5-20251001",
+        claude_model=os.getenv("CLAUDE_MODEL") or "claude-sonnet-4-6",
         mcp_server_url=os.getenv("MCP_SERVER_URL") or "http://localhost:8000/mcp",
         intent_mcp_url=os.getenv("INTENT_MCP_URL") or "http://localhost:8002/mcp",
         sql_generation_mcp_url=(os.getenv("SQL_GENERATION_MCP_URL") or "http://localhost:8003/mcp"),
         sql_validation_mcp_url=(os.getenv("SQL_VALIDATION_MCP_URL") or "http://localhost:8004/mcp"),
         rag_mcp_url=os.getenv("RAG_MCP_URL") or "http://localhost:8005/mcp",
         mcp_auth_token=os.getenv("MCP_AUTH_TOKEN") or None,
+        mcp_auto_start=_bool_env("MCP_AUTO_START", True),
+        mcp_startup_timeout_seconds=mcp_startup_timeout_seconds,
+        mcp_log_dir=os.getenv("MCP_LOG_DIR", "logs/mcp"),
         max_tool_rounds=parsed_ints["max_tool_rounds"],
         max_model_calls=parsed_ints["max_model_calls"],
         max_tool_calls=parsed_ints["max_tool_calls"],

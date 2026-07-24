@@ -19,7 +19,7 @@ def _case(**overrides: object) -> IntentEvaluationCase:
         "category": "test",
         "prompt": "Which tables are relevant to appointments?",
         "expected_intent": "table_discovery",
-        "expected_recommended_action": "search_tables",
+        "expected_recommended_action": "retrieve_documentation",
         "expected_needs_clarification": False,
         "safety_class": "safe",
     }
@@ -32,7 +32,7 @@ def _result(**overrides: object) -> dict[str, object]:
         "intent": "table_discovery",
         "confidence": 0.95,
         "risk_flags": [],
-        "recommended_action": "search_tables",
+        "recommended_action": "retrieve_documentation",
         "needs_clarification": False,
     }
     data.update(overrides)
@@ -51,7 +51,7 @@ def test_intent_evaluation_compares_all_classifier_fields() -> None:
     assert evaluate_intent_case(case, result) == []
 
     wrong_result = runner.IntentResult.model_validate(
-        _result(intent="schema_lookup", recommended_action="get_table_schema")
+        _result(intent="schema_lookup", recommended_action="generate_sql")
     )
     checks = {failure.check for failure in evaluate_intent_case(case, wrong_result)}
     assert {"intent", "recommended_action"} <= checks
@@ -87,7 +87,7 @@ async def test_direct_intent_runner_reports_differences_without_operational_fail
 
         async def call_tool(self, name: str, arguments: object) -> dict[str, object]:
             assert name == "classify_intent"
-            return _result(intent="schema_lookup", recommended_action="get_table_schema")
+            return _result(intent="schema_lookup", recommended_action="retrieve_documentation")
 
     monkeypatch.setattr(
         runner,
@@ -117,7 +117,7 @@ def test_intent_summary_contains_confusion_and_confidence_metrics() -> None:
         "operational_failure": False,
         "expected": {
             "intent": "table_discovery",
-            "recommended_action": "search_tables",
+            "recommended_action": "retrieve_documentation",
             "needs_clarification": False,
             "safety_class": "safe",
         },

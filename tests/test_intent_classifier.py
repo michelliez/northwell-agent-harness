@@ -41,7 +41,6 @@ def test_classify_intent_returns_validated_result(monkeypatch: pytest.MonkeyPatc
             "intent": "aggregate_definition",
             "confidence": 0.93,
             "risk_flags": [],
-            "recommended_action": "search_tables",
             "needs_clarification": False,
         }
     )
@@ -61,13 +60,15 @@ def test_classify_intent_returns_validated_result(monkeypatch: pytest.MonkeyPatc
     result = intent.classify_intent("What data supports a visit count?")
 
     assert result["intent"] == "aggregate_definition"
-    assert result["recommended_action"] == "search_tables"
+    assert result["recommended_action"] == "retrieve_documentation"
     assert client.messages.kwargs is not None
     assert client.messages.kwargs["tool_choice"] == {
         "type": "tool",
         "name": "emit_intent",
     }
-    assert "aggregate_definition, search_tables" in str(client.messages.kwargs["system"])
+    assert "aggregate_definition, needs_clarification=false" in str(
+        client.messages.kwargs["system"]
+    )
 
 
 def test_classify_intent_fails_closed_on_low_confidence(
@@ -78,7 +79,6 @@ def test_classify_intent_fails_closed_on_low_confidence(
             "intent": "table_discovery",
             "confidence": 0.40,
             "risk_flags": [],
-            "recommended_action": "search_tables",
             "needs_clarification": False,
         }
     )
@@ -113,7 +113,6 @@ def test_classify_intent_accepts_general_question(
             "intent": "general_question",
             "confidence": 0.91,
             "risk_flags": [],
-            "recommended_action": "answer_without_tools",
             "needs_clarification": False,
         }
     )
@@ -143,7 +142,6 @@ def test_classify_intent_accepts_documentation_lookup(
             "intent": "documentation_lookup",
             "confidence": 0.94,
             "risk_flags": [],
-            "recommended_action": "retrieve_documentation",
             "needs_clarification": False,
         }
     )
@@ -173,7 +171,6 @@ def test_classify_intent_forces_refusal_action_for_sensitive_intent(
             "intent": "patient_specific_request",
             "confidence": 0.95,
             "risk_flags": ["patient_level"],
-            "recommended_action": "search_tables",
             "needs_clarification": False,
         }
     )
@@ -195,7 +192,7 @@ def test_classify_intent_forces_refusal_action_for_sensitive_intent(
     assert result["needs_clarification"] is False
 
 
-def test_classify_intent_fails_closed_on_incoherent_safe_action(
+def test_classify_intent_derives_action_from_model_intent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     response = _response(
@@ -203,7 +200,6 @@ def test_classify_intent_fails_closed_on_incoherent_safe_action(
             "intent": "schema_lookup",
             "confidence": 0.95,
             "risk_flags": [],
-            "recommended_action": "search_tables",
             "needs_clarification": False,
         }
     )
@@ -221,15 +217,20 @@ def test_classify_intent_fails_closed_on_incoherent_safe_action(
 
     result = intent.classify_intent("What columns are in encounters?")
 
-    assert result["intent"] == "unknown"
-    assert result["recommended_action"] == "clarify"
-    assert "incoherent_intent_action" in result["risk_flags"]
+    assert result["intent"] == "schema_lookup"
+    assert result["recommended_action"] == "retrieve_documentation"
+    assert "incoherent_intent_action" not in result["risk_flags"]
 
 
 def test_route_tool_scope_is_host_owned() -> None:
-    assert tools_for_intent("schema_lookup") == {"get_table_schema"}
+    assert tools_for_intent("schema_lookup") == {
+        "retrieve_documentation_context",
+        "find_table_doc",
+        "get_doc_section",
+        "search_columns",
+    }
     assert tools_for_intent("patient_specific_request") == set()
-    assert tools_for_intent("documentation_lookup") == {"search_docs", "get_doc_chunk"}
+    assert tools_for_intent("documentation_lookup") == {"retrieve_documentation_context"}
 
 
 def test_classify_intent_rejects_missing_or_duplicate_tool_results(
@@ -249,14 +250,13 @@ def test_classify_intent_rejects_missing_or_duplicate_tool_results(
 
 
 def test_intent_tool_contract_is_closed_and_versioned() -> None:
-    assert intent.INTENT_PROMPT_VERSION == "v4"
+    assert intent.INTENT_PROMPT_VERSION == "v6"
     assert intent.INTENT_TOOL["name"] == "emit_intent"
     assert intent.INTENT_TOOL["input_schema"]["additionalProperties"] is False
     assert set(intent.INTENT_TOOL["input_schema"]["required"]) == {
         "intent",
         "confidence",
         "risk_flags",
-        "recommended_action",
         "needs_clarification",
     }
 
@@ -267,7 +267,7 @@ async def test_intent_mcp_exposes_only_classifier_tool() -> None:
     assert [tool.name for tool in tools] == ["classify_intent"]
 
 
-def test_v2_prompt_covers_observed_adversarial_failure_modes() -> None:
+def test_v6_prompt_covers_pipeline_routes_and_adversarial_failure_modes() -> None:
     assert (
         "Apply this order when a request contains more than one intent"
         in intent.CLASSIFIER_SYSTEM_PROMPT
@@ -275,7 +275,9 @@ def test_v2_prompt_covers_observed_adversarial_failure_modes() -> None:
     assert "force an intent label" in intent.CLASSIFIER_SYSTEM_PROMPT
     assert "metadata with patient-level output" in intent.CLASSIFIER_SYSTEM_PROMPT
     assert "safe_sql_generation" in intent.CLASSIFIER_SYSTEM_PROMPT
-    assert "generate_sql" in intent.CLASSIFIER_SYSTEM_PROMPT
+    assert "Which documents can I look at for admissions info?" in intent.CLASSIFIER_SYSTEM_PROMPT
+    assert "host selects the workflow and tools" in intent.CLASSIFIER_SYSTEM_PROMPT
+    assert "data science and analyst schema-exploration pipeline" in intent.CLASSIFIER_SYSTEM_PROMPT
+    assert "mock catalog" not in intent.CLASSIFIER_SYSTEM_PROMPT
     assert "general_question" in intent.CLASSIFIER_SYSTEM_PROMPT
-    assert "answer_without_tools" in intent.CLASSIFIER_SYSTEM_PROMPT
-    assert '"Show me the schema" means unknown, clarify' in intent.CLASSIFIER_SYSTEM_PROMPT
+    assert '"Show me the schema" means unknown' in intent.CLASSIFIER_SYSTEM_PROMPT

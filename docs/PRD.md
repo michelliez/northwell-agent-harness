@@ -256,8 +256,8 @@ HIPAA compliance, jailbreak resistance, or production readiness.
 | Workflow node | One observable step in a predefined code path. It may be deterministic or model-backed. | Policy and intent are both workflow nodes. | A “node” is not automatically an autonomous agent. |
 | Agentic node or loop | A model dynamically chooses its next action or tool based on observations. | The bounded catalog loop is agentic because Claude may choose a scoped tool and then react to its result. | The host, not the model, must retain execution authority. |
 | Deterministic screen/gate | Code applies explicit, reproducible rules to observable input or output. | The policy gate normalizes user input; the surface screen applies narrower checks to tool metadata, tool results, and final answers. | Deterministic means reproducible, not comprehensive or inherently secure. |
-| Semantic router | A probabilistic classifier maps natural language into a bounded route. | The intent MCP uses Claude to emit a typed intent, confidence, risk flags, action, and clarification flag. | Intent is routing metadata, not authorization or factual evidence. |
-| MCP | An open protocol for discovering and invoking schema-defined tools and resources. | FastMCP exposes the intent classifier and dummy catalog over HTTP. | MCP standardizes integration; it does not itself grant identity, authorization, sandboxing, or data safety. |
+| Semantic router | A probabilistic classifier maps natural language into a bounded route. | The intent MCP uses Claude to emit a typed intent, confidence, risk flags, and clarification flag; the host derives the workflow action. | Intent is routing metadata, not authorization or factual evidence. |
+| MCP | An open protocol for discovering and invoking schema-defined tools and resources. | FastMCP exposes the intent classifier and a host-registered real-schema retrieval surface over HTTP. | MCP standardizes integration; it does not itself grant identity, authorization, sandboxing, or data safety. |
 | Host or broker | The trusted application layer that decides which model outputs may cause actions. | `agent.py` runs policy, calls intent, filters tool definitions, checks requested tool names, executes allowed calls, and records traces. | This is the effective POC enforcement point. |
 | Authorization | A decision based on authenticated identity, role, purpose, resource, action, and context. | Not implemented. The POC has workflow routing and tool-name scoping only. | A policy or intent label must never be presented as production authorization. |
 
@@ -371,7 +371,6 @@ produce one `emit_intent` tool call with this contract:
   "intent": "schema_lookup",
   "confidence": 0.95,
   "risk_flags": [],
-  "recommended_action": "get_table_schema",
   "needs_clarification": false
 }
 ```
@@ -380,9 +379,9 @@ produce one `emit_intent` tool call with this contract:
 | --- | --- | --- | ---: |
 | Separate semantic routing call | Intent executes before catalog discovery and has no catalog tools. | Strong separation of concerns. Anthropic identifies routing as a useful workflow when inputs belong to distinct specialized categories. | 5 |
 | Forced structured model output | The Messages API receives one JSON-schema tool and `tool_choice={"type":"tool","name":"emit_intent"}`; exactly one matching `ToolUseBlock` is required. | Directly follows Anthropic’s documented forced-tool pattern and avoids parsing free-form prose. | 5 |
-| Runtime validation | Tool input is validated into `IntentResult`; the host validates the MCP result again. Intent and action values are closed `Literal` types with numeric confidence bounds. | Correct defense against malformed model or transport output. Add `extra="forbid"` to the Pydantic models because Pydantic otherwise ignores unexpected fields even though the API tool schema says `additionalProperties=false`. | 4 |
+| Runtime validation | Model tool input is validated as a closed intent decision; the MCP returns an `IntentResult` with a host-derived action and the host validates it again. Intent values are closed `Literal` types with numeric confidence bounds. | Correct defense against malformed model or transport output. Add `extra="forbid"` to the Pydantic models because Pydantic otherwise ignores unexpected fields even though the API tool schema says `additionalProperties=false`. | 4 |
 | Versioned prompt and explicit precedence | `INTENT_PROMPT_VERSION="v3"`; the prompt prioritizes policy probes, patient-level requests, unsafe SQL, safe SQL, metadata routes, general questions, then unknown. | Explicit precedence reduces mixed-intent ambiguity and supports regression comparison. The policy and taxonomy still require a named owner and change-control process. | 4 |
-| Intent/action coherence enforcement | `EXPECTED_ACTION` and `enforce_intent_contract()` convert incoherent safe outputs to `unknown/clarify`; refusal intents are forced to `refuse`. | Strong deterministic wrapper around a probabilistic decision. The model recommends; code constrains. | 5 |
+| Deterministic action derivation | `EXPECTED_ACTION` and `enforce_intent_contract()` derive the workflow action from the accepted intent; refusal intents are forced to `refuse`. | Removes a redundant model field and prevents intent/action disagreement by construction. | 5 |
 | Low-confidence fallback | Model-reported confidence below `0.70` becomes `unknown/clarify`. | Safe direction, but the value is an uncalibrated constant and model self-confidence is not a probability of correctness. It needs threshold calibration against held-out labels by risk class. | 2 |
 | Ambiguity handling | `unknown`, low confidence, or `needs_clarification=true` stops before catalog access. | Aligns with Anthropic’s guidance that agents should pause rather than assume when user intent is unresolved. | 4 |
 | Refusal enforcement | `policy_probe`, `patient_specific_request`, and `unsupported_sql_request` force a refusal; the host returns `allowed=false` without opening the catalog. | Correct defense-in-depth. The semantic safety classifier supplements but does not replace deterministic or server authorization controls. | 4 |

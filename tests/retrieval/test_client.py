@@ -80,28 +80,22 @@ async def test_retrieval_uses_budget_bound_and_returns_full_chunks(
 
         async def call_tool(self, name: str, arguments: dict[str, object]) -> object:
             calls.append((name, arguments))
-            if name == "search_docs":
-                return {
-                    "query": "appointment status",
-                    "results": [
-                        {
-                            "chunk_id": "chunk-1",
-                            "title": "Appointments",
-                            "heading_path": "Appointments > Status",
-                            "score": -1.0,
-                            "preview": "status docs",
-                        }
-                    ],
-                    "index_version": "index-v1",
-                }
             return {
-                "chunk_id": "chunk-1",
-                "doc_id": "appointments",
-                "title": "Appointments",
-                "heading_path": "Appointments > Status",
-                "source_path": "appointments.html",
-                "text": "Appointment status documentation.",
-                "source": "rag_index",
+                "query": "appointment status",
+                "chunks": [
+                    {
+                        "chunk_id": "chunk-1",
+                        "doc_id": "appointments",
+                        "title": "Appointments",
+                        "heading_path": "Appointments > Status",
+                        "source_path": "appointments.html",
+                        "text": "Appointment status documentation.",
+                        "rank": 1,
+                        "score": -1.0,
+                        "source": "rag_index",
+                    }
+                ],
+                "index_version": "index-v1",
             }
 
     monkeypatch.setattr("retrieval.client.MCPToolBridge", FakeBridge)
@@ -117,4 +111,6 @@ async def test_retrieval_uses_budget_bound_and_returns_full_chunks(
 
     assert result.index_version == "index-v1"
     assert result.chunks[0].document_id == "appointments"
-    assert calls[0] == ("search_docs", {"query": "appointment status", "top_k": 1})
+    assert calls == [
+        ("retrieve_documentation_context", {"query": "appointment status", "top_k": 1})
+    ]
