@@ -19,6 +19,7 @@ from agent_host.schemas import AskResponse
 from agent_host.tool_execution import call_workflow_tool
 from agent_host.trace_logger import TraceLogger
 from mcp_servers.intent import IntentResult
+from retrieval.client import RetrievalResult, retrieve_documentation
 
 
 async def run_legacy_sql_workflow(
@@ -34,28 +35,25 @@ async def run_legacy_sql_workflow(
     used_tools: list[str] = []
     trace.record("sql.workflow.started", intent=classification.model_dump())
 
-    async with bridge_factory(
-        settings.mcp_server_url,
-        auth_token=getattr(settings, "mcp_auth_token", None),
-    ) as catalog_mcp:
-        search_result = await call_workflow_tool(
-            catalog_mcp,
-            "search_tables",
-            {"question": question},
-            trace,
+    retrieval = await retrieve_documentation(
+        question,
+        settings,
+        trace,
+        budget=budget,
+        top_k=budget.max_retrieved_chunks,
+    )
+    used_tools.append("search_docs")
+    used_tools.extend("get_doc_chunk" for _ in retrieval.chunks)
+    if not retrieval.chunks:
+        return sql_workflow_response(
+            "I couldn't find approved documentation context for that SQL request, "
+            "so I stopped before generating SQL.",
             used_tools,
-            budget=budget,
-            server="catalog",
-        )
-        schemas = await fetch_candidate_schemas(
-            catalog_mcp,
-            search_result,
             trace,
-            used_tools,
-            budget=budget,
+            classification,
         )
 
-    schema_context = json.dumps({"search_tables": search_result, "schemas": schemas})
+    schema_context = sql_schema_context_from_retrieval(retrieval)
 
     async with bridge_factory(
         settings.sql_generation_mcp_url,
@@ -149,6 +147,29 @@ async def run_legacy_sql_workflow(
         trace,
         classification,
         disclosure_status=str(disclosure_status),
+    )
+
+
+def sql_schema_context_from_retrieval(retrieval: RetrievalResult) -> str:
+    """Build compact approved schema context for the SQL generation node."""
+    chunks = []
+    for chunk in retrieval.chunks:
+        chunks.append(
+            {
+                "chunk_id": chunk.chunk_id,
+                "source_path": chunk.source_path,
+                "heading_path": chunk.heading_path,
+                "rank": chunk.rank,
+                "text": chunk.text[:1_800],
+            }
+        )
+    return json.dumps(
+        {
+            "source": "rag_documentation",
+            "index_version": retrieval.index_version,
+            "query": retrieval.query,
+            "chunks": chunks,
+        }
     )
 
 
