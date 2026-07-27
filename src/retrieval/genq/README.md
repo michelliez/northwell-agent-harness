@@ -3,12 +3,13 @@
 This package prepares Epic Clarity HTML documentation for domain-adapted
 semantic retrieval.
 
-The first four stages are implemented:
+The first five stages are implemented:
 
 1. Parse Epic HTML into structured chunks.
 2. Assign leakage-safe train, validation, and test splits.
 3. Generate raw synthetic queries with the BEIR T5 query generator.
 4. Filter raw queries and record an auditable quality decision.
+5. Build and evaluate an exact pretrained-model FAISS baseline.
 
 Generated artifacts are written below `var/genq/`. That directory is ignored by
 Git because its files contain information derived from proprietary Epic HTML.
@@ -264,6 +265,89 @@ Deterministic filters remove obvious defects but do not guarantee naturalness
 or factual support. Manually inspect retained and review samples from every
 split and chunk type before training.
 
+## Stage 5: Pretrained MiniLM and exact FAISS baseline
+
+### Purpose
+
+Stage 5 measures semantic retrieval without training a model. It embeds
+canonical chunks and retained questions using
+`sentence-transformers/all-MiniLM-L6-v2`, normalizes the embeddings, and stores
+the passage vectors in `faiss.IndexFlatIP`.
+
+With normalized vectors, inner product is equivalent to cosine similarity.
+`IndexFlatIP` performs exact search, so approximate-nearest-neighbor error
+cannot distort the baseline.
+
+The stage writes a separate JSONL mapping from each FAISS vector position to
+its stable `chunk_id`. FAISS returns integer positions rather than application
+metadata, so this mapping is required for correct retrieval.
+
+For the MacBook MPS smoke test, the baseline is deliberately limited to the
+first 200 canonical chunks. The retained smoke query's known positive chunk is
+inside this subset.
+
+### Inputs
+
+```text
+var/genq/stage1/chunks.jsonl
+var/genq/stage4/retained_queries.smoke.jsonl
+```
+
+### Outputs
+
+```text
+var/genq/baseline-smoke/corpus.faiss
+var/genq/baseline-smoke/chunk_mapping.jsonl
+var/genq/baseline-smoke/index_metadata.json
+var/genq/baseline-smoke/smoke_evaluation.json
+```
+
+### MPS smoke-test command
+
+```bash
+uv run --all-groups agent-harness-genq-baseline \
+  var/genq/stage1/chunks.jsonl \
+  --queries var/genq/stage4/retained_queries.smoke.jsonl \
+  --output-dir var/genq/baseline-smoke \
+  --model sentence-transformers/all-MiniLM-L6-v2 \
+  --device mps \
+  --limit 200 \
+  --batch-size 8 \
+  --top-k 10
+```
+
+The one-query smoke result was:
+
+```text
+positive rank: 3
+Precision@1:  0.000
+Precision@5:  0.200
+Precision@10: 0.100
+Recall@1:     0.000
+Recall@5:     1.000
+Recall@10:    1.000
+Hit@1:        0.000
+Hit@5:        1.000
+Hit@10:       1.000
+MRR:          0.333
+nDCG@10:      0.500
+```
+
+The top three results were the metadata chunks for `A0H_MAP`, `A0H_UPDATE`,
+and the known positive `A0H_DELETE`. These documents are closely related, so
+the single-positive synthetic label may understate semantic relevance. One
+query validates the machinery but cannot establish model quality.
+
+Stage 5 uses the same shared ranking calculator as the main retrieval
+evaluator. Because each synthetic query currently has one labeled positive,
+Recall@K is equivalent to Hit@K and Precision@K can count semantically useful
+but unlabeled sibling chunks as false positives.
+
+The implementation loads the MiniLM Transformer weights directly and applies
+the model's standard attention-mask mean pooling. This avoids importing
+SentenceTransformers' optional scikit-learn and SciPy utilities during
+baseline inference. SentenceTransformers remains installed for later training.
+
 ## Tests and quality checks
 
 Run the focused GenQ tests:
@@ -285,10 +369,9 @@ Run the complete repository suite:
 uv run --all-groups pytest -q
 ```
 
-At the end of Stage 4 implementation:
+At the end of the Stage 5 focused implementation:
 
-- 48 focused GenQ tests passed.
-- 655 complete repository tests passed.
+- 61 focused GenQ tests passed.
 - Ruff passed.
 - Pyright reported no errors or warnings.
 
@@ -323,12 +406,14 @@ Join each retained query to its exact positive passage:
 Write separate train, validation, and test artifacts and verify that every
 query resolves to exactly one current passage.
 
-### 3. Establish an unfine-tuned baseline
+### 3. Expand the unfine-tuned baseline evaluation
 
-Evaluate a suitable existing SentenceTransformer model before training. Record
-Hit@1, Hit@5, Hit@10, MRR, and nDCG where appropriate.
+Rerun the implemented MiniLM/FAISS baseline over the full proof-of-concept
+corpus and a materially larger retained query set. Record Hit@1, Hit@5,
+Hit@10, Precision@K, Recall@K, MRR, and nDCG where appropriate.
 
-This baseline is necessary to prove whether fine-tuning improves retrieval.
+The one-query, 200-chunk smoke result validates the pipeline but is not a
+meaningful quality estimate.
 
 ### 4. Fine-tune the SentenceTransformer bi-encoder
 

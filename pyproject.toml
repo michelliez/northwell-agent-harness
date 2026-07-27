@@ -29,6 +29,7 @@ agent-harness-genq-parse = "retrieval.genq.corpus_parser:main"
 agent-harness-genq-split = "retrieval.genq.dataset_split:main"
 agent-harness-genq-generate = "retrieval.genq.query_generation:main"
 agent-harness-genq-filter = "retrieval.genq.query_filter:main"
+agent-harness-genq-baseline = "retrieval.genq.baseline_faiss:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -72,7 +73,7 @@ genq = [
     "sentencepiece>=0.2.2",
     "torch>=2.13.0",
     "tqdm>=4.69.1",
-    "transformers>=5.14.1",
+    "transformers>=4.41.0,<5",
 ]
 
 [tool.ruff]

@@ -543,11 +543,12 @@ def _validate_k(k: int) -> None:
         raise ValueError("K must be at least 1")
 
 
-def _ranked_metrics(
+def ranked_metrics(
     ranked_ids: Sequence[str],
     relevance_by_id: Mapping[str, int],
     k_values: Sequence[int],
 ) -> dict[str, float | bool | None]:
+    """Calculate standard ranking metrics for one ranked result list."""
     grades = [relevance_by_id.get(item_id, 0) for item_id in ranked_ids]
     ideal_grades = list(relevance_by_id.values())
     relevant_total = sum(grade > 0 for grade in ideal_grades)
@@ -796,16 +797,16 @@ def run_retrieval_evaluation(
             metrics_status: str | None = None
             if query.judgment_scope == JudgmentScope.corpus_complete:
                 metrics = {
-                    "chunk": _ranked_metrics(ranked_chunk_ids, relevance_by_chunk_id, normalized_k),
-                    "document": _ranked_metrics(ranked_doc_ids, relevance_by_doc_id, normalized_k),
+                    "chunk": ranked_metrics(ranked_chunk_ids, relevance_by_chunk_id, normalized_k),
+                    "document": ranked_metrics(ranked_doc_ids, relevance_by_doc_id, normalized_k),
                 }
                 metrics_status = "complete"
                 unjudged_doc_ids = []
                 unjudged_chunk_ids = []
             elif not unjudged_doc_ids and not unjudged_chunk_ids:
                 metrics = {
-                    "chunk": _ranked_metrics(ranked_chunk_ids, relevance_by_chunk_id, normalized_k),
-                    "document": _ranked_metrics(ranked_doc_ids, relevance_by_doc_id, normalized_k),
+                    "chunk": ranked_metrics(ranked_chunk_ids, relevance_by_chunk_id, normalized_k),
+                    "document": ranked_metrics(ranked_doc_ids, relevance_by_doc_id, normalized_k),
                 }
                 metrics_status = "complete"
 

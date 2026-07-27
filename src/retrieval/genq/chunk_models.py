@@ -191,3 +191,98 @@ class FilterReport(BaseModel):
     source_chunks_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     retained_queries_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     review_ledger_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class FaissMappingRecord(BaseModel):
+    """Exact relationship between one FAISS vector position and a chunk."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    vector_position: int = Field(ge=0)
+    chunk_id: str = Field(min_length=1)
+    source_file: str = Field(min_length=1)
+    table_name: str = Field(min_length=1)
+    column_name: str | None = None
+    chunk_type: ChunkType
+    text_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class BaselineIndexMetadata(BaseModel):
+    """Reproducibility contract for an exact pretrained-model FAISS index."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    index_version: str
+    model_name: str
+    device: str
+    index_type: Literal["IndexFlatIP"]
+    normalized_embeddings: Literal[True]
+    embedding_dimension: int = Field(ge=1)
+    source_chunk_count: int = Field(ge=1)
+    indexed_chunk_count: int = Field(ge=1)
+    requested_limit: int | None
+    source_chunks_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    mapping_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class RankedChunkHit(BaseModel):
+    """One ranked result retained for baseline-evaluation inspection."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    rank: int = Field(ge=1)
+    score: float
+    chunk_id: str = Field(min_length=1)
+    source_file: str = Field(min_length=1)
+    table_name: str = Field(min_length=1)
+    column_name: str | None = None
+    chunk_type: ChunkType
+
+
+class BaselineQueryResult(BaseModel):
+    """Exact rank and metrics for one known-positive synthetic query."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    query_id: str
+    query: str
+    relevant_chunk_id: str
+    positive_rank: int = Field(ge=1)
+    reciprocal_rank: float = Field(gt=0, le=1)
+    precision_at_1: float = Field(ge=0, le=1)
+    precision_at_5: float = Field(ge=0, le=1)
+    precision_at_10: float = Field(ge=0, le=1)
+    recall_at_1: float = Field(ge=0, le=1)
+    recall_at_5: float = Field(ge=0, le=1)
+    recall_at_10: float = Field(ge=0, le=1)
+    hit_at_1: float = Field(ge=0, le=1)
+    hit_at_5: float = Field(ge=0, le=1)
+    hit_at_10: float = Field(ge=0, le=1)
+    ndcg_at_10: float = Field(ge=0, le=1)
+    top_hits: list[RankedChunkHit]
+
+
+class BaselineEvaluationReport(BaseModel):
+    """Aggregate exact-retrieval metrics for an unfine-tuned encoder."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    evaluation_version: str
+    model_name: str
+    device: str
+    index_version: str
+    candidate_chunk_count: int = Field(ge=1)
+    evaluated_query_count: int = Field(ge=1)
+    precision_at_1: float = Field(ge=0, le=1)
+    precision_at_5: float = Field(ge=0, le=1)
+    precision_at_10: float = Field(ge=0, le=1)
+    recall_at_1: float = Field(ge=0, le=1)
+    recall_at_5: float = Field(ge=0, le=1)
+    recall_at_10: float = Field(ge=0, le=1)
+    hit_at_1: float = Field(ge=0, le=1)
+    hit_at_5: float = Field(ge=0, le=1)
+    hit_at_10: float = Field(ge=0, le=1)
+    mrr: float = Field(ge=0, le=1)
+    ndcg_at_10: float = Field(ge=0, le=1)
+    retained_queries_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    query_results: list[BaselineQueryResult]
