@@ -32,6 +32,7 @@ from agent_host.nodes.lifecycle_nodes import (
     final_answer_node,
     interpretation_and_citations_node,
 )
+from agent_host.nodes.output_safety_nodes import classify_output_safety_node
 from agent_host.nodes.policy_nodes import input_policy_node, result_safety_node
 from agent_host.nodes.retrieval_nodes import (
     context_gate_node,
@@ -169,6 +170,7 @@ def build_graph(checkpointer=None):
     builder.add_node("generate_sql", generate_sql_node)
     builder.add_node("validate_sql", validate_sql_node)
     builder.add_node("execution_not_configured", execution_not_configured_node)
+    builder.add_node("classify_output_safety", classify_output_safety_node)
     builder.add_node("result_safety", result_safety_node)
     builder.add_node("interpretation_and_citations", interpretation_and_citations_node)
     builder.add_node("final_answer", final_answer_node)
@@ -178,9 +180,10 @@ def build_graph(checkpointer=None):
     builder.add_edge(START, "input_policy")
     builder.add_edge("exploration", "context_gate")
     builder.add_edge("retrieve_context", "context_gate")
-    builder.add_edge("general_answer", "result_safety")
-    builder.add_edge("documentation_answer", "result_safety")
-    builder.add_edge("execution_not_configured", "result_safety")
+    builder.add_edge("general_answer", "classify_output_safety")
+    builder.add_edge("documentation_answer", "classify_output_safety")
+    builder.add_edge("execution_not_configured", "classify_output_safety")
+    builder.add_edge("classify_output_safety", "result_safety")
     builder.add_edge("result_safety", "interpretation_and_citations")
     builder.add_edge("interpretation_and_citations", "final_answer")
     builder.add_edge("final_answer", "bounded_followup")

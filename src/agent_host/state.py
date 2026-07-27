@@ -48,6 +48,7 @@ class AgentState(TypedDict, total=False):
 
     # Output
     citations: Annotated[list[str], _append]
+    output_safety_assessment: dict | None  # serialized output safety classification
 
     # Answer and lifecycle
     answer: str | None
@@ -80,6 +81,7 @@ def make_initial_state(question: str, run_id: str, started_at: float) -> AgentSt
         repair_count=0,
         repair_hint=None,
         citations=[],
+        output_safety_assessment=None,
         answer=None,
         policy_blocked=False,
         policy_reason=None,

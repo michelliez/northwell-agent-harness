@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
+from retrieval.genq.chunk_models import ChunkRecord
 from retrieval.genq.corpus_parser import ParserConfig, build_corpus, parse_epic_html
+
+HASH = hashlib.sha256(b"value").hexdigest()
 
 EPIC_HTML = """\
 <!doctype html>
@@ -165,3 +170,46 @@ def test_missing_content_container_has_useful_error(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="missing div#oContent"):
         parse_epic_html(html_path, corpus_root=tmp_path)
+
+
+def _valid_record(**overrides: object) -> dict[str, object]:
+    record: dict[str, object] = {
+        "chunk_id": "CLARITY_ADT__COLUMN_DEFINITION__EVENT_TYPE_C",
+        "source_file": "CLARITY_ADT.html",
+        "source_hash": HASH,
+        "table_name": "CLARITY_ADT",
+        "column_name": "EVENT_TYPE_C",
+        "chunk_type": "column_definition",
+        "section_name": "Column Information",
+        "text": "Table CLARITY_ADT. Column EVENT_TYPE_C. Description: Event type.",
+        "text_hash": HASH,
+        "parser_version": "epic-genq-html-v1",
+    }
+    record.update(overrides)
+    return record
+
+
+def test_chunk_record_accepts_complete_column_metadata() -> None:
+    record = ChunkRecord.model_validate(_valid_record())
+
+    assert record.column_name == "EVENT_TYPE_C"
+    assert record.chunk_type == "column_definition"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("chunk_id", ""),
+        ("source_hash", "not-a-sha256"),
+        ("chunk_type", "made_up_type"),
+        ("text", " surrounding whitespace "),
+    ],
+)
+def test_chunk_record_rejects_invalid_fields(field: str, value: str) -> None:
+    with pytest.raises(ValidationError):
+        ChunkRecord.model_validate(_valid_record(**{field: value}))
+
+
+def test_chunk_record_rejects_unknown_fields() -> None:
+    with pytest.raises(ValidationError):
+        ChunkRecord.model_validate(_valid_record(unexpected="value"))

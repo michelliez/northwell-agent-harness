@@ -135,3 +135,21 @@ def test_general_question_intent_maps_to_answer_without_tools(tmp_path, monkeypa
     result = classify_intent_node(_make_state("what is the sky?"))
     assert result.get("intent") == "general_question"
     assert result.get("recommended_action") == "answer_without_tools"
+
+
+def test_classify_intent_node_fails_closed_on_model_error(tmp_path, monkeypatch) -> None:
+    from agent_host.nodes import intent_nodes
+
+    class _FailingClient:
+        class messages:
+            @staticmethod
+            def create(**_):
+                raise RuntimeError("Model unreachable")
+
+    monkeypatch.setattr(intent_nodes, "get_config", lambda: _FakeCfg(tmp_path))
+    monkeypatch.setattr(intent_nodes, "Anthropic", lambda **_: _FailingClient())
+
+    result = intent_nodes.classify_intent_node(_make_state("How many encounters last month?"))
+
+    assert result.get("intent") in {"unknown", None}
+    assert result.get("recommended_action") in {"clarify", None}
