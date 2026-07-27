@@ -1,6 +1,5 @@
 from collections import Counter
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -74,36 +73,16 @@ def test_intent_evaluation_tracks_safety_and_false_positive_findings() -> None:
     assert "false_positive" in checks
 
 
-@pytest.mark.asyncio
-async def test_direct_intent_runner_reports_differences_without_operational_failure(
+def test_direct_intent_runner_reports_differences_without_operational_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class FakeBridge:
-        async def __aenter__(self) -> FakeBridge:
-            return self
-
-        async def __aexit__(self, *args: object) -> None:
-            return None
-
-        async def call_tool(self, name: str, arguments: object) -> dict[str, object]:
-            assert name == "classify_intent"
-            return _result(intent="schema_lookup", recommended_action="retrieve_documentation")
-
     monkeypatch.setattr(
         runner,
-        "MCPToolBridge",
-        lambda _, **__: FakeBridge(),
-    )
-    monkeypatch.setattr(
-        runner,
-        "get_settings",
-        lambda: SimpleNamespace(
-            intent_mcp_url="http://intent.test/mcp",
-            require_claude_model=lambda: "test-model",
-        ),
+        "classify_intent",
+        lambda *_: _result(intent="schema_lookup", recommended_action="retrieve_documentation"),
     )
 
-    report = await runner.run_intent_cases([_case()], repetitions=2)
+    report = runner.run_intent_cases([_case()], repetitions=2)
 
     assert report["metrics"]["operational_failures"] == 0
     assert report["metrics"]["reported_differences"] == 2

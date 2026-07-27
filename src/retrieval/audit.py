@@ -9,7 +9,7 @@ from pathlib import Path
 
 from retrieval.indexer import CHUNK_HARD_MAX_CHARS, estimate_tokens_from_chars
 
-DEFAULT_RAG_DB_PATH = Path(__file__).resolve().parents[3] / "var" / "rag" / "index.sqlite"
+DEFAULT_RAG_DB_PATH = Path(".local/rag/index.sqlite")
 
 NEAR_EMPTY_CHARS = 200  # below this, a chunk is too small to be useful (~50 tokens)
 
@@ -44,7 +44,9 @@ def _pct(sorted_vals: list[int], p: int) -> int:
 
 def run_audit(db_path: Path) -> AuditReport:
     if not db_path.is_file():
-        raise SystemExit(f"Database not found: {db_path}\nBuild the index first with agent-harness-rag-index.")
+        raise SystemExit(
+            f"Database not found: {db_path}\nBuild the index first with agent-harness-rag-index."
+        )
 
     conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
@@ -63,9 +65,7 @@ def run_audit(db_path: Path) -> AuditReport:
     chunk_count = len(rows)
     char_lengths = [len(r["text"]) for r in rows]
 
-    empty_count = sum(
-        1 for r in rows if not r["text"].strip() or r["text"].strip() == "No data"
-    )
+    empty_count = sum(1 for r in rows if not r["text"].strip() or r["text"].strip() == "No data")
     near_empty_count = sum(
         1
         for r in rows
@@ -159,7 +159,7 @@ def main() -> None:
         "--db",
         type=Path,
         default=Path(os.getenv("RAG_DB_PATH") or DEFAULT_RAG_DB_PATH),
-        help="Path to the SQLite index (default: RAG_DB_PATH env or var/rag/index.sqlite)",
+        help="Path to the SQLite index (default: RAG_DB_PATH env or .local/rag/index.sqlite)",
     )
     args = parser.parse_args()
     report = run_audit(args.db)

@@ -110,8 +110,7 @@ def test_hash_thresholds_populate_all_splits_for_representative_sample(
     config = make_config(tmp_path, tmp_path / "unused.jsonl")
     counts = {
         split: sum(
-            assign_source_split(f"TABLE_{index}.html", config) == split
-            for index in range(1_000)
+            assign_source_split(f"TABLE_{index}.html", config) == split for index in range(1_000)
         )
         for split in ("train", "validation", "test")
     }
@@ -129,9 +128,7 @@ def test_hash_thresholds_populate_all_splits_for_representative_sample(
         {"seed": "  "},
     ],
 )
-def test_invalid_configuration_is_rejected(
-    tmp_path: Path, overrides: dict[str, object]
-) -> None:
+def test_invalid_configuration_is_rejected(tmp_path: Path, overrides: dict[str, object]) -> None:
     config = make_config(tmp_path, tmp_path / "chunks.jsonl", **overrides)
 
     with pytest.raises(ValueError):

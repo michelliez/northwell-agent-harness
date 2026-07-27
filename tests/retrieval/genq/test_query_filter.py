@@ -236,8 +236,7 @@ def test_same_query_with_different_positives_is_flagged_for_review(tmp_path: Pat
     assert report.manual_review_query_count == 2
     assert all(review["decision"] == "review" for review in reviews)
     assert all(
-        "same_query_multiple_positive_chunks" in review["reason_codes"]
-        for review in reviews
+        "same_query_multiple_positive_chunks" in review["reason_codes"] for review in reviews
     )
 
 

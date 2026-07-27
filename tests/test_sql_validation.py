@@ -1,6 +1,7 @@
 import pytest
+from pydantic import ValidationError
 
-from mcp_servers.sql_validation import validate_sql
+from sql.validation import validate_sql
 
 
 @pytest.mark.parametrize(
@@ -34,18 +35,22 @@ from mcp_servers.sql_validation import validate_sql
         ),
     ],
 )
-def test_valid_aggregate_bigquery_sql_is_allowed(sql: str, tables: list[str]) -> None:
-    result = validate_sql(sql, tables)
+def test_valid_aggregate_bigquery_sql_is_allowed(
+    sql: str,
+    tables: list[str],
+    standard_snapshot,
+) -> None:
+    result = validate_sql(sql, tables, standard_snapshot)
 
-    assert result["allowed"] is True
-    assert result["reason"] is None
-    assert result["normalized_sql"]
-    assert result["violations"] == []
-    assert result["referenced_tables"] == sorted(tables)
-    assert result["declared_tables"] == sorted(tables)
-    assert result["statement_type"] == "Select"
-    assert result["validator_version"] == "sqlglot_ast_v2"
-    assert result["sqlglot_version"]
+    assert result.allowed is True
+    assert result.reason is None
+    assert result.normalized_sql
+    assert result.violations == []
+    assert result.referenced_tables == sorted(tables)
+    assert result.declared_tables == sorted(tables)
+    assert result.statement_type == "Select"
+    assert result.validator_version == "sqlglot_ast_v2"
+    assert result.sqlglot_version
 
 
 @pytest.mark.parametrize(
@@ -115,34 +120,58 @@ def test_valid_aggregate_bigquery_sql_is_allowed(sql: str, tables: list[str]) ->
         ),
     ],
 )
-def test_unsafe_or_invalid_sql_is_blocked(sql: str, tables: list[str], reason: str) -> None:
-    result = validate_sql(sql, tables)
+def test_unsafe_or_invalid_sql_is_blocked(
+    sql: str,
+    tables: list[str],
+    reason: str,
+    standard_snapshot,
+) -> None:
+    result = validate_sql(sql, tables, standard_snapshot)
 
-    assert result["allowed"] is False
-    assert result["reason"] == reason
-    assert result["normalized_sql"] is None
-    assert result["violations"][0]["code"] == reason
+    assert result.allowed is False
+    assert result.reason == reason
+    assert result.normalized_sql is None
+    assert result.violations[0].code == reason
 
 
-def test_identifier_count_is_allowed_but_alias_filter_is_not() -> None:
+def test_identifier_count_is_allowed_but_alias_filter_is_not(standard_snapshot) -> None:
     allowed = validate_sql(
         "SELECT COUNT(DISTINCT p.patient_id) FROM patients AS p",
         ["patients"],
+        standard_snapshot,
     )
     blocked = validate_sql(
         "SELECT COUNT(*) FROM patients AS p WHERE p.patient_id = 'example'",
         ["patients"],
+        standard_snapshot,
     )
 
-    assert allowed["allowed"] is True
-    assert blocked["reason"] == "identifier_column_disallowed_context"
+    assert allowed.allowed is True
+    assert blocked.reason == "identifier_column_disallowed_context"
 
 
-def test_string_literals_and_comments_do_not_trigger_lexical_false_positives() -> None:
+def test_string_literals_and_comments_do_not_trigger_lexical_false_positives(
+    standard_snapshot,
+) -> None:
     result = validate_sql(
         "SELECT COUNT(*) FROM appointments "
         "WHERE status IN ('update', 'patient_id') -- drop is not an operation",
         ["appointments"],
+        standard_snapshot,
     )
 
-    assert result["allowed"] is True
+    assert result.allowed is True
+
+
+@pytest.mark.parametrize(
+    ("sql", "tables"),
+    [
+        (" ", []),
+        ("S" * 10_001, []),
+        ("SELECT COUNT(*) FROM appointments", ["x" * 257]),
+    ],
+    ids=["blank_sql", "oversized_sql", "oversized_table_name"],
+)
+def test_malicious_input_boundaries_are_rejected(sql: str, tables: list[str]) -> None:
+    with pytest.raises(ValidationError):
+        validate_sql(sql, tables)

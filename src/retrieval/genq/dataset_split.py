@@ -186,9 +186,7 @@ def build_splits(config: SplitConfig) -> SplitReport:
     source_counts = Counter(source_assignments.values())
     chunk_counts = Counter(record.split for record in split_records)
     type_counts: dict[SplitName, Counter[str]] = {
-        split: Counter(
-            record.chunk_type for record in split_records if record.split == split
-        )
+        split: Counter(record.chunk_type for record in split_records if record.split == split)
         for split in SPLIT_NAMES
     }
     report = SplitReport(
@@ -199,12 +197,8 @@ def build_splits(config: SplitConfig) -> SplitReport:
         ratios=config.ratios(),
         source_file_count=len(source_files),
         chunk_count=len(split_records),
-        source_counts_by_split={
-            split: source_counts.get(split, 0) for split in SPLIT_NAMES
-        },
-        chunk_counts_by_split={
-            split: chunk_counts.get(split, 0) for split in SPLIT_NAMES
-        },
+        source_counts_by_split={split: source_counts.get(split, 0) for split in SPLIT_NAMES},
+        chunk_counts_by_split={split: chunk_counts.get(split, 0) for split in SPLIT_NAMES},
         chunk_type_counts_by_split={
             split: dict(sorted(type_counts[split].items())) for split in SPLIT_NAMES
         },
@@ -239,9 +233,7 @@ def main() -> None:
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--seed", default=DEFAULT_SEED)
     parser.add_argument("--train-ratio", type=float, default=DEFAULT_TRAIN_RATIO)
-    parser.add_argument(
-        "--validation-ratio", type=float, default=DEFAULT_VALIDATION_RATIO
-    )
+    parser.add_argument("--validation-ratio", type=float, default=DEFAULT_VALIDATION_RATIO)
     parser.add_argument("--test-ratio", type=float, default=DEFAULT_TEST_RATIO)
     parser.add_argument(
         "--log-level",

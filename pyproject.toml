@@ -7,7 +7,7 @@ requires-python = ">=3.14"
 dependencies = [
     "anthropic>=0.116.0",
     "beautifulsoup4>=4.15.0",
-    "fastmcp>=3.4.3",
+    "langgraph>=1.2.9,<2",
     "pydantic>=2.13.4",
     "python-dotenv>=1.2.2",
     "rich>=15.0.0",
@@ -16,13 +16,8 @@ dependencies = [
 
 [project.scripts]
 agent-harness = "agent_host.cli:main"
-agent-harness-data-catalog = "mcp_servers.data_catalog:main"
-agent-harness-intent = "mcp_servers.intent:main"
-agent-harness-sql-generation = "mcp_servers.sql_generation:main"
-agent-harness-sql-validation = "mcp_servers.sql_validation:main"
 agent-harness-eval = "evals.runner:main"
 agent-harness-traces = "trace_viewer.__main__:main"
-agent-harness-rag = "retrieval.mcp_server:main"
 agent-harness-rag-index = "retrieval.indexer:main"
 agent-harness-rag-audit = "retrieval.audit:main"
 agent-harness-genq-parse = "retrieval.genq.corpus_parser:main"
@@ -39,9 +34,9 @@ build-backend = "hatchling.build"
 packages = [
     "src/agent_host",
     "src/evals",
-    "src/mcp_servers",
     "src/policy",
     "src/retrieval",
+    "src/sql",
     "src/trace_viewer",
 ]
 

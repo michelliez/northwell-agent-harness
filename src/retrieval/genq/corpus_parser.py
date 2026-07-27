@@ -74,11 +74,7 @@ def _owned_rows(table: Tag) -> list[Tag]:
 
 
 def _owned_cells(row: Tag) -> list[Tag]:
-    return [
-        cell
-        for cell in row.find_all(["th", "td"])
-        if cell.find_parent("tr") is row
-    ]
+    return [cell for cell in row.find_all(["th", "td"]) if cell.find_parent("tr") is row]
 
 
 def _direct_cell_text(cell: Tag) -> str:
@@ -142,9 +138,7 @@ def _make_record(
     column_name: str | None = None,
 ) -> ChunkRecord:
     identity = column_name if column_name else section_name
-    chunk_id = (
-        f"{_identifier(table_name)}__{_identifier(chunk_type)}__{_identifier(identity)}"
-    )
+    chunk_id = f"{_identifier(table_name)}__{_identifier(chunk_type)}__{_identifier(identity)}"
     clean_text = _clean_text(text)
     return ChunkRecord(
         chunk_id=chunk_id,
@@ -195,9 +189,7 @@ def _column_records(
         description = ""
         if index + 1 < len(rows):
             next_cells = _owned_cells(rows[index + 1])
-            if next_cells and not (
-                len(next_cells) >= 2 and "T1Head" in css_classes(next_cells[1])
-            ):
+            if next_cells and not (len(next_cells) >= 2 and "T1Head" in css_classes(next_cells[1])):
                 description = _clean_text(" ".join(_direct_cell_text(cell) for cell in next_cells))
                 index += 1
 
@@ -284,9 +276,7 @@ def parse_epic_html(html_path: Path, *, corpus_root: Path) -> ParsedSource:
     if isinstance(metadata, Tag):
         pairs = _metadata_pairs(metadata)
         if pairs:
-            rendered = " ".join(
-                f"{label}: {value.rstrip('.')}." for label, value in pairs
-            )
+            rendered = " ".join(f"{label}: {value.rstrip('.')}." for label, value in pairs)
             records.append(
                 _make_record(
                     source_file=source_file,

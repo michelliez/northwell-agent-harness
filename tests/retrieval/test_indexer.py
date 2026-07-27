@@ -5,10 +5,9 @@ from pathlib import Path
 
 import pytest
 from bs4 import BeautifulSoup
-from pydantic import ValidationError
 
 from retrieval import indexer as indexer_module
-from retrieval import mcp_server
+from retrieval import search as search_module
 from retrieval.indexer import (
     CHUNK_HARD_MAX_CHARS,
     CHUNK_TARGET_CHARS,
@@ -35,50 +34,34 @@ def test_build_and_search_rag_index(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     )
     db_path = tmp_path / "rag.sqlite"
     version, doc_count, _chunk_count = build_index(html_path, db_path)
-    monkeypatch.setenv("RAG_DB_PATH", str(db_path))
 
-    result = mcp_server.search_docs("appointment status", top_k=5)
+    context = search_module.retrieve_documentation_context("appointment status", db_path, top_k=5)
 
     assert doc_count == 1
-    assert result["index_version"] == version
-    assert result["results"]
-    chunk = mcp_server.get_doc_chunk(result["results"][0]["chunk_id"])
+    assert context["index_version"] == version
+    assert context["chunks"]
+    chunk = context["chunks"][0]
     assert chunk["source_path"] == "appointments.html"
     assert "Scheduled or completed" in chunk["text"]
 
-    context = mcp_server.retrieve_documentation_context("appointment status", top_k=5)
-    assert context["chunks"][0]["source_path"] == "appointments.html"
-
-    table_docs = mcp_server.find_table_doc("appointments")
-    assert table_docs["matches"] == [
-        {
-            "doc_id": chunk["doc_id"],
-            "source_path": "appointments.html",
-            "title": "Appointments",
-        }
-    ]
-
-    section = mcp_server.get_doc_section("appointments", "Status")
-    assert "Scheduled or completed" in section["chunks"][0]["text"]
-
 
 def test_search_with_no_fts_tokens_returns_no_results(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    tmp_path: Path,
 ) -> None:
     html_path = tmp_path / "simple.html"
     html_path.write_text("<html><body>Simple documentation</body></html>", encoding="utf-8")
     db_path = tmp_path / "rag.sqlite"
     build_index(html_path, db_path)
-    monkeypatch.setenv("RAG_DB_PATH", str(db_path))
 
-    result = mcp_server.search_docs("---", top_k=5)
+    result = search_module.retrieve_documentation_context("---", db_path, top_k=5)
 
-    assert result["results"] == []
+    assert result["chunks"] == []
 
 
-def test_public_retrieval_tool_rejects_unbounded_top_k() -> None:
-    with pytest.raises(ValidationError):
-        mcp_server.retrieve_documentation_context("admissions", top_k=26)
+def test_public_retrieval_rejects_unbounded_top_k(tmp_path: Path) -> None:
+    db_path = tmp_path / "nonexistent.sqlite"
+    with pytest.raises(ValueError, match="top_k"):
+        search_module.retrieve_documentation_context("test", db_path, top_k=26)
 
 
 def test_section_empty_not_indexed(tmp_path: Path) -> None:
@@ -101,9 +84,7 @@ def test_section_empty_not_indexed(tmp_path: Path) -> None:
     _version, doc_count, chunk_count = build_index(html_path, db_path)
 
     conn = sqlite3.connect(str(db_path))
-    categories = {
-        row[0] for row in conn.execute("SELECT DISTINCT category FROM chunks").fetchall()
-    }
+    categories = {row[0] for row in conn.execute("SELECT DISTINCT category FROM chunks").fetchall()}
     fact_count = conn.execute("SELECT COUNT(*) FROM section_facts").fetchone()[0]
     conn.close()
 
@@ -377,8 +358,7 @@ def test_every_content_row_covered_by_chunk() -> None:
         for marker in (f"COVERAGE_FIELD_{i:03d}", f"COVERAGE_VALUE_{i:03d}")
     ]
     rows_html = "".join(
-        f"<tr><td>COVERAGE_FIELD_{i:03d}</td>"
-        f"<td>COVERAGE_VALUE_{i:03d} description text</td></tr>"
+        f"<tr><td>COVERAGE_FIELD_{i:03d}</td><td>COVERAGE_VALUE_{i:03d} description text</td></tr>"
         for i in range(12)
     )
     _title, chunks, _facts = extract_chunks(
@@ -391,7 +371,9 @@ def test_every_content_row_covered_by_chunk() -> None:
         fallback_title="coverage",
     )
     all_text = " ".join(c.text for c in chunks)
-    wrong_counts = {marker: all_text.count(marker) for marker in markers if all_text.count(marker) != 1}
+    wrong_counts = {
+        marker: all_text.count(marker) for marker in markers if all_text.count(marker) != 1
+    }
     assert not wrong_counts, f"cells with incorrect chunk coverage: {wrong_counts}"
 
 
@@ -399,9 +381,7 @@ def test_every_content_row_covered_after_split() -> None:
     """Every owned cell must appear once after a table is split into chunks."""
     count = 120  # enough rows to force table_to_chunks to split
     markers = [
-        marker
-        for i in range(count)
-        for marker in (f"SPLIT_FIELD_{i:04d}", f"SPLIT_VALUE_{i:04d}")
+        marker for i in range(count) for marker in (f"SPLIT_FIELD_{i:04d}", f"SPLIT_VALUE_{i:04d}")
     ]
     rows_html = "".join(
         f"<tr><td>SPLIT_FIELD_{i:04d}</td>"
@@ -419,7 +399,9 @@ def test_every_content_row_covered_after_split() -> None:
     )
     assert len(chunks) > 1, "test requires splitting to occur"
     all_text = " ".join(c.text for c in chunks)
-    wrong_counts = {marker: all_text.count(marker) for marker in markers if all_text.count(marker) != 1}
+    wrong_counts = {
+        marker: all_text.count(marker) for marker in markers if all_text.count(marker) != 1
+    }
     assert not wrong_counts, f"cells with incorrect split coverage: {wrong_counts}"
 
 
@@ -456,9 +438,7 @@ def test_section_fact_recorded_when_section_has_no_sibling() -> None:
     )
 
     assert chunks == []
-    assert facts == [
-        SectionFact(heading_path="T > Missing", fact="present_but_unavailable")
-    ]
+    assert facts == [SectionFact(heading_path="T > Missing", fact="present_but_unavailable")]
 
 
 def test_section_facts_stored_in_db(tmp_path: Path) -> None:

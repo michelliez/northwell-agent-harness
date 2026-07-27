@@ -14,7 +14,7 @@ from pathlib import Path, PurePosixPath
 from time import perf_counter
 from typing import Any
 
-from retrieval.mcp_server import search_ranked_chunks
+from retrieval.search import search_ranked_chunks
 
 DOCUMENT_NAMESPACE = "epic_clarity"
 
@@ -603,6 +603,19 @@ def _get_index_version(conn: sqlite3.Connection) -> str:
     return str(row[0])
 
 
+def _get_chunker_version(conn: sqlite3.Connection) -> str:
+    """Read the chunker that built this index.
+
+    Benchmark numbers are only comparable within one chunker version, so the
+    report records the version the index was actually built with rather than
+    whatever the current source declares.
+    """
+    row = conn.execute("SELECT value FROM index_metadata WHERE key = 'chunker_version'").fetchone()
+    if row is None:
+        raise ValueError("RAG index is missing chunker_version")
+    return str(row[0])
+
+
 def _fts_retrieve(
     conn: sqlite3.Connection, query: str, top_k: int
 ) -> tuple[list[RankedChunk], float]:
@@ -683,6 +696,7 @@ def run_retrieval_evaluation(
     conn.row_factory = sqlite3.Row
     try:
         index_version = _get_index_version(conn)
+        chunker_version = _get_chunker_version(conn)
         results: list[dict[str, Any]] = []
         resolution_summary: dict[str, int] = defaultdict(int)
         max_k = max(normalized_k)
@@ -873,6 +887,7 @@ def run_retrieval_evaluation(
         "generated_at": datetime.now(UTC).isoformat(),
         "retriever": retriever,
         "index_version": index_version,
+        "chunker_version": chunker_version,
         "k_values": list(normalized_k),
         "query_count": len(results),
         "resolved_query_count": len(resolved_results),

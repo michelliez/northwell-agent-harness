@@ -7,7 +7,9 @@ import os
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 TraceContentMode = Literal["metadata", "debug"]
 _SENSITIVE_KEYS = frozenset(
@@ -22,6 +24,52 @@ _SENSITIVE_KEYS = frozenset(
         "content",
     }
 )
+
+
+class _TraceRecord(BaseModel):
+    """Common validated framework-neutral JSONL trace envelope."""
+
+    model_config = ConfigDict(extra="allow")
+
+    ts: float = Field(ge=0)
+    run_id: str = Field(min_length=1)
+    event: str = Field(min_length=1)
+
+
+class PolicyTraceRecord(_TraceRecord):
+    domain: Literal["policy"]
+
+
+class IntentTraceRecord(_TraceRecord):
+    domain: Literal["intent"]
+
+
+class RetrievalTraceRecord(_TraceRecord):
+    domain: Literal["retrieval"]
+
+
+class SqlTraceRecord(_TraceRecord):
+    domain: Literal["sql"]
+
+
+class LifecycleTraceRecord(_TraceRecord):
+    domain: Literal["lifecycle"]
+
+
+class OperationalTraceRecord(_TraceRecord):
+    domain: Literal["operational"]
+
+
+TraceRecord = Annotated[
+    PolicyTraceRecord
+    | IntentTraceRecord
+    | RetrievalTraceRecord
+    | SqlTraceRecord
+    | LifecycleTraceRecord
+    | OperationalTraceRecord,
+    Field(discriminator="domain"),
+]
+_TRACE_ADAPTER = TypeAdapter(TraceRecord)
 
 
 def jsonable(value: Any) -> Any:
@@ -66,7 +114,7 @@ class TraceLogger:
 
     def __init__(
         self,
-        trace_dir: str = "logs/runs",
+        trace_dir: str = ".local/traces",
         run_id: str | None = None,
         *,
         content_mode: TraceContentMode = "metadata",
@@ -85,10 +133,12 @@ class TraceLogger:
             "ts": time.time(),
             "run_id": self.run_id,
             "event": event,
+            "domain": _trace_domain(event),
             **fields,
         }
         if self.content_mode == "metadata":
             row = self._redact_row(row)
+        row = _TRACE_ADAPTER.validate_python(row).model_dump(mode="json", exclude_none=True)
         with self.path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(jsonable(row), ensure_ascii=True) + "\n")
 
@@ -123,3 +173,24 @@ class TraceLogger:
         if isinstance(value, (list, tuple, set)):
             summary["item_count"] = len(value)
         return summary
+
+
+def _trace_domain(event: str) -> str:
+    prefix = event.split(".", 1)[0]
+    if prefix in {"policy_gate", "request", "content", "answer"}:
+        return "policy"
+    if prefix == "intent":
+        return "intent"
+    if prefix in {"retrieval", "context_gate", "exploration"}:
+        return "retrieval"
+    if prefix in {"query_plan", "plan_safety", "generate_sql", "validate_sql", "execution"}:
+        return "sql"
+    if prefix in {
+        "general_answer",
+        "documentation_answer",
+        "citations",
+        "final_answer",
+        "bounded_followup",
+    }:
+        return "lifecycle"
+    return "operational"

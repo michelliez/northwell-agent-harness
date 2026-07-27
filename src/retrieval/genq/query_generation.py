@@ -205,9 +205,7 @@ def load_split_chunks(path: Path) -> tuple[list[SplitChunkRecord], str]:
         try:
             records.append(SplitChunkRecord.model_validate_json(raw_line))
         except ValidationError as exc:
-            raise ValueError(
-                f"{path}:{line_number}: invalid split chunk record: {exc}"
-            ) from exc
+            raise ValueError(f"{path}:{line_number}: invalid split chunk record: {exc}") from exc
     duplicate_ids = [
         chunk_id
         for chunk_id, count in Counter(record.chunk_id for record in records).items()
@@ -247,9 +245,7 @@ def generate_queries(
     if not selected:
         raise ValueError("No chunks satisfy the configured passage length and limit")
 
-    active_generator = generator or HuggingFaceT5QueryGenerator(
-        config.model_name, config.device
-    )
+    active_generator = generator or HuggingFaceT5QueryGenerator(config.model_name, config.device)
     records: list[GeneratedQueryRecord] = []
     for batch_number, start in enumerate(range(0, len(selected), config.batch_size)):
         batch = selected[start : start + config.batch_size]
@@ -269,8 +265,7 @@ def generate_queries(
         )
         if len(generated) != len(batch):
             raise RuntimeError(
-                f"Generator returned results for {len(generated)} passages; "
-                f"expected {len(batch)}"
+                f"Generator returned results for {len(generated)} passages; expected {len(batch)}"
             )
         for chunk, raw_queries in zip(batch, generated, strict=True):
             if len(raw_queries) != config.queries_per_chunk:
@@ -281,12 +276,8 @@ def generate_queries(
             for query_index, raw_query in enumerate(raw_queries):
                 query = _normalize_query(raw_query)
                 if not query:
-                    raise RuntimeError(
-                        f"Generator returned an empty query for {chunk.chunk_id}"
-                    )
-                query_id = "q_" + _sha256_text(
-                    f"{chunk.chunk_id}\0{query_index}"
-                )[:16]
+                    raise RuntimeError(f"Generator returned an empty query for {chunk.chunk_id}")
+                query_id = "q_" + _sha256_text(f"{chunk.chunk_id}\0{query_index}")[:16]
                 records.append(
                     GeneratedQueryRecord(
                         query_id=query_id,
@@ -309,8 +300,7 @@ def generate_queries(
         if count > 1
     )
     lines = [
-        json.dumps(record.model_dump(), sort_keys=True, ensure_ascii=False)
-        for record in records
+        json.dumps(record.model_dump(), sort_keys=True, ensure_ascii=False) for record in records
     ]
     output_hash = _sha256_text("\n".join(lines) + "\n")
     split_counts = Counter(record.split for record in records)
@@ -336,8 +326,7 @@ def generate_queries(
         generated_query_count=len(records),
         duplicate_query_count=query_duplicates,
         query_counts_by_split={
-            split: split_counts.get(split, 0)
-            for split in ("train", "validation", "test")
+            split: split_counts.get(split, 0) for split in ("train", "validation", "test")
         },
         query_counts_by_chunk_type=dict(sorted(type_counts.items())),
         input_corpus_hash=input_hash,

@@ -210,9 +210,7 @@ def _ambiguous_exact_queries(
 ) -> set[str]:
     targets_by_key: dict[tuple[str, str], set[str]] = defaultdict(set)
     for query in queries:
-        targets_by_key[(query.split, _normalized_text(query.query))].add(
-            query.relevant_chunk_id
-        )
+        targets_by_key[(query.split, _normalized_text(query.query))].add(query.relevant_chunk_id)
     return {
         query.query_id
         for query in queries
@@ -223,12 +221,8 @@ def _ambiguous_exact_queries(
 def filter_queries(config: FilterConfig) -> FilterReport:
     """Apply conservative deterministic gates and write both outputs atomically."""
     config.validate()
-    queries, raw_hash = _load_jsonl(
-        config.queries_path, GeneratedQueryRecord, "generated query"
-    )
-    chunks, chunks_hash = _load_jsonl(
-        config.chunks_path, SplitChunkRecord, "split chunk"
-    )
+    queries, raw_hash = _load_jsonl(config.queries_path, GeneratedQueryRecord, "generated query")
+    chunks, chunks_hash = _load_jsonl(config.chunks_path, SplitChunkRecord, "split chunk")
     chunk_by_id = _validate_provenance(queries, chunks)
     ambiguous_query_ids = _ambiguous_exact_queries(queries)
 
@@ -260,9 +254,7 @@ def filter_queries(config: FilterConfig) -> FilterReport:
             reject_reasons.append("contains_model_artifact")
 
         normalized_passage = _normalized_text(chunk.text)
-        copied_substring = (
-            len(query_tokens) >= 8 and normalized in normalized_passage
-        )
+        copied_substring = len(query_tokens) >= 8 and normalized in normalized_passage
         copy_ratio = SequenceMatcher(None, normalized, normalized_passage).ratio()
         if copied_substring or copy_ratio >= config.passage_copy_threshold:
             reject_reasons.append("copies_source_passage")
@@ -319,19 +311,15 @@ def filter_queries(config: FilterConfig) -> FilterReport:
         prior_by_chunk[(query.split, query.relevant_chunk_id)].append(query)
 
     retained_lines = [
-        json.dumps(record.model_dump(), sort_keys=True, ensure_ascii=False)
-        for record in retained
+        json.dumps(record.model_dump(), sort_keys=True, ensure_ascii=False) for record in retained
     ]
     review_lines = [
-        json.dumps(record.model_dump(), sort_keys=True, ensure_ascii=False)
-        for record in reviews
+        json.dumps(record.model_dump(), sort_keys=True, ensure_ascii=False) for record in reviews
     ]
     retained_hash = _sha256_text("\n".join(retained_lines) + "\n")
     review_hash = _sha256_text("\n".join(review_lines) + "\n")
     decision_counts = Counter(review.decision for review in reviews)
-    reason_counts = Counter(
-        reason for review in reviews for reason in review.reason_codes
-    )
+    reason_counts = Counter(reason for review in reviews for reason in review.reason_codes)
     split_counts = Counter(record.split for record in retained)
     report = FilterReport(
         filter_version=FILTER_VERSION,
@@ -354,8 +342,7 @@ def filter_queries(config: FilterConfig) -> FilterReport:
         },
         reason_counts=dict(sorted(reason_counts.items())),
         retained_counts_by_split={
-            split: split_counts.get(split, 0)
-            for split in ("train", "validation", "test")
+            split: split_counts.get(split, 0) for split in ("train", "validation", "test")
         },
         raw_queries_hash=raw_hash,
         source_chunks_hash=chunks_hash,

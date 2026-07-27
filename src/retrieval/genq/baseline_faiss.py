@@ -139,9 +139,7 @@ class SentenceTransformerEncoder:
                 hidden = self._model(**tokenized).last_hidden_state
                 attention_mask = tokenized["attention_mask"].unsqueeze(-1)
                 masked_hidden = hidden * attention_mask
-                pooled = masked_hidden.sum(dim=1) / attention_mask.sum(dim=1).clamp(
-                    min=1
-                )
+                pooled = masked_hidden.sum(dim=1) / attention_mask.sum(dim=1).clamp(min=1)
             rows.append(pooled.detach().cpu().numpy().astype(np.float32))
         return np.concatenate(rows, axis=0)
 
@@ -154,9 +152,7 @@ def _sha256_text(value: str) -> str:
     return _sha256_bytes(value.encode("utf-8"))
 
 
-def _load_jsonl[T: BaseModel](
-    path: Path, model: type[T], label: str
-) -> tuple[list[T], str]:
+def _load_jsonl[T: BaseModel](path: Path, model: type[T], label: str) -> tuple[list[T], str]:
     try:
         raw_bytes = path.read_bytes()
     except FileNotFoundError as exc:
@@ -267,34 +263,24 @@ def run_baseline(
     """Embed chunks, build exact FAISS, and evaluate known-positive query ranks."""
     config.validate()
     all_chunks, chunks_hash = _load_jsonl(config.chunks_path, ChunkRecord, "chunk")
-    queries, queries_hash = _load_jsonl(
-        config.queries_path, FilteredQueryRecord, "retained query"
-    )
+    queries, queries_hash = _load_jsonl(config.queries_path, FilteredQueryRecord, "retained query")
     _validate_inputs(all_chunks, queries)
     selected = all_chunks[: config.limit] if config.limit is not None else all_chunks
     selected_ids = {chunk.chunk_id for chunk in selected}
-    missing_positives = sorted(
-        {query.relevant_chunk_id for query in queries} - selected_ids
-    )
+    missing_positives = sorted({query.relevant_chunk_id for query in queries} - selected_ids)
     if missing_positives:
         raise ValueError(
             "The bounded index excludes positive chunks required by evaluation: "
             + ", ".join(missing_positives[:5])
         )
 
-    active_encoder = encoder or SentenceTransformerEncoder(
-        config.model_name, config.device
-    )
+    active_encoder = encoder or SentenceTransformerEncoder(config.model_name, config.device)
     chunk_vectors = _normalize_embeddings(
-        active_encoder.encode(
-            [chunk.text for chunk in selected], batch_size=config.batch_size
-        ),
+        active_encoder.encode([chunk.text for chunk in selected], batch_size=config.batch_size),
         expected_rows=len(selected),
     )
     query_vectors = _normalize_embeddings(
-        active_encoder.encode(
-            [query.query for query in queries], batch_size=config.batch_size
-        ),
+        active_encoder.encode([query.query for query in queries], batch_size=config.batch_size),
         expected_rows=len(queries),
     )
 
@@ -321,8 +307,7 @@ def run_baseline(
         for position, chunk in enumerate(selected)
     ]
     mapping_lines = [
-        json.dumps(mapping.model_dump(), sort_keys=True, ensure_ascii=False)
-        for mapping in mappings
+        json.dumps(mapping.model_dump(), sort_keys=True, ensure_ascii=False) for mapping in mappings
     ]
     mapping_hash = _sha256_text("\n".join(mapping_lines) + "\n")
     metadata = BaselineIndexMetadata(
@@ -351,18 +336,14 @@ def run_baseline(
             if mapping.chunk_id == query.relevant_chunk_id
         )
         positive_rank = ranked_positions.index(positive_position) + 1
-        ranked_chunk_ids = [
-            mapping_by_position[position].chunk_id for position in ranked_positions
-        ]
+        ranked_chunk_ids = [mapping_by_position[position].chunk_id for position in ranked_positions]
         metrics = ranked_metrics(
             ranked_chunk_ids,
             {query.relevant_chunk_id: 1},
             (1, 5, 10),
         )
         top_hits: list[RankedChunkHit] = []
-        for rank, vector_position in enumerate(
-            ranked_positions[:inspection_k], start=1
-        ):
+        for rank, vector_position in enumerate(ranked_positions[:inspection_k], start=1):
             mapping = mapping_by_position[vector_position]
             top_hits.append(
                 RankedChunkHit(

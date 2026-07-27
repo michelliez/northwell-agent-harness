@@ -26,19 +26,14 @@ def test_sql_validation_expectation_uses_structural_trace_evidence() -> None:
             "expected_sql_validation": "allowed",
         }
     )
-    response = {"allowed": True, "answer": "validated mock SQL"}
+    response = {"allowed": True, "answer": "validated SQL draft"}
     events = [
         {"event": "policy_gate.checked"},
-        {"event": "intent.classification.request"},
-        {"event": "tool.selected", "name": "validate_sql"},
         {
-            "event": "tool.result",
-            "name": "validate_sql",
-            "result": {
-                "allowed": True,
-                "violations": [],
-                "referenced_tables": ["appointments"],
-            },
+            "event": "validate_sql.completed",
+            "allowed": True,
+            "violations": [],
+            "referenced_tables": ["appointments"],
         },
     ]
 

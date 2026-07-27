@@ -5,7 +5,18 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from mcp_servers.intent import IntentResult
+from pydantic import BaseModel
+
+
+class IntentResult(BaseModel):
+    """Concrete intent result for evaluation; matches the shape returned by the classifier."""
+
+    intent: str
+    confidence: float
+    recommended_action: str
+    needs_clarification: bool
+    risk_flags: list[str] = []
+
 
 IntentSafetyClass = Literal["safe", "must_clarify", "must_refuse"]
 VALID_INTENTS = {
