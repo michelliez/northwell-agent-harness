@@ -930,34 +930,3 @@ def run_retrieval_evaluation(
         },
         "results": results,
     }
-
-
-class GeneratedRetrievalQuery:
-    query_id: str
-    query: str
-    positive_document_key: str
-    source_description: str
-    generation_model: str
-    prompt_version: str
-    query_style: str
-    split: str
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any], *, line_number: int) -> GeneratedRetrievalQuery:
-        query = str(data["query"]).strip()
-        positive_document_key = _canonical_relative_path(str(data["positive_document_key"]))
-        source_description = str(data["source_description"]).strip()
-        split = str(data["split"]).strip()
-        query_style = str(data["query_style"]).strip()
-        if not query or not source_description or not split or not query_style:
-            raise ValueError("generated query fields must not be empty")
-        return cls(
-            query_id=f"G{line_number:06d}",
-            query=query,
-            positive_document_key=positive_document_key,
-            source_description=source_description,
-            generation_model=str(data["generation_model"]).strip(),
-            prompt_version=str(data["prompt_version"]).strip(),
-            query_style=query_style,
-            split=split,
-        )
