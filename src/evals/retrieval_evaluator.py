@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -7,7 +8,7 @@ import sqlite3
 import unicodedata
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -926,6 +927,301 @@ def run_retrieval_evaluation(
                     ),
                 }
                 for intent in intents
+            },
+        },
+        "results": results,
+    }
+
+
+@dataclass(frozen=True)
+class GeneratedRetrievalQuery:
+    query_id: str
+    query: str
+    positive_document_key: str
+    source_description: str
+    generation_model: str
+    prompt_version: str
+    query_style: str
+    split: str
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any], *, line_number: int) -> GeneratedRetrievalQuery:
+        query = str(data["query"]).strip()
+        positive_document_key = _canonical_relative_path(str(data["positive_document_key"]))
+        source_description = str(data["source_description"]).strip()
+        split = str(data["split"]).strip()
+        query_style = str(data["query_style"]).strip()
+        if not query or not source_description or not split or not query_style:
+            raise ValueError("generated query fields must not be empty")
+        return cls(
+            query_id=f"G{line_number:06d}",
+            query=query,
+            positive_document_key=positive_document_key,
+            source_description=source_description,
+            generation_model=str(data["generation_model"]).strip(),
+            prompt_version=str(data["prompt_version"]).strip(),
+            query_style=query_style,
+            split=split,
+        )
+
+
+def load_generated_retrieval_queries(
+    path: Path,
+    *,
+    expected_split: str,
+    limit: int | None = None,
+    sample_size: int | None = None,
+    sample_seed: str = "retrieval-evaluation-v1",
+) -> list[GeneratedRetrievalQuery]:
+    if limit is not None and limit < 1:
+        raise ValueError("limit must be at least 1")
+    if sample_size is not None and sample_size < 1:
+        raise ValueError("sample_size must be at least 1")
+    if limit is not None and sample_size is not None:
+        raise ValueError("limit and sample_size cannot be used together")
+    queries: list[GeneratedRetrievalQuery] = []
+    seen_queries: set[str] = set()
+    with path.open(encoding="utf-8") as source:
+        for line_number, line in enumerate(source, start=1):
+            if not line.strip():
+                continue
+            try:
+                data = json.loads(line)
+                if not isinstance(data, Mapping):
+                    raise TypeError("row must be an object")
+                query = GeneratedRetrievalQuery.from_dict(data, line_number=line_number)
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+                raise ValueError(
+                    f"{path}:{line_number}: invalid generated retrieval query"
+                ) from error
+            if query.split != expected_split:
+                raise ValueError(
+                    f"{path}:{line_number}: split {query.split!r} does not match {expected_split!r}"
+                )
+            folded_query = _normalize_text(query.query)
+            if folded_query in seen_queries:
+                raise ValueError(f"{path}:{line_number}: duplicate generated query")
+            seen_queries.add(folded_query)
+            queries.append(query)
+            if limit is not None and len(queries) == limit:
+                break
+    if not queries:
+        raise ValueError(f"{path}: no generated retrieval queries found")
+    if sample_size is None or sample_size >= len(queries):
+        return queries
+    return _stratified_query_sample(
+        queries,
+        sample_size=sample_size,
+        sample_seed=sample_seed,
+    )
+
+
+def _stratified_query_sample(
+    queries: Sequence[GeneratedRetrievalQuery],
+    *,
+    sample_size: int,
+    sample_seed: str,
+) -> list[GeneratedRetrievalQuery]:
+    """Select a deterministic proportional sample within each query style."""
+    groups: dict[str, list[GeneratedRetrievalQuery]] = defaultdict(list)
+    for query in queries:
+        groups[query.query_style].append(query)
+
+    total = len(queries)
+    styles = sorted(groups)
+    guaranteed = 1 if sample_size >= len(styles) else 0
+    quotas = {style: guaranteed for style in styles}
+    available_size = sample_size - guaranteed * len(styles)
+    available_population = total - guaranteed * len(styles)
+    exact_quotas = {
+        style: (
+            guaranteed + available_size * (len(groups[style]) - guaranteed) / available_population
+        )
+        for style in styles
+    }
+    quotas = {style: guaranteed + math.floor(exact_quotas[style] - guaranteed) for style in styles}
+    remaining = sample_size - sum(quotas.values())
+    remainder_order = sorted(
+        styles,
+        key=lambda style: (
+            -(exact_quotas[style] - quotas[style]),
+            style,
+        ),
+    )
+    for style in remainder_order[:remaining]:
+        quotas[style] += 1
+
+    selected: list[GeneratedRetrievalQuery] = []
+    for style in styles:
+        ranked = sorted(
+            groups[style],
+            key=lambda query: hashlib.sha256(
+                (
+                    f"{sample_seed}\0{query.query_style}\0{query.query}\0"
+                    f"{query.positive_document_key}"
+                ).encode()
+            ).digest(),
+        )
+        selected.extend(ranked[: quotas[style]])
+    return sorted(selected, key=lambda query: query.query_id)
+
+
+def run_generated_retrieval_evaluation(
+    *,
+    db_path: Path,
+    queries_path: Path,
+    split: str,
+    retriever: str = "fts",
+    k_values: Sequence[int] = (5, 10),
+    limit: int | None = None,
+    sample_size: int | None = None,
+    sample_seed: str = "retrieval-evaluation-v1",
+) -> dict[str, Any]:
+    """Evaluate generated positive document pairs without claiming negative judgments."""
+    if retriever != "fts":
+        raise ValueError(f"unsupported retriever: {retriever}")
+    normalized_k = tuple(sorted(set(k_values)))
+    if not normalized_k:
+        raise ValueError("at least one K value is required")
+    for k in normalized_k:
+        _validate_k(k)
+
+    queries = load_generated_retrieval_queries(
+        queries_path,
+        expected_split=split,
+        limit=limit,
+        sample_size=sample_size,
+        sample_seed=sample_seed,
+    )
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        index_version = _get_index_version(conn)
+        documents_by_path: dict[str, list[str]] = defaultdict(list)
+        for row in conn.execute("SELECT doc_id, source_path FROM docs"):
+            source_path = _canonical_relative_path(str(row["source_path"])).casefold()
+            documents_by_path[source_path].append(str(row["doc_id"]))
+
+        results: list[dict[str, Any]] = []
+        max_k = max(normalized_k)
+        for query in queries:
+            matches = documents_by_path.get(query.positive_document_key.casefold(), [])
+            if len(matches) != 1:
+                results.append(
+                    {
+                        **asdict(query),
+                        "resolution_state": "unresolved",
+                        "diagnostic": (
+                            "positive document is unavailable"
+                            if not matches
+                            else "positive document path is ambiguous"
+                        ),
+                        "metrics": None,
+                        "results": [],
+                    }
+                )
+                continue
+
+            target_doc_id = matches[0]
+            ranked, latency_ms = _fts_retrieve(conn, query.query, max_k)
+            ranked_documents = list(dict.fromkeys(item.doc_id for item in ranked))
+            try:
+                target_rank = ranked_documents.index(target_doc_id) + 1
+            except ValueError:
+                target_rank = None
+            metrics: dict[str, float | bool] = {
+                f"mrr@{max_k}": 1 / target_rank if target_rank is not None else 0.0,
+            }
+            for k in normalized_k:
+                hit = target_rank is not None and target_rank <= k
+                metrics[f"hit@{k}"] = hit
+                metrics[f"recall@{k}"] = float(hit)
+            results.append(
+                {
+                    **asdict(query),
+                    "resolution_state": "resolved",
+                    "target_doc_id": target_doc_id,
+                    "target_rank": target_rank,
+                    "latency_ms": latency_ms,
+                    "metrics": metrics,
+                    "results": [
+                        {
+                            "rank": rank,
+                            "doc_id": doc_id,
+                            "source_path": next(
+                                item.source_path for item in ranked if item.doc_id == doc_id
+                            ),
+                        }
+                        for rank, doc_id in enumerate(ranked_documents, start=1)
+                    ],
+                }
+            )
+    finally:
+        conn.close()
+
+    resolved_results = [result for result in results if result["resolution_state"] == "resolved"]
+    latency_values = [float(result["latency_ms"]) for result in resolved_results]
+    metric_names = [f"mrr@{max(normalized_k)}"]
+    for k in normalized_k:
+        metric_names.extend((f"hit@{k}", f"recall@{k}"))
+
+    def averages(items: Sequence[Mapping[str, Any]]) -> dict[str, float | None]:
+        return {
+            name: (
+                sum(float(item["metrics"][name]) for item in items) / len(items) if items else None
+            )
+            for name in metric_names
+        }
+
+    styles = sorted({query.query_style for query in queries})
+    return {
+        "suite": "retrieval_generated",
+        "evaluation_level": "document",
+        "judgment_scope": "positive_only",
+        "generated_at": datetime.now(UTC).isoformat(),
+        "retriever": retriever,
+        "index_version": index_version,
+        "split": split,
+        "queries_path": str(queries_path),
+        "k_values": list(normalized_k),
+        "query_count": len(results),
+        "sampling": (
+            {
+                "method": "stratified_by_query_style",
+                "requested_size": sample_size,
+                "seed": sample_seed,
+            }
+            if sample_size is not None
+            else {
+                "method": "first_n" if limit is not None else "full_split",
+                "requested_size": limit,
+                "seed": None,
+            }
+        ),
+        "resolved_query_count": len(resolved_results),
+        "unresolved_query_count": len(results) - len(resolved_results),
+        "metrics_note": (
+            "Generated pairs provide one known-positive document per query. "
+            "Hit, recall, and truncated reciprocal rank are reported; precision "
+            "and NDCG are withheld because other retrieved documents are unjudged."
+        ),
+        "metrics": {
+            "document": averages(resolved_results),
+            "latency_ms": {
+                "median": _nearest_rank(latency_values, 0.5),
+                "p95": _nearest_rank(latency_values, 0.95),
+                "max": max(latency_values) if latency_values else None,
+            },
+            "by_query_style": {
+                style: {
+                    "query_count": sum(
+                        result["query_style"] == style for result in resolved_results
+                    ),
+                    "document": averages(
+                        [result for result in resolved_results if result["query_style"] == style]
+                    ),
+                }
+                for style in styles
             },
         },
         "results": results,

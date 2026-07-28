@@ -5,11 +5,15 @@ import json
 from collections.abc import Sequence
 from pathlib import Path
 
-import faiss
-import numpy as np
 import pytest
 
-from retrieval.genq.baseline_faiss import (
+# GenQ lives behind the optional `genq` dependency group, so a plain `uv sync`
+# has neither faiss nor numpy. Skip rather than fail collection for the whole
+# suite.
+faiss = pytest.importorskip("faiss")
+np = pytest.importorskip("numpy")
+
+from retrieval.genq.baseline_faiss import (  # noqa: E402
     BaselineConfig,
     _normalize_embeddings,
     run_baseline,

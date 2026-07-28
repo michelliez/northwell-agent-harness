@@ -21,6 +21,7 @@ CHUNK_HARD_MAX_CHARS = 4800
 
 PARSER_VERSION = "clarity-html-v2"
 CHUNKER_VERSION = "section-table-v3"
+PROGRESS_INTERVAL = 400
 
 
 @dataclass(frozen=True)
@@ -425,6 +426,15 @@ def batched(items: list[Path], size: int) -> list[list[Path]]:
     return [items[i : i + size] for i in range(0, len(items), size)]
 
 
+def _report_progress(processed: int, total: int, chunks: int) -> None:
+    """Print periodic progress so a long indexing run is not silent."""
+    if processed % PROGRESS_INTERVAL == 0:
+        print(
+            f"Processed {processed:,}/{total:,} documents ({chunks:,} chunks)",
+            flush=True,
+        )
+
+
 def build_index(
     input_path: Path,
     db_path: Path,
@@ -454,6 +464,7 @@ def build_index(
     db_path.parent.mkdir(parents=True, exist_ok=True)
     source_fingerprints: list[dict[str, str]] = []
     total_chunks = 0
+    processed_documents = 0
 
     with sqlite3.connect(db_path) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
@@ -473,9 +484,19 @@ def build_index(
                         }
                     )
                     total_chunks += chunk_count
+                    processed_documents += 1
+                    _report_progress(processed_documents, len(html_files), total_chunks)
             else:
                 with ProcessPoolExecutor(max_workers=worker_count) as pool:
-                    for parsed in pool.map(parse_one_document_task, tasks):
+                    # Parsed documents can contain many chunks. Bound the number of
+                    # completed results waiting in memory instead of submitting the
+                    # entire batch at once.
+                    parsed_documents = pool.map(
+                        parse_one_document_task,
+                        tasks,
+                        buffersize=max(worker_count * 2, 1),
+                    )
+                    for parsed in parsed_documents:
                         source_hash, chunk_count = insert_parsed_document(conn, parsed)
                         source_fingerprints.append(
                             {
@@ -484,6 +505,8 @@ def build_index(
                             }
                         )
                         total_chunks += chunk_count
+                        processed_documents += 1
+                        _report_progress(processed_documents, len(html_files), total_chunks)
 
             conn.commit()
 

@@ -61,9 +61,32 @@ generated/
 query files have disjoint positive-document sets and held-out evaluation
 documents cannot also become training pairs.
 
-Use the development split while tuning retrieval. Run the evaluation split only
-for a final held-out measurement.
+Generate them from the approved HTML corpus:
 
-The generator that produces these files (GenQ / T5) is not yet on trunk — it
-lives on the `genq` branch and lands separately, behind an optional dependency
-group, as an offline tool. It must never enter the request path.
+```powershell
+uv run agent-harness-generate-retrieval-queries <HTML_PATH>
+```
+
+This uses Anthropic to turn each page's table description into queries in three
+styles. Pass `--generator local` for deterministic templates and no API calls.
+
+Evaluate a split:
+
+```powershell
+uv run agent-harness-eval --suite retrieval --generated-split development --k 5 10
+```
+
+Use the development split while tuning retrieval. Run the evaluation split only
+for a final held-out measurement. Add `--limit 100` for a quick smoke test, or
+`--sample 1000 --sample-seed manager-review-v1` for a reproducible subset —
+sampling is proportional within each query style, so a sample stays
+representative rather than being the first N rows.
+
+### Two generators, do not confuse them
+
+| Script | Method | Purpose |
+| --- | --- | --- |
+| `evals/retrieval_query_generation.py` | Anthropic, from HTML descriptions | Produces `generated/` |
+| `retrieval/genq/query_generation.py` | GenQ / T5, from indexed chunks | Separate experiment, optional deps |
+
+Both are offline tools. Neither may enter the request path.
