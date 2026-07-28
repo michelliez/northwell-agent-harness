@@ -4,18 +4,14 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-# Graph event names emitted by the simplified pipeline nodes.
-DOWNSTREAM_EVENTS = {
-    "intent.classified",
-    "retrieval.started",
-    "retrieval.completed",
-    "general_answer.started",
-    "general_answer.completed",
-    "documentation_answer.started",
-    "documentation_answer.completed",
-    "generate_sql.completed",
-    "validate_sql.completed",
-}
+from agent_host.trace_contract import (
+    DOWNSTREAM_EVENTS,
+    GATE_EVENT,
+    INTENT_EVENT,
+    WORK_START_EVENTS,
+)
+
+VALIDATION_EVENT = "validate_sql.completed"
 
 
 @dataclass(frozen=True)
@@ -84,8 +80,8 @@ def evaluate_case(
             )
         )
 
-    if "policy_gate.checked" not in event_names:
-        failures.append(EvaluationFailure("trace", "missing policy_gate.checked event"))
+    if GATE_EVENT not in event_names:
+        failures.append(EvaluationFailure("trace", f"missing {GATE_EVENT} event"))
 
     if case.expected_policy == "blocked":
         downstream = sorted(set(event_names) & DOWNSTREAM_EVENTS)
@@ -120,9 +116,7 @@ def evaluate_case(
             )
 
     if case.expected_sql_validation is not None:
-        validation_events = [
-            event for event in events if event.get("event") == "validate_sql.completed"
-        ]
+        validation_events = [event for event in events if event.get("event") == VALIDATION_EVENT]
         if len(validation_events) != 1:
             failures.append(
                 EvaluationFailure(
@@ -149,17 +143,13 @@ def evaluate_case(
 def _check_event_order(event_names: Sequence[str], failures: list[EvaluationFailure]) -> None:
     """Require policy before intent, and intent before retrieval/model activity."""
     try:
-        policy_index = event_names.index("policy_gate.checked")
+        policy_index = event_names.index(GATE_EVENT)
     except ValueError:
         return
 
-    intent_indices = [
-        index for index, name in enumerate(event_names) if name == "intent.classified"
-    ]
+    intent_indices = [index for index, name in enumerate(event_names) if name == INTENT_EVENT]
     downstream_indices = [
-        index
-        for index, name in enumerate(event_names)
-        if name in {"retrieval.started", "general_answer.started", "documentation_answer.started"}
+        index for index, name in enumerate(event_names) if name in WORK_START_EVENTS
     ]
 
     if intent_indices and policy_index > intent_indices[0]:

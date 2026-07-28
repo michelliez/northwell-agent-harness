@@ -6,10 +6,13 @@ import json
 import os
 import time
 import uuid
+from itertools import count
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+
+from agent_host.trace_contract import TraceEventName, domain_for
 
 TraceContentMode = Literal["metadata", "debug"]
 _SENSITIVE_KEYS = frozenset(
@@ -32,8 +35,9 @@ class _TraceRecord(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     ts: float = Field(ge=0)
+    seq: int = Field(ge=0)
     run_id: str = Field(min_length=1)
-    event: str = Field(min_length=1)
+    event: TraceEventName
 
 
 class PolicyTraceRecord(_TraceRecord):
@@ -103,6 +107,13 @@ def jsonable(value: Any) -> Any:
         return str(value)
 
 
+def _existing_line_count(path: Path) -> int:
+    if not path.exists():
+        return 0
+    with path.open("r", encoding="utf-8") as file:
+        return sum(1 for line in file if line.strip())
+
+
 class TraceLogger:
     """Append privacy-aware JSON events to a run-specific trace file.
 
@@ -127,13 +138,25 @@ class TraceLogger:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.content_mode = content_mode
         self._hash_key = (hash_key or os.getenv("TRACE_HASH_KEY") or self.run_id).encode("utf-8")
+        # Each graph node opens its own logger against the same run file, so the
+        # counter is seeded from what is already on disk. Otherwise every node
+        # would restart at 0 and `seq` would not order the run.
+        self._seq = count(_existing_line_count(self.path))
 
-    def record(self, event: str, **fields: Any) -> None:
+    def record(self, event: TraceEventName, **fields: Any) -> None:
+        """Append one contract event.
+
+        The name is checked against the trace contract before anything is
+        written. An unknown name raises: it is always a source-level typo or a
+        new event whose spec was never registered, and writing it would produce
+        a line the viewer and graders cannot interpret.
+        """
         row = {
             "ts": time.time(),
+            "seq": next(self._seq),
             "run_id": self.run_id,
             "event": event,
-            "domain": _trace_domain(event),
+            "domain": domain_for(event),
             **fields,
         }
         if self.content_mode == "metadata":
@@ -173,24 +196,3 @@ class TraceLogger:
         if isinstance(value, (list, tuple, set)):
             summary["item_count"] = len(value)
         return summary
-
-
-def _trace_domain(event: str) -> str:
-    prefix = event.split(".", 1)[0]
-    if prefix in {"policy_gate", "request", "content", "answer"}:
-        return "policy"
-    if prefix == "intent":
-        return "intent"
-    if prefix in {"retrieval", "context_gate", "exploration"}:
-        return "retrieval"
-    if prefix in {"query_plan", "plan_safety", "generate_sql", "validate_sql", "execution"}:
-        return "sql"
-    if prefix in {
-        "general_answer",
-        "documentation_answer",
-        "citations",
-        "final_answer",
-        "bounded_followup",
-    }:
-        return "lifecycle"
-    return "operational"

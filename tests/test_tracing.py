@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+from agent_host.trace_contract import EVENT_SPEC
 from agent_host.trace_logger import TraceLogger
-from trace_viewer.classifier import classify_event
+from trace_viewer.classifier import NODE_TYPE_LABELS, classify_event
 from trace_viewer.parser import load_traces, parse_file
 from trace_viewer.redaction import redact
 
@@ -128,30 +131,37 @@ def test_real_trace():
         assert len(t.edges) == len(t.events) - 1
 
 
-def test_known_event_types():
-    assert classify_event("request.received") == "input"
-    assert classify_event("policy_gate.checked") == "policy_gate"
-    assert classify_event("request.blocked") == "policy_gate"
-    assert classify_event("intent.classification.request") == "classifier"
-    assert classify_event("intent.classification.result") == "classifier"
-    assert classify_event("intent.classification.failed") == "error"
-    assert classify_event("general_question.started") == "classifier"
-    assert classify_event("sql.workflow.started") == "generation"
-    assert classify_event("sql.workflow.completed") == "generation"
-    assert classify_event("sql.generation.refused") == "generation"
-    assert classify_event("mcp.tools.listed") == "tool_call"
-    assert classify_event("model.request") == "model_call"
-    assert classify_event("model.response") == "model_call"
-    assert classify_event("tool.selected") == "tool_call"
-    assert classify_event("tool.result") == "tool_call"
-    assert classify_event("answer.ready") == "output"
+@pytest.mark.parametrize(
+    ("event", "domain"),
+    [
+        ("policy_gate.checked", "policy"),
+        ("request.blocked", "policy"),
+        ("intent.classified", "intent"),
+        ("retrieval.completed", "retrieval"),
+        ("exploration.completed", "retrieval"),
+        ("generate_sql.completed", "sql"),
+        ("validate_sql.completed", "sql"),
+        ("output_safety.completed", "operational"),
+        ("documentation_answer.completed", "lifecycle"),
+        ("answer.ready", "lifecycle"),
+    ],
+)
+def test_events_classify_to_their_contract_domain(event: str, domain: str) -> None:
+    assert classify_event(event) == domain
 
 
-def test_legacy_event_types():
-    assert classify_event("model.request.first") == "model_call"
-    assert classify_event("model.response.first") == "model_call"
-    assert classify_event("model.request.final") == "model_call"
-    assert classify_event("model.response.final") == "model_call"
+def test_every_contract_event_classifies_to_a_labelled_domain() -> None:
+    """No emitted event may render as 'unknown' in the viewer."""
+    for name in EVENT_SPEC:
+        resolved = classify_event(name)
+        assert resolved != "unknown", f"{name} is unclassified"
+        assert resolved in NODE_TYPE_LABELS, f"{resolved} has no display label"
+
+
+def test_retired_mcp_event_names_are_off_contract() -> None:
+    """These were the stale map entries; nothing emits them anymore."""
+    for retired in ("model.request", "sql.workflow.started", "intent.classification.result"):
+        assert classify_event(retired) == "unknown"
 
 
 def test_unknown_event():
@@ -164,7 +174,7 @@ def test_metadata_trace_redacts_all_content_fields(tmp_path: Path) -> None:
     trace = TraceLogger(str(tmp_path), hash_key="test-key")
 
     trace.record(
-        "sensitive.event",
+        "documentation_answer.completed",
         question=secret,
         messages=[{"role": "user", "content": secret}],
         input={"question": secret},
@@ -184,7 +194,7 @@ def test_metadata_trace_redacts_all_content_fields(tmp_path: Path) -> None:
 
 def test_debug_trace_mode_is_explicit(tmp_path: Path) -> None:
     trace = TraceLogger(str(tmp_path), content_mode="debug")
-    trace.record("debug.event", answer="local-only-test-content")
+    trace.record("answer.ready", answer="local-only-test-content")
 
     assert "local-only-test-content" in trace.path.read_text(encoding="utf-8")
 

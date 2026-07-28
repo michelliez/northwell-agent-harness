@@ -105,7 +105,33 @@ def result_safety_node(state: AgentState) -> dict:
             "policy_reason": f"final_screen:{gate_result.get('reason', 'blocked')}",
         }
 
-    trace.record("result_safety.passed")
+    # The output safety classifier is probabilistic: it assesses and flags, but
+    # this deterministic gate decides. Only an explicit `block` stops the answer;
+    # `flag` is recorded for review and released.
+    assessment = state.get("output_safety_assessment") or {}
+    if assessment.get("recommended_action") == "block":
+        risk_flags = sorted(str(flag) for flag in assessment.get("risk_flags") or [])
+        trace.record(
+            "answer.blocked",
+            reason="output_safety_block",
+            surface=screen_result.surface.value,
+            risk_flags=risk_flags,
+            confidence=assessment.get("confidence"),
+        )
+        return {
+            "answer": (
+                "I stopped because the drafted answer was assessed as unsafe to "
+                "return. Please rephrase or narrow the request."
+            ),
+            "policy_blocked": True,
+            "policy_reason": "output_safety_block",
+        }
+
+    trace.record(
+        "result_safety.passed",
+        output_safety_action=assessment.get("recommended_action"),
+        output_safety_flags=sorted(str(flag) for flag in assessment.get("risk_flags") or []),
+    )
     return {}
 
 
