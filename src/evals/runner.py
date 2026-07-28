@@ -17,10 +17,7 @@ from evals.intent_assertions import (
     evaluate_intent_case,
     summarize_intent_results,
 )
-from evals.retrieval_evaluator import (
-    run_generated_retrieval_evaluation,
-    run_retrieval_evaluation,
-)
+from evals.retrieval_evaluator import run_retrieval_evaluation
 from retrieval.search import DEFAULT_INDEX_PATH
 
 INTENT_PROMPT_VERSION = "v6"
@@ -202,51 +199,6 @@ def _print_retrieval_report(report: dict[str, Any], report_path: Path) -> None:
     print("\n" + "=" * 80 + "\n")
 
 
-def _print_generated_retrieval_report(report: dict[str, Any], report_path: Path) -> None:
-    metrics = report["metrics"]
-    document_metrics = metrics["document"]
-    max_k = max(report["k_values"])
-
-    print("\n" + "=" * 80)
-    print("GENERATED HELD-OUT RETRIEVAL EVALUATION REPORT")
-    print("=" * 80)
-    print(f"Report: {report_path.name}")
-    print(f"Split: {report['split']}")
-    print(f"Total Queries: {report['query_count']}")
-    print(f"Resolved: {report['resolved_query_count']}")
-    print(f"Unresolved: {report['unresolved_query_count']}")
-    sampling = report["sampling"]
-    print(f"Sampling: {sampling['method']}")
-    if sampling["seed"] is not None:
-        print(f"Sample Seed: {sampling['seed']}")
-    print("=" * 80 + "\n")
-
-    print("DOCUMENT-LEVEL POSITIVE-PAIR METRICS:")
-    print("-" * 50)
-    for k in report["k_values"]:
-        print(f"{f'HIT@{k}':<20} {document_metrics[f'hit@{k}']:.3f}")
-        print(f"{f'RECALL@{k}':<20} {document_metrics[f'recall@{k}']:.3f}")
-    print(f"{f'MRR@{max_k}':<20} {document_metrics[f'mrr@{max_k}']:.3f}")
-
-    print("\nBY QUERY STYLE:")
-    print("-" * 50)
-    for style, style_metrics in metrics["by_query_style"].items():
-        values = style_metrics["document"]
-        print(
-            f"{style:<24} n={style_metrics['query_count']:<6} "
-            f"hit@{max_k}={values[f'hit@{max_k}']:.3f} "
-            f"mrr@{max_k}={values[f'mrr@{max_k}']:.3f}"
-        )
-
-    print("\nLATENCY METRICS (ms):")
-    print("-" * 50)
-    print(f"{'Median':<20} {metrics['latency_ms']['median']:.1f}")
-    print(f"{'P95':<20} {metrics['latency_ms']['p95']:.1f}")
-    print(f"{'Max':<20} {metrics['latency_ms']['max']:.1f}")
-    print(f"\n{report['metrics_note']}")
-    print("\n" + "=" * 80 + "\n")
-
-
 def write_report(report: dict[str, Any], results_dir: Path, prefix: str = "evaluation") -> Path:
     results_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -308,32 +260,6 @@ def main() -> None:
         default=(5, 10),
         help="Ranking cutoffs for the retrieval suite.",
     )
-    parser.add_argument(
-        "--generated-split",
-        choices=("training", "development", "evaluation"),
-        default=None,
-        help=(
-            "Evaluate generated positive document pairs from this split instead "
-            "of the reviewed benchmark."
-        ),
-    )
-    parser.add_argument(
-        "--limit",
-        type=int,
-        default=None,
-        help="Limit generated retrieval queries for a smoke run.",
-    )
-    parser.add_argument(
-        "--sample",
-        type=int,
-        default=None,
-        help="Select a deterministic query-style-stratified generated sample.",
-    )
-    parser.add_argument(
-        "--sample-seed",
-        default=None,
-        help="Seed for --sample; the same seed always selects the same queries.",
-    )
     args = parser.parse_args()
     if args.repetitions < 1:
         parser.error("--repetitions must be at least 1")
@@ -341,30 +267,6 @@ def main() -> None:
         parser.error("every --k value must be at least 1")
 
     if args.suite == "retrieval":
-        if args.generated_split is not None:
-            report = run_generated_retrieval_evaluation(
-                db_path=args.db,
-                queries_path=(
-                    args.case_dir
-                    / "retrieval"
-                    / "generated"
-                    / f"{args.generated_split}_queries.jsonl"
-                ),
-                split=args.generated_split,
-                retriever=args.retriever,
-                k_values=args.k,
-                limit=args.limit,
-                sample_size=args.sample,
-                sample_seed=args.sample_seed,
-            )
-            report_path = write_report(
-                report,
-                args.results_dir,
-                prefix=f"retrieval-generated-{args.generated_split}",
-            )
-            _print_generated_retrieval_report(report, report_path)
-            return
-
         report = run_retrieval_evaluation(
             db_path=args.db,
             queries_path=args.benchmark_dir / "retrieval_queries.jsonl",

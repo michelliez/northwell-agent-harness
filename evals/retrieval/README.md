@@ -45,48 +45,32 @@ Reports also carry `judgment_complete`, `unjudged_document_total`, and
 `unjudged_chunk_total`. Treat recall as a lower bound whenever judgment is
 incomplete.
 
-## Generated query data
+## Synthetic query generation
 
-The `generated/` layout is:
-
-```text
-generated/
-  documents.jsonl
-  training_queries.jsonl
-  development_queries.jsonl
-  evaluation_queries.jsonl
-```
-
-`documents.jsonl` is partitioned *before* queries are generated, so the three
-query files have disjoint positive-document sets and held-out evaluation
-documents cannot also become training pairs.
-
-Generate them from the approved HTML corpus:
+Synthetic queries are produced by the GenQ pipeline under `src/retrieval/genq/`,
+which is a complete stack of its own: parse the HTML corpus, split it, generate
+queries, filter them, then score retrieval with a FAISS baseline.
 
 ```powershell
-uv run agent-harness-generate-retrieval-queries <HTML_PATH>
+uv run agent-harness-genq-parse <HTML_PATH>
+uv run agent-harness-genq-split
+uv run agent-harness-genq-generate --provider claude
+uv run agent-harness-genq-filter
+uv run agent-harness-genq-baseline
 ```
 
-This uses Anthropic to turn each page's table description into queries in three
-styles. Pass `--generator local` for deterministic templates and no API calls.
-
-Evaluate a split:
+`--provider claude` generates with Claude; `--provider t5` uses the local T5
+model. Both need the optional `genq` dependency group:
 
 ```powershell
-uv run agent-harness-eval --suite retrieval --generated-split development --k 5 10
+uv sync --group genq
 ```
 
-Use the development split while tuning retrieval. Run the evaluation split only
-for a final held-out measurement. Add `--limit 100` for a quick smoke test, or
-`--sample 1000 --sample-seed manager-review-v1` for a reproducible subset —
-sampling is proportional within each query style, so a sample stays
-representative rather than being the first N rows.
+GenQ splits the corpus before generating, so held-out evaluation chunks cannot
+also become training pairs. It is an offline tool and must never enter the
+request path.
 
-### Two generators, do not confuse them
-
-| Script | Method | Purpose |
-| --- | --- | --- |
-| `evals/retrieval_query_generation.py` | Anthropic, from HTML descriptions | Produces `generated/` |
-| `retrieval/genq/query_generation.py` | GenQ / T5, from indexed chunks | Separate experiment, optional deps |
-
-Both are offline tools. Neither may enter the request path.
+The reviewed benchmark above and the GenQ pipeline measure different things at
+different granularity: the benchmark is a small hand-authored document-level
+qrel set, GenQ is a large synthetic chunk-level set. Do not compare their
+numbers to each other.

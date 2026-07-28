@@ -16,14 +16,12 @@ from evals.retrieval_evaluator import (
     _normalize_text,
     _resolve_chunk_target,
     _resolve_target,
-    load_generated_retrieval_queries,
     load_retrieval_dataset,
     ndcg_at_k,
     precision_at_k,
     ranked_metrics,
     recall_at_k,
     reciprocal_rank,
-    run_generated_retrieval_evaluation,
     run_retrieval_evaluation,
 )
 from evals.retrieval_gold import validate_semantic_dataset
@@ -424,115 +422,3 @@ def test_missing_positive_document_excludes_query_from_metrics(tmp_path: Path) -
     assert report["resolved_query_count"] == 0
     assert report["unresolved_query_count"] == 1
     assert report["metrics"]["document"]["hit@5"] is None
-
-
-def test_generated_query_loader_rejects_wrong_split(tmp_path: Path) -> None:
-    queries_path = tmp_path / "evaluation_queries.jsonl"
-    _write_jsonl(
-        queries_path,
-        [
-            {
-                "query": "find the target",
-                "positive_document_key": "TARGET.html",
-                "source_description": "Contains the target details.",
-                "generation_model": "test-generator",
-                "prompt_version": "test-v1",
-                "query_style": "keyword_search",
-                "split": "training",
-            }
-        ],
-    )
-
-    with pytest.raises(ValueError, match="does not match"):
-        load_generated_retrieval_queries(
-            queries_path,
-            expected_split="evaluation",
-        )
-
-
-def test_generated_query_loader_samples_deterministically_by_style(
-    tmp_path: Path,
-) -> None:
-    queries_path = tmp_path / "evaluation_queries.jsonl"
-    styles = ("natural_question", "keyword_search", "semantic_paraphrase")
-    _write_jsonl(
-        queries_path,
-        [
-            {
-                "query": f"{style} query number {index}",
-                "positive_document_key": f"TARGET_{style}_{index}.html",
-                "source_description": f"Description for {style} number {index}.",
-                "generation_model": "test-generator",
-                "prompt_version": "test-v1",
-                "query_style": style,
-                "split": "evaluation",
-            }
-            for style in styles
-            for index in range(4)
-        ],
-    )
-
-    first = load_generated_retrieval_queries(
-        queries_path,
-        expected_split="evaluation",
-        sample_size=6,
-        sample_seed="manager-review",
-    )
-    second = load_generated_retrieval_queries(
-        queries_path,
-        expected_split="evaluation",
-        sample_size=6,
-        sample_seed="manager-review",
-    )
-
-    assert first == second
-    assert len(first) == 6
-    assert {
-        style: sum(query.query_style == style for query in first) for style in styles
-    } == dict.fromkeys(styles, 2)
-
-
-def test_generated_retrieval_evaluation_uses_positive_document_pair(
-    tmp_path: Path,
-) -> None:
-    corpus = tmp_path / "corpus"
-    corpus.mkdir()
-    (corpus / "TARGET.html").write_text(
-        "<html><body>important generated retrieval value</body></html>",
-        encoding="utf-8",
-    )
-    (corpus / "OTHER.html").write_text(
-        "<html><body>unrelated material</body></html>",
-        encoding="utf-8",
-    )
-    db_path = tmp_path / "index.sqlite"
-    build_index(corpus, db_path, workers=1)
-    queries_path = tmp_path / "evaluation_queries.jsonl"
-    _write_jsonl(
-        queries_path,
-        [
-            {
-                "query": "important generated retrieval value",
-                "positive_document_key": "TARGET.html",
-                "source_description": "Contains an important generated retrieval value.",
-                "generation_model": "test-generator",
-                "prompt_version": "test-v1",
-                "query_style": "natural_question",
-                "split": "evaluation",
-            }
-        ],
-    )
-
-    report = run_generated_retrieval_evaluation(
-        db_path=db_path,
-        queries_path=queries_path,
-        split="evaluation",
-        k_values=(1, 5),
-    )
-
-    assert report["suite"] == "retrieval_generated"
-    assert report["query_count"] == 1
-    assert report["unresolved_query_count"] == 0
-    assert report["metrics"]["document"]["hit@1"] == 1.0
-    assert report["metrics"]["document"]["mrr@5"] == 1.0
-    assert report["results"][0]["positive_document_key"] == "TARGET.html"
