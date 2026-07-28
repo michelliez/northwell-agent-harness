@@ -17,8 +17,8 @@ def main() -> None:
     parser.add_argument(
         "-o",
         "--output",
-        default="logs/trace_views/trace_view.html",
-        help="Output HTML path (default: logs/trace_views/trace_view.html)",
+        default=".local/trace-views/trace_view.html",
+        help="Output HTML path (default: .local/trace-views/trace_view.html)",
     )
     parser.add_argument(
         "--no-open", action="store_true", help="Don't open the browser automatically"

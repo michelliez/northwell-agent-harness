@@ -37,7 +37,9 @@ def test_run_audit_returns_report(indexed_db: Path) -> None:
     assert report.chunk_count >= 1
     assert report.char_p50 > 0
     assert report.char_max > 0
-    assert report.char_p50 <= report.char_p90 <= report.char_p95 <= report.char_p99 <= report.char_max
+    assert (
+        report.char_p50 <= report.char_p90 <= report.char_p95 <= report.char_p99 <= report.char_max
+    )
     assert report.over_limit_count == 0  # sample data is small
     assert report.section_fact_count >= 0  # no NA sections in _SAMPLE_HTML
 

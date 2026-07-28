@@ -14,21 +14,33 @@ wheels/
 
 .agents/
 .claude/
-.worktrees/
 /graphify-out
 claude-code.md
 .env
-logs/*
-!logs/.gitkeep
-evals/results/*
-!evals/results/.gitkeep
+
+# Generated runtime state (use .local/ instead of logs/, var/)
+.local/
+logs/
+var/
+evals/results/
 pytest-cache-files-*
 pytest-cache-files-*/
+
+# Git worktrees kept inside the repository
+.worktrees/
+
 # Proprietary Clarity data — never commit
 ClarityDictionaryHTML-full*
 data/ClarityDictionaryHTML-full*
 
+# Generated retrieval query data reproduces proprietary Clarity descriptions.
+# Only evals/retrieval/benchmark/ is tracked.
+evals/retrieval/generated/
 
+# Generated retrieval indexes and HTML-derived ML artifacts — never commit
 var/rag/*.sqlite
 rag/*.sqlite
+/var/genq/
+/data/genq/
+/artifacts/genq/
 *.sqlite

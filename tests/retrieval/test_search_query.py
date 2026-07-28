@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from retrieval.mcp_server import (
+from retrieval.search import (
     document_hint,
     escape_fts5,
     fts5_queries,

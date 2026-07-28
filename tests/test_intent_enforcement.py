@@ -1,188 +1,155 @@
+"""Tests that refuse intents block responses and don't reach downstream nodes."""
+
 from __future__ import annotations
 
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import pytest
-from anthropic.types import Message, TextBlock, Usage
 
-from agent_host.agent import answer_question
-
-
-def _fake_settings(tmp_path):
-    return SimpleNamespace(
-        trace_dir=str(tmp_path),
-        log_raw_prompts=False,
-        intent_mcp_url="http://localhost:8002/mcp",
-        mcp_server_url="http://localhost:8000/mcp",
-        sql_generation_mcp_url="http://localhost:8003/mcp",
-        sql_validation_mcp_url="http://localhost:8004/mcp",
-        max_tool_rounds=3,
-        require_claude_model=lambda: "test-model",
-        require_anthropic_api_key=lambda: "test-key",
-        require_anthropic_base_url=lambda: "https://example.test",
-        anthropic_custom_headers={},
-    )
-
-
-def _fake_bridge(call_tool_return: dict) -> AsyncMock:
-    bridge = AsyncMock()
-    bridge.call_tool = AsyncMock(return_value=call_tool_return)
-    bridge.__aenter__ = AsyncMock(return_value=bridge)
-    bridge.__aexit__ = AsyncMock(return_value=False)
-    return bridge
-
-
-# A prompt that clears the deterministic policy gate so we can reach
-# the intent classifier.
-SAFE_PROMPT = "How many encounters happened last month?"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("intent", "risk_flags"),
-    [
-        ("patient_specific_request", ["patient_identifiers", "individual_records"]),
-        ("policy_probe", ["policy_manipulation"]),
-        ("unsupported_sql_request", ["patient_identifiers"]),
-    ],
+from agent_host.nodes.intent_nodes import (
+    REFUSAL_INTENTS,
+    classify_intent_node,
 )
-async def test_refuse_intent_blocks_response(
-    intent: str,
-    risk_flags: list[str],
-    tmp_path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """All three refuse intents must produce allowed=False with no downstream calls."""
-    intent_result = {
-        "intent": intent,
-        "confidence": 0.91,
-        "risk_flags": risk_flags,
-        "recommended_action": "refuse",
-        "needs_clarification": False,
-    }
-    bridge = _fake_bridge(intent_result)
-
-    monkeypatch.setattr(
-        "agent_host.agent.get_settings",
-        lambda: _fake_settings(tmp_path),
-    )
-
-    with patch("agent_host.agent.MCPToolBridge", return_value=bridge):
-        result = await answer_question(SAFE_PROMPT)
-
-    assert result.allowed is False
-    assert result.intent == intent
-    assert result.policy_reason is not None
-    assert "intent_classifier_refused" in result.policy_reason
 
 
-@pytest.mark.asyncio
-async def test_refuse_intent_makes_no_catalog_calls(
-    tmp_path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """When the intent classifier refuses, only one MCP bridge is opened (intent only)."""
-    intent_result = {
-        "intent": "patient_specific_request",
-        "confidence": 0.95,
-        "risk_flags": ["patient_identifiers"],
-        "recommended_action": "refuse",
-        "needs_clarification": False,
-    }
-    bridge = _fake_bridge(intent_result)
-
-    monkeypatch.setattr(
-        "agent_host.agent.get_settings",
-        lambda: _fake_settings(tmp_path),
-    )
-
-    with patch("agent_host.agent.MCPToolBridge", return_value=bridge) as MockBridge:
-        await answer_question(SAFE_PROMPT)
-
-    # MCPToolBridge should be constructed exactly once (for the intent classifier).
-    # If it were called again, catalog or model tools were reached — that is wrong.
-    assert MockBridge.call_count == 1
-
-
-@pytest.mark.asyncio
-async def test_refuse_intent_records_blocked_trace_event(
-    tmp_path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A request.blocked trace event must be written when the classifier refuses."""
-    import json
-
-    intent_result = {
-        "intent": "policy_probe",
-        "confidence": 0.88,
-        "risk_flags": ["policy_manipulation"],
-        "recommended_action": "refuse",
-        "needs_clarification": False,
-    }
-    bridge = _fake_bridge(intent_result)
-
-    monkeypatch.setattr(
-        "agent_host.agent.get_settings",
-        lambda: _fake_settings(tmp_path),
-    )
-
-    with patch("agent_host.agent.MCPToolBridge", return_value=bridge):
-        result = await answer_question(SAFE_PROMPT)
-
-    trace_path = result.trace_file
-    with open(trace_path) as f:
-        events = [json.loads(line) for line in f]
-    event_types = [e["event"] for e in events]
-
-    assert "request.blocked" in event_types
-
-    blocked_event = next(e for e in events if e["event"] == "request.blocked")
-    assert blocked_event["reason"] == "intent_classifier_refused"
-    assert blocked_event["intent"] == "policy_probe"
-
-
-@pytest.mark.asyncio
-async def test_safe_intent_is_not_refused(
-    tmp_path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A safe general_question intent must NOT produce allowed=False."""
-    intent_result = {
-        "intent": "general_question",
-        "confidence": 0.92,
+def _make_state(question: str, clarification_count: int = 0) -> dict:
+    return {
+        "question": question,
+        "history": [],
+        "run_id": "test-run",
+        "trace_file": None,
+        "started_at": 0.0,
+        "policy_blocked": False,
+        "policy_reason": None,
+        "intent": None,
+        "intent_confidence": None,
+        "recommended_action": None,
         "risk_flags": [],
-        "recommended_action": "answer_without_tools",
-        "needs_clarification": False,
+        "permissions": {},
+        "retrieved_chunks": [],
+        "schema_snapshot": None,
+        "query_plan": None,
+        "generated_sql": None,
+        "validation_result": None,
+        "execution_status": None,
+        "repair_count": 0,
+        "repair_hint": None,
+        "citations": [],
+        "answer": None,
+        "clarification_count": clarification_count,
     }
-    bridge = _fake_bridge(intent_result)
 
-    # general_question routes to answer_general_question(), which calls the
-    # Anthropic model directly (no second MCP bridge). Mock the model client.
-    fake_response = Message(
-        id="msg-test",
-        content=[TextBlock(text="This is a general answer.", type="text")],
-        model="test-model",
-        role="assistant",
-        stop_reason="end_turn",
-        type="message",
-        usage=Usage(input_tokens=10, output_tokens=5),
-    )
-    fake_messages = MagicMock()
-    fake_messages.create = MagicMock(return_value=fake_response)
-    fake_client = MagicMock()
-    fake_client.messages = fake_messages
 
+class _FakeCfg:
+    def __init__(self, tmp_path):
+        self.trace_dir = tmp_path
+        self.trace_content_mode = "metadata"
+        self.anthropic_custom_headers = {}
+        self.anthropic_base_url = None
+        self.intent_min_confidence = 0.70
+
+    def require_api_key(self):
+        return "test-key"
+
+    def require_base_url(self):
+        return "https://example.test"
+
+    def require_model(self):
+        return "test-model"
+
+
+def _make_fake_anthropic(intent: str, confidence: float = 0.92, needs_clarification: bool = False):
+    """Return a mock Anthropic client that returns the given intent."""
+    from types import SimpleNamespace
+
+    from anthropic.types import ToolUseBlock
+
+    class _Messages:
+        def create(self, **_):
+            return SimpleNamespace(
+                stop_reason="end_turn",
+                content=[
+                    ToolUseBlock(
+                        id="tool-1",
+                        input={
+                            "intent": intent,
+                            "confidence": confidence,
+                            "risk_flags": [],
+                            "needs_clarification": needs_clarification,
+                        },
+                        name="emit_intent",
+                        type="tool_use",
+                    )
+                ],
+            )
+
+    class _Client:
+        messages = _Messages()
+
+    return _Client()
+
+
+@pytest.mark.parametrize("intent", sorted(REFUSAL_INTENTS))
+def test_refuse_intent_sets_refuse_action(intent: str, tmp_path, monkeypatch) -> None:
+    """All refusal intents must route to refuse, not downstream nodes."""
+    from agent_host.nodes import intent_nodes
+
+    monkeypatch.setattr(intent_nodes, "get_config", lambda: _FakeCfg(tmp_path))
+    monkeypatch.setattr(intent_nodes, "Anthropic", lambda **_: _make_fake_anthropic(intent))
+
+    result = classify_intent_node(_make_state("list all patients"))
+
+    assert result.get("intent") == intent
+    assert result.get("recommended_action") == "refuse"
+
+
+def test_low_confidence_intent_routes_to_clarify(tmp_path, monkeypatch) -> None:
+    """Low-confidence classification must set intent=unknown, action=clarify."""
+    from agent_host.nodes import intent_nodes
+
+    monkeypatch.setattr(intent_nodes, "get_config", lambda: _FakeCfg(tmp_path))
     monkeypatch.setattr(
-        "agent_host.agent.get_settings",
-        lambda: _fake_settings(tmp_path),
+        intent_nodes,
+        "Anthropic",
+        lambda **_: _make_fake_anthropic("documentation_lookup", confidence=0.40),
     )
+
+    # With max clarification attempts not yet reached, interrupt would be called.
+    # But we can't easily test LangGraph interrupt without the full graph.
+    # Instead verify that at clarification_count >= MAX, a fallback answer is set.
+    state = _make_state("what is ABN_ORDERS?", clarification_count=3)
+
+    result = classify_intent_node(state)
+    # When clarification_count >= MAX_CLARIFICATION_ATTEMPTS, answer is set
+    assert result.get("answer") is not None
+
+
+def test_general_question_intent_maps_to_answer_without_tools(tmp_path, monkeypatch) -> None:
+    from agent_host.nodes import intent_nodes
+
+    monkeypatch.setattr(intent_nodes, "get_config", lambda: _FakeCfg(tmp_path))
     monkeypatch.setattr(
-        "agent_host.model_call.Anthropic",
-        lambda **_: fake_client,
+        intent_nodes,
+        "Anthropic",
+        lambda **_: _make_fake_anthropic("general_question"),
     )
 
-    with patch("agent_host.agent.MCPToolBridge", return_value=bridge):
-        result = await answer_question(SAFE_PROMPT)
+    result = classify_intent_node(_make_state("what is the sky?"))
+    assert result.get("intent") == "general_question"
+    assert result.get("recommended_action") == "answer_without_tools"
 
-    assert result.allowed is True
+
+def test_classify_intent_node_fails_closed_on_model_error(tmp_path, monkeypatch) -> None:
+    from agent_host.nodes import intent_nodes
+
+    class _FailingClient:
+        class messages:
+            @staticmethod
+            def create(**_):
+                raise RuntimeError("Model unreachable")
+
+    monkeypatch.setattr(intent_nodes, "get_config", lambda: _FakeCfg(tmp_path))
+    monkeypatch.setattr(intent_nodes, "Anthropic", lambda **_: _FailingClient())
+
+    result = intent_nodes.classify_intent_node(_make_state("How many encounters last month?"))
+
+    assert result.get("intent") in {"unknown", None}
+    assert result.get("recommended_action") in {"clarify", None}

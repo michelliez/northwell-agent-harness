@@ -21,6 +21,7 @@ CHUNK_HARD_MAX_CHARS = 4800
 
 PARSER_VERSION = "clarity-html-v2"
 CHUNKER_VERSION = "section-table-v3"
+PROGRESS_INTERVAL = 400
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,7 @@ class IndexedChunk:
     category: str
     heading_path: str
     text: str
+
 
 @dataclass(frozen=True)
 class ParsedDocument:
@@ -192,11 +194,7 @@ def owned_rows(table: Tag) -> list[Tag]:
 
 def owned_cells(row: Tag) -> list[Tag]:
     """Return only cells whose nearest containing row is row."""
-    return [
-        cell
-        for cell in row.find_all(["th", "td"])
-        if cell.find_parent("tr") is row
-    ]
+    return [cell for cell in row.find_all(["th", "td"]) if cell.find_parent("tr") is row]
 
 
 def extract_table_content(table: Tag) -> str:
@@ -247,7 +245,11 @@ def table_to_chunks(category: str, heading: str, table: Tag) -> list[IndexedChun
     header_str = " | ".join(header_rows)
 
     if not data_rows:
-        return [IndexedChunk(category=category, heading_path=heading, text=header_str)] if header_str else []
+        return (
+            [IndexedChunk(category=category, heading_path=heading, text=header_str)]
+            if header_str
+            else []
+        )
 
     chunks: list[IndexedChunk] = []
     batch: list[str] = []
@@ -257,7 +259,9 @@ def table_to_chunks(category: str, heading: str, table: Tag) -> list[IndexedChun
         row_chars = len(row) + 3  # 3 for the " | " separator
         if batch and batch_chars + row_chars > CHUNK_TARGET_CHARS:
             parts = ([header_str] + batch) if header_str else batch
-            chunks.append(IndexedChunk(category=category, heading_path=heading, text=" | ".join(parts)))
+            chunks.append(
+                IndexedChunk(category=category, heading_path=heading, text=" | ".join(parts))
+            )
             batch = []
             batch_chars = len(header_str)
         batch.append(row)
@@ -329,6 +333,7 @@ def create_schema(conn: sqlite3.Connection) -> None:
         );
         """
     )
+
 
 def parse_one_document(
     html_path: Path,
@@ -421,6 +426,15 @@ def batched(items: list[Path], size: int) -> list[list[Path]]:
     return [items[i : i + size] for i in range(0, len(items), size)]
 
 
+def _report_progress(processed: int, total: int, chunks: int) -> None:
+    """Print periodic progress so a long indexing run is not silent."""
+    if processed % PROGRESS_INTERVAL == 0:
+        print(
+            f"Processed {processed:,}/{total:,} documents ({chunks:,} chunks)",
+            flush=True,
+        )
+
+
 def build_index(
     input_path: Path,
     db_path: Path,
@@ -450,6 +464,7 @@ def build_index(
     db_path.parent.mkdir(parents=True, exist_ok=True)
     source_fingerprints: list[dict[str, str]] = []
     total_chunks = 0
+    processed_documents = 0
 
     with sqlite3.connect(db_path) as conn:
         conn.execute("PRAGMA foreign_keys = ON")
@@ -469,9 +484,19 @@ def build_index(
                         }
                     )
                     total_chunks += chunk_count
+                    processed_documents += 1
+                    _report_progress(processed_documents, len(html_files), total_chunks)
             else:
                 with ProcessPoolExecutor(max_workers=worker_count) as pool:
-                    for parsed in pool.map(parse_one_document_task, tasks):
+                    # Parsed documents can contain many chunks. Bound the number of
+                    # completed results waiting in memory instead of submitting the
+                    # entire batch at once.
+                    parsed_documents = pool.map(
+                        parse_one_document_task,
+                        tasks,
+                        buffersize=max(worker_count * 2, 1),
+                    )
+                    for parsed in parsed_documents:
                         source_hash, chunk_count = insert_parsed_document(conn, parsed)
                         source_fingerprints.append(
                             {
@@ -480,12 +505,12 @@ def build_index(
                             }
                         )
                         total_chunks += chunk_count
+                        processed_documents += 1
+                        _report_progress(processed_documents, len(html_files), total_chunks)
 
             conn.commit()
 
-        total_section_facts = conn.execute(
-            "SELECT COUNT(*) FROM section_facts"
-        ).fetchone()[0]
+        total_section_facts = conn.execute("SELECT COUNT(*) FROM section_facts").fetchone()[0]
 
         version_manifest = {
             "schema_version": INDEX_SCHEMA_VERSION,
@@ -516,13 +541,14 @@ def build_index(
 
     return index_version, len(html_files), total_chunks
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Index one approved HTML documentation file.")
     parser.add_argument("input_path", type=Path)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--workers", type=int, default=None)
     parser.add_argument("--bs", type=int, default=500)
-    parser.add_argument("--db", type=Path, default=Path("var/rag/index.sqlite"))
+    parser.add_argument("--db", type=Path, default=Path(".local/rag/index.sqlite"))
     args = parser.parse_args()
     if args.input_path.is_file() and args.input_path.suffix.lower() not in {".html", ".htm"}:
         parser.error("input_path must be an HTML file or a directory")
@@ -535,10 +561,7 @@ def main() -> None:
         batch_size=args.bs,
     )
 
-    print(
-        f"Indexed {doc_count} docs / {chunk_count} chunks into "
-        f"{args.db} (version={version})"
-    )
+    print(f"Indexed {doc_count} docs / {chunk_count} chunks into {args.db} (version={version})")
 
 
 if __name__ == "__main__":

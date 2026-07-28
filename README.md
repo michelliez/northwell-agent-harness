@@ -1,62 +1,55 @@
 # Agent Harness
 
-A policy-gated agent host for observable data-science and analyst workflows,
-real-schema documentation retrieval, SQL planning experiments, and
-deterministic evaluation.
+A policy-gated, stateful agent pipeline for exploring approved Clarity HTML
+documentation and drafting schema-grounded BigQuery SQL.
 
-This repository does not execute against production data. Approved real-schema
-documentation is indexed locally and remains uncommitted. Do not commit
-credentials, PHI, proprietary schemas, production prompts, indexes, or
-sensitive trace content.
-
-## Documentation
-
-- [`CLAUDE.md`](CLAUDE.md) is the context entrypoint for contributors and
-  coding agents.
-- [`docs/PRD.md`](docs/PRD.md) owns product requirements and acceptance
-  criteria.
-- [`docs/RAG.md`](docs/RAG.md) owns the retrieval design and implementation
-  plan.
-
-Documents elsewhere under `docs/` are research or planning references unless
-one of the canonical documents explicitly incorporates them.
+The project does not connect to BigQuery or patient data. Retrieval is local,
+SQL execution is disabled, and generated SQL is returned only after deterministic
+static validation.
 
 ## Architecture
 
+One in-process LangGraph owns the request lifecycle:
+
 ```text
-request
-  -> deterministic policy screen
-  -> intent classification
-  -> host-owned workflow dispatch and execution budget
-       -> general response
-       -> approved documentation retrieval over local RAG index
-       -> table, column, and metric exploration over real indexed schemas
-       -> SQL generation and validation services
-  -> final output screen
-  -> response plus JSONL trace
+input policy -> intent
+  |-> refusal
+  |-> clarification (interrupt/resume)
+  |-> general answer
+  `-> retrieval permission
+        |-> bounded host-authorized exploration
+        `-> deterministic keyword retrieval
+      -> context gate
+        |-> documentation answer
+        `-> query plan -> plan safety -> SQL generation -> SQL validation
+              `-> bounded repair cycle
+                    -> execution not configured
+-> result safety -> citations -> final answer -> bounded follow-up
 ```
 
-The classifier proposes a typed intent, not tools or execution actions. The
-host derives the workflow and permitted tool contracts from its registry.
-Execution limits are deterministic and are not inferred from model output or
-live MCP descriptions.
+The working core includes policy screening, model-backed intent classification,
+SQLite FTS retrieval, documentation answers, evidence-backed schema snapshots,
+SQL generation, SQLGlot validation, traces, and evaluations. BigQuery dry-run,
+cost approval, execution, result redaction, real authorization, semantic/vector
+retrieval, and Python generation remain explicit future boundaries.
 
-Source code is organized directly by responsibility under `src/`:
+There are no internal MCP services and no fabricated data catalog.
 
-- `agent_host/`: request lifecycle, workflow dispatch, model calls, execution
-  budgets, tool authority, responses, and traces.
-- `agent_host/workflows/`: one module per user-facing workflow.
-- `retrieval/`: approved-HTML indexing, retrieval contracts, host client, and
-  the read-only retrieval MCP server.
-- `retrieval/audit.py`: local retrieval-index safety and integrity checks.
-- `policy/`: deterministic input and model-context screening.
-- `mcp_servers/`: intent classification, SQL generation, and SQL validation
-  services.
-- `evals/`: deterministic evaluation runners and assertions.
-- `trace_viewer/`: trace parsing, redaction, classification, and rendering.
+## Repository Map
 
-Generated local state lives outside `src/`. In particular,
-`var/rag/index.sqlite` is the ignored local retrieval index.
+```text
+src/
+  agent_host/    LangGraph assembly, state, nodes, config, budgets, traces, CLI
+  policy/        deterministic content and workflow policy
+  retrieval/     HTML indexing, SQLite search, schema-evidence extraction, audit
+  sql/           SQL models, generation, validation, disabled BigQuery adapter
+  evals/         evaluation runner and deterministic assertions
+  trace_viewer/  local trace rendering
+tests/           unit and graph-routing tests
+evals/           versioned evaluation cases
+docs/            product and retrieval design
+.local/          ignored indexes, traces, reports, and rendered artifacts
+```
 
 ## Setup
 
@@ -65,165 +58,88 @@ uv sync
 Copy-Item .env.example .env
 ```
 
-Fill in `.env` with approved local configuration. Do not commit it.
+Configure the Anthropic gateway values in `.env`. Model-backed commands may
+incur API usage.
 
-Use `uv run --no-editable` for installed project commands. This avoids an
-editable-install import issue observed on some Python 3.14 environments.
-
-## Run Locally
-
-Run all commands from the repository root.
-
-### Build The Local RAG Index
-
-Base command:
+## Index Documentation
 
 ```powershell
-uv run --no-editable agent-harness-rag-index <HTML_PATH> [flags]
+uv run agent-harness-rag-index <HTML_PATH> --limit 500 --workers 4 --bs 100
+uv run agent-harness-rag-audit
 ```
 
-Common flags:
+The index defaults to `.local/rag/index.sqlite`. Override it with `RAG_DB_PATH`.
+Approved proprietary HTML and generated SQLite files must remain uncommitted.
 
-```text
---limit <N>       Index only the first N HTML files.
---workers <N>     Number of parallel parser workers.
---bs <N>          Batch size for parser work before SQLite writes.
---db <PATH>       Output SQLite index path. Defaults to var/rag/index.sqlite.
-```
-
-Index a small approved-documentation subset for local testing:
+## Ask the Agent
 
 ```powershell
-uv run --no-editable agent-harness-rag-index <HTML_PATH> --limit 500 --workers 4 --bs 100
+uv run agent-harness "What does ABN_ORDERS mean?"
+uv run agent-harness "Write SQL to count appointments by status" --thread-id demo
 ```
 
-The generated index defaults to `var/rag/index.sqlite`. Set `RAG_DB_PATH` to
-use another local path. Do not commit SQLite index files.
+The CLI handles clarification interrupts interactively. A thread ID retains
+short-term state through LangGraph's in-memory checkpointer; it is not durable
+across processes.
 
-
-### Start Services
-
-The `agent-harness` CLI automatically starts the local MCP servers required by
-each request and stops only the subprocesses it owns. It starts intent
-classification first, then lazily starts retrieval or SQL services after
-routing. Server output is written to `logs/mcp/`.
-
-Set `MCP_AUTO_START=false` to connect to MCP services that you manage
-separately. When auto-start is disabled, start only the processes needed for
-the workflow being exercised, each in its own terminal.
-
-Terminal 1, HTML retrieval MCP server:
+Render a trace:
 
 ```powershell
-uv run --no-editable agent-harness-rag
+uv run agent-harness-traces .local/traces/<run_id>.jsonl --no-open
 ```
 
-The production RAG MCP surface is intentionally limited to:
-
-- `retrieve_documentation_context`: bounded search plus cited chunk fetch.
-- `find_table_doc`: exact table-document discovery.
-- `get_doc_section`: bounded section retrieval for a named document.
-- `search_columns`: bounded search over real indexed column information.
-
-Lower-level search and arbitrary chunk-fetch helpers remain internal and are
-not remotely callable MCP tools.
-
-Terminal 2, intent classifier MCP server:
+Run evaluations:
 
 ```powershell
-uv run --no-editable agent-harness-intent
+uv run agent-harness-eval --suite smoke
+uv run agent-harness-eval --suite red_team
+uv run agent-harness-eval --suite intent --repetitions 3
+uv run agent-harness-eval --suite retrieval --k 5 10
 ```
 
-Terminal 3, SQL generation MCP server:
-
-```powershell
-uv run --no-editable agent-harness-sql-generation
-```
-
-Terminal 4, SQL validation MCP server:
-
-```powershell
-uv run --no-editable agent-harness-sql-validation
-```
-
-### Ask The Agent
-
-Prompt the agent:
-
-```powershell
-uv run --no-editable agent-harness "<question>" --json
-```
-
-Add `--viewer` to render and open the run trace.
-
-Use `--viewer --no-open-viewer` to render without opening a browser.  Render an
-existing trace with:
-
-```powershell
-uv run --no-editable agent-harness-traces logs/runs/<run_id>.jsonl
-```
-
-Model-backed commands can incur API usage. Run them only when that usage is
-approved.
+Reports default to `.local/evals/`. The retrieval suite needs a built index and
+is described in [evals/retrieval/README.md](evals/retrieval/README.md); its
+results are only comparable within one `chunker_version`.
 
 ## Verification
 
-Unit tests and static checks do not require live MCP servers or model calls:
-
 ```powershell
 uv run ruff format --check src tests
-uv run ruff check src tests
+uv run ruff check .
 uv run pyright
 uv run pytest
+uv build
 ```
 
-Run a single test with:
+## LangGraph Primitives Used
 
-```powershell
-uv run pytest tests/test_tool_registry.py -q
-```
+- `StateGraph`: declares nodes operating on the shared `AgentState`.
+- Nodes: ordinary Python functions that return partial state updates.
+- Fixed edges: define unconditional sequence.
+- Conditional edges: route from policy, intent, context, and validation results.
+- Reducers: append citations instead of overwriting them.
+- `interrupt()`: pauses when clarification is required.
+- `Command(resume=...)`: supplies the user's clarification and resumes the same
+checkpoint.
+- `InMemorySaver`: stores thread-scoped checkpoints for the current process.
 
-The live evaluation suites require their corresponding MCP services and may
-make model calls:
+JSONL is the single trace source. Each row is validated through a Pydantic
+discriminated union before it is written; graph state does not duplicate trace
+events.
 
-```powershell
-uv run --no-editable agent-harness-eval --suite smoke
-uv run --no-editable agent-harness-eval --suite red_team
-uv run --no-editable agent-harness-eval --suite intent --repetitions 3
-```
+LangGraph is used for control flow only. Prompt templates, output parsers,
+chains, agent executors, memory, and retriever wrappers are not used: every
+model call is a direct Anthropic SDK call with prompts declared in this
+repository, so prompts and responses stay visible.
 
-The retrieval suite runs deterministically against the local SQLite index. It
-does not require MCP services or make model calls:
+## Previous Architecture
 
-```powershell
-uv run agent-harness-eval --suite retrieval --retriever fts --db var\rag\index.sqlite --k 5 10
-```
+Before ADR 001 this project ran five FastMCP services over localhost HTTP with
+subprocess auto-start. That architecture is preserved and restorable at the
+frozen `fallback/mcp-host` branch and the `archive/mcp-host-main-20260727` tag.
+See [ADR 001](docs/adr/001-graph-trunk-and-mcp-boundary.md) for the rationale
+and the restore procedure.
 
-It reads `evals/retrieval_queries.jsonl`, document judgments from
-`evals/retrieval_qrels.jsonl`, chunk judgments from
-`evals/retrieval_chunk_qrels.jsonl`, and identities from
-`evals/retrieval_catalog.jsonl`. Qrels refer to stable
-`epic_clarity:<object-type>:<object-name>` document keys; the catalog maps each
-key to a corpus-relative source path, which is resolved to the active index's
-generated document ID at runtime. Chunk judgments resolve portable semantic
-selectors (heading, category, and required terms) to the active index's chunk
-IDs. The suite reports both document- and chunk-level ranking metrics.
-
-Evaluation results are written under `evals/results/` and are ignored by Git.
-
-## Scope Boundary
-
-The local RAG index is built from approved documentation files on disk. It is
-not patient data, does not execute database queries, and must not be treated as
-production authorization. SQL generation and validation are planning services;
-the project does not run SQL against a real database.
-
-This project does not provide production authorization, PHI protection, real
-database execution, network isolation, or clinical decision support. See
-[`docs/PRD.md`](docs/PRD.md) for the complete scope and acceptance criteria.
-
-## Contributing
-
-Read [`CLAUDE.md`](CLAUDE.md) before changing the repository. Keep changes
-small, preserve deterministic boundaries, update tests with behavior changes,
-and keep each document within its assigned responsibility.
+See [CLAUDE.md](CLAUDE.md) for contributor rules,
+[docs/adr/](docs/adr/) for accepted decisions, [docs/PRD.md](docs/PRD.md) for
+requirements, and [docs/RAG.md](docs/RAG.md) for retrieval design.

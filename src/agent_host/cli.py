@@ -1,100 +1,62 @@
+"""CLI entry point for the simplified pipeline."""
+
 from __future__ import annotations
 
 import argparse
-import asyncio
-import json
-import platform
-import subprocess
-import webbrowser
-from pathlib import Path
-from typing import Any
+import sys
 
-from agent_host.agent import ask
-from trace_viewer.parser import load_traces
-from trace_viewer.renderer import render_html
+from rich.console import Console
+
+console = Console()
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the policy-gated agent harness.")
-    parser.add_argument("prompt", nargs="+", help="User prompt to send to Claude.")
-    parser.add_argument("--json", action="store_true", help="Print raw JSON result.")
-    parser.add_argument(
-        "--trace",
-        action="store_true",
-        help="Print the JSONL trace after the answer.",
+    parser = argparse.ArgumentParser(
+        description="Ask the policy-gated agent pipeline a question.",
+        prog="agent-harness",
     )
+    parser.add_argument("question", nargs="?", help="Question to ask the pipeline.")
     parser.add_argument(
-        "--viewer",
-        action="store_true",
-        help="Render and open an HTML trace viewer for this run.",
-    )
-    parser.add_argument(
-        "--no-open-viewer",
-        action="store_true",
-        help="Render the trace viewer without opening it in a browser.",
+        "--thread-id",
+        default=None,
+        help="Thread ID for conversation continuity (optional).",
     )
     args = parser.parse_args()
 
-    prompt = " ".join(args.prompt)
-    result = asyncio.run(ask(prompt))
-    viewer_path = render_trace_viewer(result) if args.viewer else None
-    viewer_url = viewer_path.resolve().as_uri() if viewer_path is not None else None
-    if viewer_url is not None and not args.no_open_viewer:
-        open_viewer(viewer_url)
+    if not args.question:
+        parser.print_help()
+        sys.exit(1)
 
-    if args.json:
-        if viewer_path is not None:
-            result["trace_viewer"] = str(viewer_path)
-            result["trace_viewer_url"] = viewer_url
-        print(json.dumps(result, indent=2, ensure_ascii=True))
-        return
+    from agent_host.graph import ask, resume
 
-    print("\nAnswer:")
-    print(result["answer"])
-    print(f"\nUsed tools: {format_tools(result)}")
-    print(f"Run ID:     {result['run_id']}")
-    print(f"Trace:      {result['trace_file']}")
-    if viewer_path is not None and viewer_url is not None:
-        print(f"Viewer:     {viewer_url}")
-        print(f"Viewer file:{viewer_path.resolve()}")
+    response = ask(args.question, thread_id=args.thread_id)
 
-    if args.trace:
-        print("\nTrace:")
-        print(Path(str(result["trace_file"])).read_text(encoding="utf-8"))
+    # Handle clarification loop
+    while response.interrupted:
+        console.print(f"\n[yellow]Clarification needed:[/yellow] {response.clarification_prompt}")
+        try:
+            user_reply = input("> ").strip()
+        except EOFError, KeyboardInterrupt:
+            console.print("\n[red]Aborted.[/red]")
+            sys.exit(1)
+        if not user_reply:
+            console.print("[red]Empty reply — aborting.[/red]")
+            sys.exit(1)
+        response = resume(user_reply, thread_id=response.thread_id or "")
 
+    if not response.allowed:
+        console.print(f"\n[red]Blocked:[/red] {response.policy_reason}")
+        console.print(f"\n{response.answer}")
+        sys.exit(1)
 
-def format_tools(result: dict[str, Any]) -> str:
-    used_tools = result.get("used_tools", [])
-    if not used_tools:
-        return "none"
-    return ", ".join(str(tool) for tool in used_tools)
-
-
-def render_trace_viewer(result: dict[str, Any]) -> Path:
-    trace_file = Path(str(result["trace_file"]))
-    traces, warnings = load_traces([trace_file])
-    if not traces:
-        raise RuntimeError(f"No trace data found in {trace_file}")
-
-    output = Path("logs") / "trace_views" / f"trace_view_{result['run_id']}.html"
-    render_html(traces, output)
-
-    for warning in warnings:
-        print(f"warning: {warning}")
-    return output
-
-
-def open_viewer(viewer_url: str) -> None:
-    opened = False
-    if platform.system() == "Darwin":
-        completed = subprocess.run(["open", viewer_url], check=False)
-        opened = completed.returncode == 0
-
-    if not opened:
-        opened = webbrowser.open(viewer_url, new=2)
-
-    if not opened:
-        print(f"warning: could not auto-open viewer; open this URL manually: {viewer_url}")
+    console.print(f"\n{response.answer}")
+    if response.intent:
+        console.print(
+            f"\n[dim]Intent: {response.intent} (confidence: {response.intent_confidence:.2f})[/dim]"
+        )
+    if response.used_tools:
+        console.print(f"[dim]Tools: {', '.join(response.used_tools)}[/dim]")
+    console.print(f"[dim]Run: {response.run_id} | Thread: {response.thread_id}[/dim]")
 
 
 if __name__ == "__main__":

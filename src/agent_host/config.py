@@ -2,165 +2,84 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from dotenv import load_dotenv
 
-
-def _bool_env(name: str, default: bool = False) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
-def _int_env(name: str, default: int) -> int:
-    raw = os.getenv(name)
-    if raw is None or raw.strip() == "":
-        return default
-    return int(raw)
+from agent_host.trace_logger import TraceContentMode
 
 
 @dataclass(frozen=True)
-class Settings:
+class AppConfig:
+    """External/runtime configuration only. All limits live in ExecutionBudget."""
+
     anthropic_api_key: str | None
     anthropic_base_url: str | None
     anthropic_custom_headers: dict[str, str] = field(default_factory=dict)
-    claude_model: str | None = "claude-sonnet-4-6"
-    mcp_server_url: str = "http://localhost:8000/mcp"
-    intent_mcp_url: str = "http://localhost:8002/mcp"
-    sql_generation_mcp_url: str = "http://localhost:8003/mcp"
-    sql_validation_mcp_url: str = "http://localhost:8004/mcp"
-    rag_mcp_url: str = "http://localhost:8005/mcp"
-    mcp_auth_token: str | None = None
-    mcp_auto_start: bool = True
-    mcp_startup_timeout_seconds: float = 10.0
-    mcp_log_dir: str = "logs/mcp"
-    max_tool_rounds: int = 3
-    max_model_calls: int = 4
-    max_tool_calls: int = 12
-    max_calls_per_tool: int = 6
-    max_candidate_schemas: int = 5
-    max_retrieved_chunks: int = 5
-    max_input_bytes: int = 16_000
-    max_tool_result_bytes: int = 32_000
-    max_context_bytes: int = 128_000
-    max_wall_seconds: float = 60.0
-    mcp_call_timeout_seconds: float = 10.0
-    model_call_timeout_seconds: float = 30.0
-    model_max_tokens: int = 800
-    intent_max_tokens: int = 200
-    sql_generation_max_tokens: int = 500
+    model: str = "claude-sonnet-4-6"
+    index_path: Path = field(default_factory=lambda: Path(".local/rag/index.sqlite"))
+    artifact_path: Path = field(default_factory=lambda: Path(".local"))
     intent_min_confidence: float = 0.70
-    trace_dir: str = "logs/runs"
-    log_raw_prompts: bool = False
-    trace_content_mode: str = "metadata"
+    trace_content_mode: TraceContentMode = "metadata"
 
-    def require_anthropic_api_key(self) -> str:
+    @property
+    def trace_dir(self) -> Path:
+        return self.artifact_path / "traces"
+
+    def require_api_key(self) -> str:
         if not self.anthropic_api_key:
             raise RuntimeError(
                 "Set ANTHROPIC_API_KEY or AI_HUB_API_KEY in your environment or .env file."
             )
         return self.anthropic_api_key
 
-    def require_anthropic_base_url(self) -> str:
+    def require_base_url(self) -> str:
         if not self.anthropic_base_url:
             raise RuntimeError("Set ANTHROPIC_BASE_URL in your environment or .env file.")
         return self.anthropic_base_url
 
-    def require_claude_model(self) -> str:
-        if not self.claude_model:
-            raise RuntimeError("Set CLAUDE_MODEL in your environment or .env file.")
-        return self.claude_model
+    def require_model(self) -> str:
+        return self.model
 
 
-def get_settings() -> Settings:
+def get_config() -> AppConfig:
     load_dotenv()
 
-    int_defaults = {
-        "max_tool_rounds": ("MAX_TOOL_ROUNDS", 3),
-        "max_model_calls": ("MAX_MODEL_CALLS", 4),
-        "max_tool_calls": ("MAX_TOOL_CALLS", 12),
-        "max_calls_per_tool": ("MAX_CALLS_PER_TOOL", 6),
-        "max_candidate_schemas": ("MAX_CANDIDATE_SCHEMAS", 5),
-        "max_retrieved_chunks": ("MAX_RETRIEVED_CHUNKS", 5),
-        "max_input_bytes": ("MAX_INPUT_BYTES", 16_000),
-        "max_tool_result_bytes": ("MAX_TOOL_RESULT_BYTES", 32_000),
-        "max_context_bytes": ("MAX_CONTEXT_BYTES", 128_000),
-        "model_max_tokens": ("MODEL_MAX_TOKENS", 800),
-        "intent_max_tokens": ("INTENT_MAX_TOKENS", 200),
-        "sql_generation_max_tokens": ("SQL_GENERATION_MAX_TOKENS", 500),
-    }
-    parsed_ints: dict[str, int] = {}
-    for field_name, (env_name, default) in int_defaults.items():
-        try:
-            parsed_ints[field_name] = _int_env(env_name, default)
-        except ValueError as exc:
-            raise RuntimeError(f"{env_name} must be an integer.") from exc
-        if parsed_ints[field_name] < 0:
-            raise RuntimeError(f"{env_name} must be 0 or greater.")
+    api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("AI_HUB_API_KEY") or None
+    base_url = os.getenv("ANTHROPIC_BASE_URL") or None
+    model = os.getenv("CLAUDE_MODEL") or "claude-sonnet-4-6"
+
+    raw_path = os.getenv("RAG_DB_PATH", "").strip()
+    index_path = Path(raw_path) if raw_path else Path(".local/rag/index.sqlite")
+
+    raw_artifact = os.getenv("ARTIFACT_PATH", "").strip()
+    artifact_path = Path(raw_artifact) if raw_artifact else Path(".local")
 
     try:
-        max_wall_seconds = float(os.getenv("MAX_WALL_SECONDS", "60"))
-        mcp_call_timeout_seconds = float(os.getenv("MCP_CALL_TIMEOUT_SECONDS", "10"))
-        model_call_timeout_seconds = float(os.getenv("MODEL_CALL_TIMEOUT_SECONDS", "30"))
-        mcp_startup_timeout_seconds = float(os.getenv("MCP_STARTUP_TIMEOUT_SECONDS", "10"))
         intent_min_confidence = float(os.getenv("INTENT_MIN_CONFIDENCE", "0.70"))
     except ValueError as exc:
-        raise RuntimeError(
-            "MAX_WALL_SECONDS, MCP_CALL_TIMEOUT_SECONDS, MODEL_CALL_TIMEOUT_SECONDS, and "
-            "MCP_STARTUP_TIMEOUT_SECONDS, and INTENT_MIN_CONFIDENCE must be numeric."
-        ) from exc
-    if (
-        max_wall_seconds <= 0
-        or mcp_call_timeout_seconds <= 0
-        or model_call_timeout_seconds <= 0
-        or mcp_startup_timeout_seconds <= 0
-    ):
-        raise RuntimeError("execution timeouts must be greater than 0.")
+        raise RuntimeError("INTENT_MIN_CONFIDENCE must be numeric.") from exc
     if not 0 <= intent_min_confidence <= 1:
         raise RuntimeError("INTENT_MIN_CONFIDENCE must be between 0 and 1.")
 
-    trace_content_mode = os.getenv("TRACE_CONTENT_MODE", "metadata").strip().lower()
-    if trace_content_mode not in {"metadata", "debug"}:
+    raw_trace_mode = os.getenv("TRACE_CONTENT_MODE", "metadata").strip().lower()
+    if raw_trace_mode not in {"metadata", "debug"}:
         raise RuntimeError("TRACE_CONTENT_MODE must be 'metadata' or 'debug'.")
+    trace_content_mode: TraceContentMode = raw_trace_mode  # type: ignore[assignment]
 
-    return Settings(
-        anthropic_api_key=os.getenv("ANTHROPIC_API_KEY") or os.getenv("AI_HUB_API_KEY"),
-        anthropic_base_url=os.getenv("ANTHROPIC_BASE_URL") or None,
-        anthropic_custom_headers=parse_custom_headers(os.getenv("ANTHROPIC_CUSTOM_HEADERS", "")),
-        claude_model=os.getenv("CLAUDE_MODEL") or "claude-sonnet-4-6",
-        mcp_server_url=os.getenv("MCP_SERVER_URL") or "http://localhost:8000/mcp",
-        intent_mcp_url=os.getenv("INTENT_MCP_URL") or "http://localhost:8002/mcp",
-        sql_generation_mcp_url=(os.getenv("SQL_GENERATION_MCP_URL") or "http://localhost:8003/mcp"),
-        sql_validation_mcp_url=(os.getenv("SQL_VALIDATION_MCP_URL") or "http://localhost:8004/mcp"),
-        rag_mcp_url=os.getenv("RAG_MCP_URL") or "http://localhost:8005/mcp",
-        mcp_auth_token=os.getenv("MCP_AUTH_TOKEN") or None,
-        mcp_auto_start=_bool_env("MCP_AUTO_START", True),
-        mcp_startup_timeout_seconds=mcp_startup_timeout_seconds,
-        mcp_log_dir=os.getenv("MCP_LOG_DIR", "logs/mcp"),
-        max_tool_rounds=parsed_ints["max_tool_rounds"],
-        max_model_calls=parsed_ints["max_model_calls"],
-        max_tool_calls=parsed_ints["max_tool_calls"],
-        max_calls_per_tool=parsed_ints["max_calls_per_tool"],
-        max_candidate_schemas=parsed_ints["max_candidate_schemas"],
-        max_retrieved_chunks=parsed_ints["max_retrieved_chunks"],
-        max_input_bytes=parsed_ints["max_input_bytes"],
-        max_tool_result_bytes=parsed_ints["max_tool_result_bytes"],
-        max_context_bytes=parsed_ints["max_context_bytes"],
-        max_wall_seconds=max_wall_seconds,
-        mcp_call_timeout_seconds=mcp_call_timeout_seconds,
-        model_call_timeout_seconds=model_call_timeout_seconds,
-        model_max_tokens=parsed_ints["model_max_tokens"],
-        intent_max_tokens=parsed_ints["intent_max_tokens"],
-        sql_generation_max_tokens=parsed_ints["sql_generation_max_tokens"],
+    return AppConfig(
+        anthropic_api_key=api_key,
+        anthropic_base_url=base_url,
+        anthropic_custom_headers=_parse_custom_headers(os.getenv("ANTHROPIC_CUSTOM_HEADERS", "")),
+        model=model,
+        index_path=index_path,
+        artifact_path=artifact_path,
         intent_min_confidence=intent_min_confidence,
-        trace_dir=os.getenv("TRACE_DIR", "logs/runs"),
-        log_raw_prompts=_bool_env("LOG_RAW_PROMPTS", False),
         trace_content_mode=trace_content_mode,
     )
 
 
-def parse_custom_headers(raw_headers: str) -> dict[str, str]:
+def _parse_custom_headers(raw_headers: str) -> dict[str, str]:
     headers: dict[str, str] = {}
     for item in raw_headers.split(","):
         if not item.strip():

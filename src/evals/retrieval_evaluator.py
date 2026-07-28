@@ -14,7 +14,7 @@ from pathlib import Path, PurePosixPath
 from time import perf_counter
 from typing import Any
 
-from retrieval.mcp_server import search_ranked_chunks
+from retrieval.search import search_ranked_chunks
 
 DOCUMENT_NAMESPACE = "epic_clarity"
 
@@ -543,11 +543,12 @@ def _validate_k(k: int) -> None:
         raise ValueError("K must be at least 1")
 
 
-def _ranked_metrics(
+def ranked_metrics(
     ranked_ids: Sequence[str],
     relevance_by_id: Mapping[str, int],
     k_values: Sequence[int],
 ) -> dict[str, float | bool | None]:
+    """Calculate standard ranking metrics for one ranked result list."""
     grades = [relevance_by_id.get(item_id, 0) for item_id in ranked_ids]
     ideal_grades = list(relevance_by_id.values())
     relevant_total = sum(grade > 0 for grade in ideal_grades)
@@ -599,6 +600,19 @@ def _get_index_version(conn: sqlite3.Connection) -> str:
     row = conn.execute("SELECT value FROM index_metadata WHERE key = 'index_version'").fetchone()
     if row is None:
         raise ValueError("RAG index is missing index_version")
+    return str(row[0])
+
+
+def _get_chunker_version(conn: sqlite3.Connection) -> str:
+    """Read the chunker that built this index.
+
+    Benchmark numbers are only comparable within one chunker version, so the
+    report records the version the index was actually built with rather than
+    whatever the current source declares.
+    """
+    row = conn.execute("SELECT value FROM index_metadata WHERE key = 'chunker_version'").fetchone()
+    if row is None:
+        raise ValueError("RAG index is missing chunker_version")
     return str(row[0])
 
 
@@ -682,6 +696,7 @@ def run_retrieval_evaluation(
     conn.row_factory = sqlite3.Row
     try:
         index_version = _get_index_version(conn)
+        chunker_version = _get_chunker_version(conn)
         results: list[dict[str, Any]] = []
         resolution_summary: dict[str, int] = defaultdict(int)
         max_k = max(normalized_k)
@@ -796,16 +811,16 @@ def run_retrieval_evaluation(
             metrics_status: str | None = None
             if query.judgment_scope == JudgmentScope.corpus_complete:
                 metrics = {
-                    "chunk": _ranked_metrics(ranked_chunk_ids, relevance_by_chunk_id, normalized_k),
-                    "document": _ranked_metrics(ranked_doc_ids, relevance_by_doc_id, normalized_k),
+                    "chunk": ranked_metrics(ranked_chunk_ids, relevance_by_chunk_id, normalized_k),
+                    "document": ranked_metrics(ranked_doc_ids, relevance_by_doc_id, normalized_k),
                 }
                 metrics_status = "complete"
                 unjudged_doc_ids = []
                 unjudged_chunk_ids = []
             elif not unjudged_doc_ids and not unjudged_chunk_ids:
                 metrics = {
-                    "chunk": _ranked_metrics(ranked_chunk_ids, relevance_by_chunk_id, normalized_k),
-                    "document": _ranked_metrics(ranked_doc_ids, relevance_by_doc_id, normalized_k),
+                    "chunk": ranked_metrics(ranked_chunk_ids, relevance_by_chunk_id, normalized_k),
+                    "document": ranked_metrics(ranked_doc_ids, relevance_by_doc_id, normalized_k),
                 }
                 metrics_status = "complete"
 
@@ -872,6 +887,7 @@ def run_retrieval_evaluation(
         "generated_at": datetime.now(UTC).isoformat(),
         "retriever": retriever,
         "index_version": index_version,
+        "chunker_version": chunker_version,
         "k_values": list(normalized_k),
         "query_count": len(results),
         "resolved_query_count": len(resolved_results),
@@ -914,3 +930,34 @@ def run_retrieval_evaluation(
         },
         "results": results,
     }
+
+
+class GeneratedRetrievalQuery:
+    query_id: str
+    query: str
+    positive_document_key: str
+    source_description: str
+    generation_model: str
+    prompt_version: str
+    query_style: str
+    split: str
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any], *, line_number: int) -> GeneratedRetrievalQuery:
+        query = str(data["query"]).strip()
+        positive_document_key = _canonical_relative_path(str(data["positive_document_key"]))
+        source_description = str(data["source_description"]).strip()
+        split = str(data["split"]).strip()
+        query_style = str(data["query_style"]).strip()
+        if not query or not source_description or not split or not query_style:
+            raise ValueError("generated query fields must not be empty")
+        return cls(
+            query_id=f"G{line_number:06d}",
+            query=query,
+            positive_document_key=positive_document_key,
+            source_description=source_description,
+            generation_model=str(data["generation_model"]).strip(),
+            prompt_version=str(data["prompt_version"]).strip(),
+            query_style=query_style,
+            split=split,
+        )

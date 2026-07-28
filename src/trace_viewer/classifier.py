@@ -1,44 +1,40 @@
 from __future__ import annotations
 
-NODE_TYPE_MAP: dict[str, str] = {
-    "request.received": "input",
-    "policy_gate.checked": "policy_gate",
-    "request.blocked": "policy_gate",
-    "intent.classification.request": "classifier",
-    "intent.classification.result": "classifier",
-    "intent.classification.failed": "error",
-    "general_question.started": "classifier",
-    "sql.workflow.started": "generation",
-    "sql.workflow.completed": "generation",
-    "sql.generation.refused": "generation",
-    "sql.validation.blocked": "validation",
-    "sql.validation.failed": "validation",
-    "mcp.tools.listed": "tool_call",
-    "model.request": "model_call",
-    "model.response": "model_call",
-    "model.request.first": "model_call",
-    "model.response.first": "model_call",
-    "model.request.final": "model_call",
-    "model.response.final": "model_call",
-    "tool.selected": "tool_call",
-    "tool.result": "tool_call",
-    "answer.ready": "output",
-    "agent.max_rounds_reached": "error",
-}
+from agent_host.trace_contract import EVENT_SPEC
+
+# The viewer used to keep its own event map. It drifted: after the pipeline moved
+# to a graph it still classified MCP-era names like `intent.classification.request`
+# that no node emits, so nearly every event in a real run rendered as "unknown".
+# Classification now derives from the one contract, and an unmapped event means
+# the event is genuinely off-contract rather than merely unregistered here.
 
 NODE_TYPE_LABELS: dict[str, str] = {
-    "input": "Input",
-    "policy_gate": "Policy Gate",
-    "classifier": "Classifier",
-    "generation": "SQL Generation",
-    "validation": "Validation",
-    "tool_call": "Tool Call",
-    "model_call": "Model Call",
-    "output": "Output",
-    "error": "Error",
+    "policy": "Policy Gate",
+    "intent": "Intent",
+    "retrieval": "Retrieval",
+    "sql": "SQL",
+    "lifecycle": "Answer",
+    "operational": "Operational",
     "unknown": "Unknown",
 }
 
+#: Derived from the contract; kept for callers that want the whole mapping.
+NODE_TYPE_MAP: dict[str, str] = {name: spec.domain for name, spec in EVENT_SPEC.items()}
+
 
 def classify_event(event_name: str) -> str:
-    return NODE_TYPE_MAP.get(event_name, "unknown")
+    """Map an event to its domain, or 'unknown' if it is off-contract."""
+    spec = EVENT_SPEC.get(event_name)  # type: ignore[arg-type]
+    return spec.domain if spec is not None else "unknown"
+
+
+def event_status(event_name: str) -> str:
+    """Report whether an event is a normal step, a deliberate stop, or a failure."""
+    spec = EVENT_SPEC.get(event_name)  # type: ignore[arg-type]
+    return spec.status if spec is not None else "unknown"
+
+
+def event_label(event_name: str) -> str:
+    """Human-readable label for an event."""
+    spec = EVENT_SPEC.get(event_name)  # type: ignore[arg-type]
+    return spec.label if spec is not None else event_name

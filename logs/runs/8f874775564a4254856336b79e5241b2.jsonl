@@ -1,9 +1,0 @@
-{"ts": 1783541946.943638, "run_id": "8f874775564a4254856336b79e5241b2", "event": "request.received", "question": "[hidden]"}
-{"ts": 1783541947.5275598, "run_id": "8f874775564a4254856336b79e5241b2", "event": "mcp.tools.listed", "mcp_url": "http://localhost:8000/mcp", "tools": ["get_weather"]}
-{"ts": 1783541947.5467956, "run_id": "8f874775564a4254856336b79e5241b2", "event": "model.request.first", "model": "claude-haiku-4-5-20251001", "messages": "[hidden]", "tools": ["get_weather"]}
-{"ts": 1783541948.7643085, "run_id": "8f874775564a4254856336b79e5241b2", "event": "model.response.first", "response": "[hidden]"}
-{"ts": 1783541948.7676573, "run_id": "8f874775564a4254856336b79e5241b2", "event": "tool.selected", "name": "get_weather", "input": {"location": "New York"}, "tool_use_id": "toolu_vrtx_014tBZeCxroviTMjRw5Xf1iy"}
-{"ts": 1783541948.8154004, "run_id": "8f874775564a4254856336b79e5241b2", "event": "tool.result", "name": "get_weather", "result": {"location": "New York", "condition": "sunny", "temperature_f": 72, "humidity_percent": 45, "wind_mph": 6, "source": "dummy_mcp_weather_server", "is_dummy": true}}
-{"ts": 1783541948.818454, "run_id": "8f874775564a4254856336b79e5241b2", "event": "model.request.final", "model": "claude-haiku-4-5-20251001", "messages": "[hidden]", "tools": ["get_weather"]}
-{"ts": 1783541949.7273338, "run_id": "8f874775564a4254856336b79e5241b2", "event": "model.response.final", "response": "[hidden]"}
-{"ts": 1783541949.731045, "run_id": "8f874775564a4254856336b79e5241b2", "event": "answer.ready", "answer": "The weather in New York is currently:\n\n- **Condition**: Sunny \u2600\ufe0f\n- **Temperature**: 72\u00b0F\n- **Humidity**: 45%\n- **Wind**: 6 mph\n\nIt's a pleasant day with clear skies and mild conditions!", "used_tools": ["get_weather"]}

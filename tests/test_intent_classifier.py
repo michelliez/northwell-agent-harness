@@ -1,283 +1,121 @@
-from types import SimpleNamespace
+"""Tests for intent classification contract enforcement (no model calls)."""
+
+from __future__ import annotations
+
+from typing import get_args
 
 import pytest
-from anthropic.types import ToolUseBlock
+from pydantic import ValidationError
 
-from agent_host.tool_registry import tools_for_intent
-from mcp_servers import intent
-
-
-def _response(payload: dict[str, object]) -> SimpleNamespace:
-    return SimpleNamespace(
-        content=[
-            ToolUseBlock(
-                id="tool-1",
-                input=payload,
-                name="emit_intent",
-                type="tool_use",
-            )
-        ]
-    )
+from agent_host.nodes.intent_nodes import (
+    _INTENT_TOOL,
+    EXPECTED_ACTION,
+    REFUSAL_INTENTS,
+    RETRIEVAL_INTENTS,
+    IntentName,
+    _RawIntentDecision,
+    enforce_intent_contract,
+)
 
 
-class FakeMessages:
-    def __init__(self, response: SimpleNamespace) -> None:
-        self.response = response
-        self.kwargs: dict[str, object] | None = None
+# Re-expose enforce_intent_contract for test convenience
+def _enforce(intent, confidence, needs_clarification=False, risk_flags=None, min_conf=0.70):
+    class _Decision:
+        pass
 
-    def create(self, **kwargs: object) -> SimpleNamespace:
-        self.kwargs = kwargs
-        return self.response
-
-
-class FakeClient:
-    def __init__(self, response: SimpleNamespace) -> None:
-        self.messages = FakeMessages(response)
+    d = _Decision()
+    d.intent = intent
+    d.confidence = confidence
+    d.needs_clarification = needs_clarification
+    d.risk_flags = risk_flags or []
+    return enforce_intent_contract(d, min_confidence=min_conf)
 
 
-def test_classify_intent_returns_validated_result(monkeypatch: pytest.MonkeyPatch) -> None:
-    response = _response(
-        {
-            "intent": "aggregate_definition",
-            "confidence": 0.93,
-            "risk_flags": [],
-            "needs_clarification": False,
-        }
-    )
-    client = FakeClient(response)
-    monkeypatch.setattr(intent, "Anthropic", lambda **_: client)
-    monkeypatch.setattr(
-        intent,
-        "get_settings",
-        lambda: SimpleNamespace(
-            require_anthropic_api_key=lambda: "test-key",
-            require_anthropic_base_url=lambda: "https://example.test",
-            anthropic_custom_headers={},
-            require_claude_model=lambda: "test-model",
-        ),
-    )
+def test_refusal_intent_maps_to_refuse_action() -> None:
+    for intent in REFUSAL_INTENTS:
+        result = _enforce(intent, 0.95)
+        assert result["recommended_action"] == "refuse"
+        assert result["needs_clarification"] is False
 
-    result = intent.classify_intent("What data supports a visit count?")
 
-    assert result["intent"] == "aggregate_definition"
-    assert result["recommended_action"] == "retrieve_documentation"
-    assert client.messages.kwargs is not None
-    assert client.messages.kwargs["tool_choice"] == {
-        "type": "tool",
-        "name": "emit_intent",
+def test_low_confidence_becomes_clarify() -> None:
+    result = _enforce("documentation_lookup", confidence=0.50, min_conf=0.70)
+    assert result["intent"] == "unknown"
+    assert result["recommended_action"] == "clarify"
+    assert result["needs_clarification"] is True
+    assert "low_confidence" in result["risk_flags"]
+
+
+def test_unknown_intent_becomes_clarify() -> None:
+    result = _enforce("unknown", confidence=0.90, needs_clarification=True)
+    assert result["intent"] == "unknown"
+    assert result["recommended_action"] == "clarify"
+
+
+def test_safe_intent_maps_to_correct_action() -> None:
+    for intent, action in EXPECTED_ACTION.items():
+        if intent in REFUSAL_INTENTS or intent == "unknown":
+            continue
+        result = _enforce(intent, confidence=0.90)
+        assert result["recommended_action"] == action, f"Wrong action for {intent}"
+        assert result["intent"] == intent
+
+
+def test_retrieval_intents_include_sql_generation() -> None:
+    assert "safe_sql_generation" in RETRIEVAL_INTENTS
+    assert "documentation_lookup" in RETRIEVAL_INTENTS
+    assert "table_discovery" in RETRIEVAL_INTENTS
+
+
+def test_refusal_intents_do_not_overlap_with_retrieval_intents() -> None:
+    assert REFUSAL_INTENTS.isdisjoint(RETRIEVAL_INTENTS)
+
+
+def test_needs_clarification_true_maps_to_clarify() -> None:
+    result = _enforce("documentation_lookup", confidence=0.95, needs_clarification=True)
+    assert result["intent"] == "unknown"
+    assert result["recommended_action"] == "clarify"
+
+
+# --- closed-vocabulary validation -------------------------------------------
+
+
+def _decision(**overrides):
+    payload = {
+        "intent": "documentation_lookup",
+        "confidence": 0.9,
+        "risk_flags": [],
+        "needs_clarification": False,
     }
-    assert "aggregate_definition, needs_clarification=false" in str(
-        client.messages.kwargs["system"]
-    )
+    payload.update(overrides)
+    return payload
 
 
-def test_classify_intent_fails_closed_on_low_confidence(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    response = _response(
-        {
-            "intent": "table_discovery",
-            "confidence": 0.40,
-            "risk_flags": [],
-            "needs_clarification": False,
-        }
-    )
-    monkeypatch.setattr(intent, "Anthropic", lambda **_: FakeClient(response))
-    monkeypatch.setattr(
-        intent,
-        "get_settings",
-        lambda: SimpleNamespace(
-            require_anthropic_api_key=lambda: "test-key",
-            require_anthropic_base_url=lambda: "https://example.test",
-            anthropic_custom_headers={},
-            require_claude_model=lambda: "test-model",
-        ),
-    )
-
-    result = intent.classify_intent("Help me explore the catalog")
-
-    assert result == {
-        "intent": "unknown",
-        "confidence": 0.4,
-        "risk_flags": ["low_confidence"],
-        "recommended_action": "clarify",
-        "needs_clarification": True,
-    }
+def test_valid_decision_parses() -> None:
+    assert _RawIntentDecision.model_validate(_decision()).intent == "documentation_lookup"
 
 
-def test_classify_intent_accepts_general_question(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    response = _response(
-        {
-            "intent": "general_question",
-            "confidence": 0.91,
-            "risk_flags": [],
-            "needs_clarification": False,
-        }
-    )
-    monkeypatch.setattr(intent, "Anthropic", lambda **_: FakeClient(response))
-    monkeypatch.setattr(
-        intent,
-        "get_settings",
-        lambda: SimpleNamespace(
-            require_anthropic_api_key=lambda: "test-key",
-            require_anthropic_base_url=lambda: "https://example.test",
-            anthropic_custom_headers={},
-            require_claude_model=lambda: "test-model",
-        ),
-    )
-
-    result = intent.classify_intent("What color is the sky?")
-
-    assert result["intent"] == "general_question"
-    assert result["recommended_action"] == "answer_without_tools"
+def test_intent_outside_the_closed_vocabulary_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        _RawIntentDecision.model_validate(_decision(intent="execute_sql"))
 
 
-def test_classify_intent_accepts_documentation_lookup(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    response = _response(
-        {
-            "intent": "documentation_lookup",
-            "confidence": 0.94,
-            "risk_flags": [],
-            "needs_clarification": False,
-        }
-    )
-    monkeypatch.setattr(intent, "Anthropic", lambda **_: FakeClient(response))
-    monkeypatch.setattr(
-        intent,
-        "get_settings",
-        lambda: SimpleNamespace(
-            require_anthropic_api_key=lambda: "test-key",
-            require_anthropic_base_url=lambda: "https://example.test",
-            anthropic_custom_headers={},
-            require_claude_model=lambda: "test-model",
-        ),
-    )
-
-    result = intent.classify_intent("What do the docs say about appointment status?")
-
-    assert result["intent"] == "documentation_lookup"
-    assert result["recommended_action"] == "retrieve_documentation"
+def test_extra_fields_are_rejected_rather_than_silently_dropped() -> None:
+    with pytest.raises(ValidationError):
+        _RawIntentDecision.model_validate(_decision(recommended_action="generate_sql"))
 
 
-def test_classify_intent_forces_refusal_action_for_sensitive_intent(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    response = _response(
-        {
-            "intent": "patient_specific_request",
-            "confidence": 0.95,
-            "risk_flags": ["patient_level"],
-            "needs_clarification": False,
-        }
-    )
-    monkeypatch.setattr(intent, "Anthropic", lambda **_: FakeClient(response))
-    monkeypatch.setattr(
-        intent,
-        "get_settings",
-        lambda: SimpleNamespace(
-            require_anthropic_api_key=lambda: "test-key",
-            require_anthropic_base_url=lambda: "https://example.test",
-            anthropic_custom_headers={},
-            require_claude_model=lambda: "test-model",
-        ),
-    )
-
-    result = intent.classify_intent("Which patient had the visit?")
-
-    assert result["recommended_action"] == "refuse"
-    assert result["needs_clarification"] is False
+@pytest.mark.parametrize("confidence", [-0.1, 1.1])
+def test_confidence_outside_bounds_is_rejected(confidence: float) -> None:
+    with pytest.raises(ValidationError):
+        _RawIntentDecision.model_validate(_decision(confidence=confidence))
 
 
-def test_classify_intent_derives_action_from_model_intent(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    response = _response(
-        {
-            "intent": "schema_lookup",
-            "confidence": 0.95,
-            "risk_flags": [],
-            "needs_clarification": False,
-        }
-    )
-    monkeypatch.setattr(intent, "Anthropic", lambda **_: FakeClient(response))
-    monkeypatch.setattr(
-        intent,
-        "get_settings",
-        lambda: SimpleNamespace(
-            require_anthropic_api_key=lambda: "test-key",
-            require_anthropic_base_url=lambda: "https://example.test",
-            anthropic_custom_headers={},
-            require_claude_model=lambda: "test-model",
-        ),
-    )
-
-    result = intent.classify_intent("What columns are in encounters?")
-
-    assert result["intent"] == "schema_lookup"
-    assert result["recommended_action"] == "retrieve_documentation"
-    assert "incoherent_intent_action" not in result["risk_flags"]
+def test_tool_schema_enum_matches_the_validator_vocabulary() -> None:
+    """The schema shown to the model and the validator applied to it cannot drift."""
+    schema_enum = _INTENT_TOOL["input_schema"]["properties"]["intent"]["enum"]
+    assert list(schema_enum) == list(get_args(IntentName))
 
 
-def test_route_tool_scope_is_host_owned() -> None:
-    assert tools_for_intent("schema_lookup") == {
-        "retrieve_documentation_context",
-        "find_table_doc",
-        "get_doc_section",
-        "search_columns",
-    }
-    assert tools_for_intent("patient_specific_request") == set()
-    assert tools_for_intent("documentation_lookup") == {"retrieve_documentation_context"}
-
-
-def test_classify_intent_rejects_missing_or_duplicate_tool_results(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    settings = SimpleNamespace(
-        require_anthropic_api_key=lambda: "test-key",
-        require_anthropic_base_url=lambda: "https://example.test",
-        anthropic_custom_headers={},
-        require_claude_model=lambda: "test-model",
-    )
-    monkeypatch.setattr(intent, "get_settings", lambda: settings)
-    monkeypatch.setattr(intent, "Anthropic", lambda **_: FakeClient(SimpleNamespace(content=[])))
-
-    with pytest.raises(RuntimeError, match="exactly one"):
-        intent.classify_intent("Which tables are relevant?")
-
-
-def test_intent_tool_contract_is_closed_and_versioned() -> None:
-    assert intent.INTENT_PROMPT_VERSION == "v6"
-    assert intent.INTENT_TOOL["name"] == "emit_intent"
-    assert intent.INTENT_TOOL["input_schema"]["additionalProperties"] is False
-    assert set(intent.INTENT_TOOL["input_schema"]["required"]) == {
-        "intent",
-        "confidence",
-        "risk_flags",
-        "needs_clarification",
-    }
-
-
-@pytest.mark.asyncio
-async def test_intent_mcp_exposes_only_classifier_tool() -> None:
-    tools = await intent.mcp.list_tools()
-    assert [tool.name for tool in tools] == ["classify_intent"]
-
-
-def test_v6_prompt_covers_pipeline_routes_and_adversarial_failure_modes() -> None:
-    assert (
-        "Apply this order when a request contains more than one intent"
-        in intent.CLASSIFIER_SYSTEM_PROMPT
-    )
-    assert "force an intent label" in intent.CLASSIFIER_SYSTEM_PROMPT
-    assert "metadata with patient-level output" in intent.CLASSIFIER_SYSTEM_PROMPT
-    assert "safe_sql_generation" in intent.CLASSIFIER_SYSTEM_PROMPT
-    assert "Which documents can I look at for admissions info?" in intent.CLASSIFIER_SYSTEM_PROMPT
-    assert "host selects the workflow and tools" in intent.CLASSIFIER_SYSTEM_PROMPT
-    assert "data science and analyst schema-exploration pipeline" in intent.CLASSIFIER_SYSTEM_PROMPT
-    assert "mock catalog" not in intent.CLASSIFIER_SYSTEM_PROMPT
-    assert "general_question" in intent.CLASSIFIER_SYSTEM_PROMPT
-    assert '"Show me the schema" means unknown' in intent.CLASSIFIER_SYSTEM_PROMPT
+def test_every_intent_has_a_declared_action() -> None:
+    assert set(EXPECTED_ACTION) == set(get_args(IntentName))

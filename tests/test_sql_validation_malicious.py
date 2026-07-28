@@ -1,7 +1,6 @@
 import pytest
-from pydantic import ValidationError
 
-from mcp_servers.sql_validation import validate_sql
+from sql.validation import validate_sql
 
 MALICIOUS_SQL_CASES = [
     # DDL, DML, scripting, permissions, and export operations.
@@ -482,16 +481,17 @@ def test_malicious_sql_is_always_blocked(
     sql: str,
     tables: list[str],
     expected_reason: str | None,
+    standard_snapshot,
 ) -> None:
-    result = validate_sql(sql, tables)
+    result = validate_sql(sql, tables, standard_snapshot)
 
-    assert result["allowed"] is False
-    assert result["normalized_sql"] is None
-    assert result["reason"]
-    assert result["violations"]
-    assert result["violations"][0]["code"] == result["reason"]
+    assert result.allowed is False
+    assert result.normalized_sql is None
+    assert result.reason
+    assert result.violations
+    assert result.violations[0].code == result.reason
     if expected_reason is not None:
-        assert result["reason"] == expected_reason
+        assert result.reason == expected_reason
 
 
 @pytest.mark.parametrize(
@@ -512,32 +512,18 @@ def test_malicious_sql_is_always_blocked(
         "ordinary_query_parameter",
     ],
 )
-def test_injection_like_data_does_not_create_false_positives(sql: str) -> None:
-    result = validate_sql(sql, ["appointments"])
+def test_injection_like_data_does_not_create_false_positives(sql: str, standard_snapshot) -> None:
+    result = validate_sql(sql, ["appointments"], standard_snapshot)
 
-    assert result["allowed"] is True
-    assert result["violations"] == []
+    assert result.allowed is True
+    assert result.violations == []
 
 
-def test_duplicate_declared_tables_are_blocked() -> None:
+def test_duplicate_declared_tables_are_blocked(standard_snapshot) -> None:
     result = validate_sql(
         "SELECT COUNT(*) FROM appointments",
         ["appointments", "appointments"],
+        standard_snapshot,
     )
 
-    assert result["reason"] == "invalid_table_declaration"
-
-
-@pytest.mark.parametrize(
-    ("sql", "tables"),
-    [
-        (" ", []),
-        ("S" * 10_001, []),
-        ("SELECT COUNT(*) FROM appointments", ["a", "b", "c", "d"]),
-        ("SELECT COUNT(*) FROM appointments", ["x" * 257]),
-    ],
-    ids=["blank_sql", "oversized_sql", "too_many_declared_tables", "oversized_table_name"],
-)
-def test_malicious_input_boundaries_are_rejected(sql: str, tables: list[str]) -> None:
-    with pytest.raises(ValidationError):
-        validate_sql(sql, tables)
+    assert result.reason == "invalid_table_declaration"

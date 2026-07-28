@@ -19,6 +19,7 @@ from evals.retrieval_evaluator import (
     load_retrieval_dataset,
     ndcg_at_k,
     precision_at_k,
+    ranked_metrics,
     recall_at_k,
     reciprocal_rank,
     run_retrieval_evaluation,
@@ -175,6 +176,17 @@ def test_ranking_metrics_use_binary_recall_and_graded_ndcg() -> None:
     expected_dcg = 7 / math.log2(2) + 3 / math.log2(4)
     ideal_dcg = 7 / math.log2(2) + 3 / math.log2(3)
     assert ndcg_at_k(grades, [3, 2], 3) == pytest.approx(expected_dcg / ideal_dcg)
+
+
+def test_public_ranked_metrics_calculator() -> None:
+    metrics = ranked_metrics(["wrong", "relevant"], {"relevant": 1}, [1, 5])
+
+    assert metrics["precision@1"] == 0.0
+    assert metrics["precision@5"] == pytest.approx(0.2)
+    assert metrics["recall@1"] == 0.0
+    assert metrics["recall@5"] == 1.0
+    assert metrics["hit@5"] is True
+    assert metrics["mrr"] == 0.5
 
 
 def test_dataset_loads_long_term_schema(tmp_path: Path) -> None:

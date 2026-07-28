@@ -6,8 +6,13 @@ import json
 import os
 import time
 import uuid
+from itertools import count
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+
+from agent_host.trace_contract import TraceEventName, domain_for
 
 TraceContentMode = Literal["metadata", "debug"]
 _SENSITIVE_KEYS = frozenset(
@@ -22,6 +27,53 @@ _SENSITIVE_KEYS = frozenset(
         "content",
     }
 )
+
+
+class _TraceRecord(BaseModel):
+    """Common validated framework-neutral JSONL trace envelope."""
+
+    model_config = ConfigDict(extra="allow")
+
+    ts: float = Field(ge=0)
+    seq: int = Field(ge=0)
+    run_id: str = Field(min_length=1)
+    event: TraceEventName
+
+
+class PolicyTraceRecord(_TraceRecord):
+    domain: Literal["policy"]
+
+
+class IntentTraceRecord(_TraceRecord):
+    domain: Literal["intent"]
+
+
+class RetrievalTraceRecord(_TraceRecord):
+    domain: Literal["retrieval"]
+
+
+class SqlTraceRecord(_TraceRecord):
+    domain: Literal["sql"]
+
+
+class LifecycleTraceRecord(_TraceRecord):
+    domain: Literal["lifecycle"]
+
+
+class OperationalTraceRecord(_TraceRecord):
+    domain: Literal["operational"]
+
+
+TraceRecord = Annotated[
+    PolicyTraceRecord
+    | IntentTraceRecord
+    | RetrievalTraceRecord
+    | SqlTraceRecord
+    | LifecycleTraceRecord
+    | OperationalTraceRecord,
+    Field(discriminator="domain"),
+]
+_TRACE_ADAPTER = TypeAdapter(TraceRecord)
 
 
 def jsonable(value: Any) -> Any:
@@ -55,6 +107,13 @@ def jsonable(value: Any) -> Any:
         return str(value)
 
 
+def _existing_line_count(path: Path) -> int:
+    if not path.exists():
+        return 0
+    with path.open("r", encoding="utf-8") as file:
+        return sum(1 for line in file if line.strip())
+
+
 class TraceLogger:
     """Append privacy-aware JSON events to a run-specific trace file.
 
@@ -66,7 +125,7 @@ class TraceLogger:
 
     def __init__(
         self,
-        trace_dir: str = "logs/runs",
+        trace_dir: str = ".local/traces",
         run_id: str | None = None,
         *,
         content_mode: TraceContentMode = "metadata",
@@ -79,16 +138,30 @@ class TraceLogger:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.content_mode = content_mode
         self._hash_key = (hash_key or os.getenv("TRACE_HASH_KEY") or self.run_id).encode("utf-8")
+        # Each graph node opens its own logger against the same run file, so the
+        # counter is seeded from what is already on disk. Otherwise every node
+        # would restart at 0 and `seq` would not order the run.
+        self._seq = count(_existing_line_count(self.path))
 
-    def record(self, event: str, **fields: Any) -> None:
+    def record(self, event: TraceEventName, **fields: Any) -> None:
+        """Append one contract event.
+
+        The name is checked against the trace contract before anything is
+        written. An unknown name raises: it is always a source-level typo or a
+        new event whose spec was never registered, and writing it would produce
+        a line the viewer and graders cannot interpret.
+        """
         row = {
             "ts": time.time(),
+            "seq": next(self._seq),
             "run_id": self.run_id,
             "event": event,
+            "domain": domain_for(event),
             **fields,
         }
         if self.content_mode == "metadata":
             row = self._redact_row(row)
+        row = _TRACE_ADAPTER.validate_python(row).model_dump(mode="json", exclude_none=True)
         with self.path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(jsonable(row), ensure_ascii=True) + "\n")
 
