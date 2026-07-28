@@ -7,12 +7,25 @@ The first five stages are implemented:
 
 1. Parse Epic HTML into structured chunks.
 2. Assign leakage-safe train, validation, and test splits.
-3. Generate raw synthetic queries with the BEIR T5 query generator.
+3. Generate raw synthetic queries with either BEIR T5 or Claude Haiku.
 4. Filter raw queries and record an auditable quality decision.
 5. Build and evaluate an exact pretrained-model FAISS baseline.
 
-Generated artifacts are written below `var/genq/`. That directory is ignored by
+Generated artifacts are written below `.local/`. That directory is ignored by
 Git because its files contain information derived from proprietary Epic HTML.
+
+The artifact layout is:
+
+```text
+.local/
+├── genq/corpus/             # parsed chunks and leakage-safe splits
+├── queries/
+│   ├── t5/                  # raw T5 queries and generation reports
+│   ├── claude/              # raw Claude queries and generation reports
+│   └── reviewed/            # retained queries, review ledgers, filter reports
+├── embeddings/              # experimental FAISS indexes and evaluations
+└── rag/index.sqlite         # production SQLite retrieval index
+```
 
 Run all commands from the `agent-eval-harness-spike` project directory.
 
@@ -55,8 +68,8 @@ and enough metadata to trace it back to the original HTML.
 ### Outputs
 
 ```text
-var/genq/stage1/chunks.jsonl
-var/genq/stage1/parse_report.json
+.local/genq/corpus/chunks.jsonl
+.local/genq/corpus/parse_report.json
 ```
 
 ### Proof-of-concept command
@@ -65,8 +78,8 @@ var/genq/stage1/parse_report.json
 uv run --all-groups agent-harness-genq-parse \
   ../ClarityDictionaryHTML-full \
   --limit 100 \
-  --output var/genq/stage1/chunks.jsonl \
-  --report var/genq/stage1/parse_report.json
+  --output .local/genq/corpus/chunks.jsonl \
+  --report .local/genq/corpus/parse_report.json
 ```
 
 The current 100-file proof of concept produced 1,613 chunks with no parser
@@ -90,23 +103,23 @@ small sample.
 ### Input
 
 ```text
-var/genq/stage1/chunks.jsonl
+.local/genq/corpus/chunks.jsonl
 ```
 
 ### Outputs
 
 ```text
-var/genq/stage2/chunks_with_splits.jsonl
-var/genq/stage2/split_report.json
+.local/genq/corpus/chunks_with_splits.jsonl
+.local/genq/corpus/split_report.json
 ```
 
 ### Command
 
 ```bash
 uv run --all-groups agent-harness-genq-split \
-  var/genq/stage1/chunks.jsonl \
-  --output var/genq/stage2/chunks_with_splits.jsonl \
-  --report var/genq/stage2/split_report.json \
+  .local/genq/corpus/chunks.jsonl \
+  --output .local/genq/corpus/chunks_with_splits.jsonl \
+  --report .local/genq/corpus/split_report.json \
   --seed epic-genq-v1
 ```
 
@@ -125,8 +138,9 @@ leak across splits.
 
 ### Purpose
 
-Stage 3 uses `BeIR/query-gen-msmarco-t5-large-v1` to generate questions from
-the Stage 2 passages.
+Stage 3 can use either local `BeIR/query-gen-msmarco-t5-large-v1` or Claude
+Haiku to generate questions from the Stage 2 passages. Select the provider
+with `--provider t5|claude`; T5 remains the default.
 
 Defaults follow the SentenceTransformers GenQ example while using the modern
 tokenizer call interface:
@@ -139,41 +153,69 @@ tokenizer call interface:
 - Passages shorter than 100 characters skipped
 
 Every generated query inherits the source chunk's split and stores its known
-positive `relevant_chunk_id`.
+positive `relevant_chunk_id`. The exact generator model is recorded on every
+query and in the generation report.
 
 ### Input
 
 ```text
-var/genq/stage2/chunks_with_splits.jsonl
+.local/genq/corpus/chunks_with_splits.jsonl
 ```
 
 ### Smoke-test outputs
 
 ```text
-var/genq/stage3/generated_queries.smoke.jsonl
-var/genq/stage3/generation_report.smoke.json
+.local/queries/t5/generated_queries.smoke.jsonl
+.local/queries/t5/generation_report.smoke.json
 ```
 
-### Bounded smoke-test command
+### Bounded T5 smoke-test command
 
 ```bash
 uv run --all-groups agent-harness-genq-generate \
-  var/genq/stage2/chunks_with_splits.jsonl \
-  --output var/genq/stage3/generated_queries.smoke.jsonl \
-  --report var/genq/stage3/generation_report.smoke.json \
+  .local/genq/corpus/chunks_with_splits.jsonl \
+  --provider t5 \
+  --output .local/queries/t5/generated_queries.smoke.jsonl \
+  --report .local/queries/t5/generation_report.smoke.json \
   --limit 1 \
   --queries-per-chunk 2 \
   --batch-size 1 \
   --device cpu
 ```
 
-### Full 100-file proof-of-concept command
+### Bounded Claude Haiku smoke-test command
+
+Claude uses `ANTHROPIC_API_KEY` or `AI_HUB_API_KEY` and honors the optional
+`ANTHROPIC_BASE_URL` and `ANTHROPIC_CUSTOM_HEADERS` settings already used by
+the agent host.
 
 ```bash
 uv run --all-groups agent-harness-genq-generate \
-  var/genq/stage2/chunks_with_splits.jsonl \
-  --output var/genq/stage3/generated_queries.jsonl \
-  --report var/genq/stage3/generation_report.json \
+  .local/genq/corpus/chunks_with_splits.jsonl \
+  --provider claude \
+  --claude-model claude-haiku-4-5-20251001 \
+  --output .local/queries/claude/generated_queries.smoke.jsonl \
+  --report .local/queries/claude/generation_report.smoke.json \
+  --limit 10 \
+  --queries-per-chunk 2 \
+  --batch-size 1
+```
+
+Claude is called once per selected passage and is required to return the exact
+number of queries through a structured tool result. `--max-input-tokens`
+bounds the passage using the documented four-characters-per-token
+approximation. The API does not expose seeded sampling, so `--seed` is retained
+for dataset provenance but does not make Claude output byte-for-byte
+reproducible.
+
+### Full T5 100-file proof-of-concept command
+
+```bash
+uv run --all-groups agent-harness-genq-generate \
+  .local/genq/corpus/chunks_with_splits.jsonl \
+  --provider t5 \
+  --output .local/queries/t5/generated_queries.jsonl \
+  --report .local/queries/t5/generation_report.json \
   --queries-per-chunk 5 \
   --batch-size 8 \
   --device auto
@@ -222,27 +264,27 @@ split, or split version disagrees with Stage 2.
 ### Smoke-test inputs
 
 ```text
-var/genq/stage3/generated_queries.smoke.jsonl
-var/genq/stage2/chunks_with_splits.jsonl
+.local/queries/t5/generated_queries.smoke.jsonl
+.local/genq/corpus/chunks_with_splits.jsonl
 ```
 
 ### Smoke-test outputs
 
 ```text
-var/genq/stage4/retained_queries.smoke.jsonl
-var/genq/stage4/query_reviews.smoke.jsonl
-var/genq/stage4/filter_report.smoke.json
+.local/queries/reviewed/t5/retained_queries.smoke.jsonl
+.local/queries/reviewed/t5/query_reviews.smoke.jsonl
+.local/queries/reviewed/t5/filter_report.smoke.json
 ```
 
 ### Smoke-test command
 
 ```bash
 uv run --all-groups agent-harness-genq-filter \
-  var/genq/stage3/generated_queries.smoke.jsonl \
-  --chunks var/genq/stage2/chunks_with_splits.jsonl \
-  --retained-output var/genq/stage4/retained_queries.smoke.jsonl \
-  --review-output var/genq/stage4/query_reviews.smoke.jsonl \
-  --report var/genq/stage4/filter_report.smoke.json
+  .local/queries/t5/generated_queries.smoke.jsonl \
+  --chunks .local/genq/corpus/chunks_with_splits.jsonl \
+  --retained-output .local/queries/reviewed/t5/retained_queries.smoke.jsonl \
+  --review-output .local/queries/reviewed/t5/query_reviews.smoke.jsonl \
+  --report .local/queries/reviewed/t5/filter_report.smoke.json
 ```
 
 The real-model smoke test produced two raw queries. Stage 4 retained one and
@@ -254,12 +296,17 @@ Run this after the full Stage 3 artifact exists:
 
 ```bash
 uv run --all-groups agent-harness-genq-filter \
-  var/genq/stage3/generated_queries.jsonl \
-  --chunks var/genq/stage2/chunks_with_splits.jsonl \
-  --retained-output var/genq/stage4/retained_queries.jsonl \
-  --review-output var/genq/stage4/query_reviews.jsonl \
-  --report var/genq/stage4/filter_report.json
+  .local/queries/t5/generated_queries.jsonl \
+  --chunks .local/genq/corpus/chunks_with_splits.jsonl \
+  --retained-output .local/queries/reviewed/t5/retained_queries.jsonl \
+  --review-output .local/queries/reviewed/t5/query_reviews.jsonl \
+  --report .local/queries/reviewed/t5/filter_report.json
 ```
+
+To filter Claude output, use the same command with the raw input under
+`.local/queries/claude/` and write the three outputs under
+`.local/queries/reviewed/claude/`. Keeping reviewed artifacts separated by
+provider prevents accidental mixing during evaluation or training.
 
 Deterministic filters remove obvious defects but do not guarantee naturalness
 or factual support. Manually inspect retained and review samples from every
@@ -289,26 +336,26 @@ inside this subset.
 ### Inputs
 
 ```text
-var/genq/stage1/chunks.jsonl
-var/genq/stage4/retained_queries.smoke.jsonl
+.local/genq/corpus/chunks.jsonl
+.local/queries/reviewed/t5/retained_queries.smoke.jsonl
 ```
 
 ### Outputs
 
 ```text
-var/genq/baseline-smoke/corpus.faiss
-var/genq/baseline-smoke/chunk_mapping.jsonl
-var/genq/baseline-smoke/index_metadata.json
-var/genq/baseline-smoke/smoke_evaluation.json
+.local/embeddings/genq-baseline-smoke/corpus.faiss
+.local/embeddings/genq-baseline-smoke/chunk_mapping.jsonl
+.local/embeddings/genq-baseline-smoke/index_metadata.json
+.local/embeddings/genq-baseline-smoke/smoke_evaluation.json
 ```
 
 ### MPS smoke-test command
 
 ```bash
 uv run --all-groups agent-harness-genq-baseline \
-  var/genq/stage1/chunks.jsonl \
-  --queries var/genq/stage4/retained_queries.smoke.jsonl \
-  --output-dir var/genq/baseline-smoke \
+  .local/genq/corpus/chunks.jsonl \
+  --queries .local/queries/reviewed/t5/retained_queries.smoke.jsonl \
+  --output-dir .local/embeddings/genq-baseline-smoke \
   --model sentence-transformers/all-MiniLM-L6-v2 \
   --device mps \
   --limit 200 \

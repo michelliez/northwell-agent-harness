@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import retrieval.genq.query_generation as query_generation
 from retrieval.genq.query_generation import (
     DEFAULT_MODEL,
     GenerationConfig,
@@ -240,6 +241,45 @@ def test_generator_returning_wrong_query_count_fails_before_output(tmp_path: Pat
     assert not settings.output_path.exists()
 
 
+def test_claude_provider_selects_separate_generator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    input_path = tmp_path / "split_chunks.jsonl"
+    write_jsonl(
+        input_path,
+        [
+            split_chunk(
+                "ONE",
+                "ONE.html",
+                "test",
+                text="One eligible passage for Claude provider selection.",
+            )
+        ],
+    )
+    fake = FakeGenerator()
+    fake.model_name = "test-claude-haiku"
+    fake.device_name = "anthropic-api"
+    captured_models: list[str] = []
+
+    def make_generator(model_name: str) -> FakeGenerator:
+        captured_models.append(model_name)
+        return fake
+
+    monkeypatch.setattr(query_generation, "ClaudeHaikuQueryGenerator", make_generator)
+    settings = config(
+        tmp_path,
+        input_path,
+        provider="claude",
+        claude_model_name="test-claude-haiku",
+    )
+
+    report = generate_queries(settings)
+
+    assert captured_models == ["test-claude-haiku"]
+    assert report.generator_model == "test-claude-haiku"
+    assert report.device == "anthropic-api"
+
+
 @pytest.mark.parametrize(
     "overrides",
     [
@@ -249,6 +289,7 @@ def test_generator_returning_wrong_query_count_fails_before_output(tmp_path: Pat
         {"seed": -1},
         {"limit": 0},
         {"device": "quantum"},
+        {"provider": "unknown"},
     ],
 )
 def test_invalid_generation_configuration_is_rejected(
