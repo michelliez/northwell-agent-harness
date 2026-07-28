@@ -118,8 +118,11 @@ class HuggingFaceT5QueryGenerator:
 
     def __init__(self, model_name: str, device: str) -> None:
         try:
-            import torch
-            from transformers import AutoModelForSeq2SeqLM, T5Tokenizer
+            import torch  # pyright: ignore[reportMissingImports]
+            from transformers import (  # pyright: ignore[reportMissingImports]
+                AutoModelForSeq2SeqLM,
+                T5Tokenizer,
+            )
         except ImportError as exc:
             raise RuntimeError(
                 "GenQ dependencies are missing. Run `uv sync --group genq`."

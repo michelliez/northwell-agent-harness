@@ -32,10 +32,22 @@ If chunks exist, prioritize checking accuracy. If no chunks (general knowledge a
 Flag concerns without refusal. The host makes the final block/allow decision.
 """.strip()
 
+# What the model may propose. The tool schema is derived from this.
 SafetyAssessmentAction = Literal[
     "allow",
     "flag",
     "block",
+]
+
+# What the host may record. `unavailable` means the assessment did not happen --
+# budget declined, transport failed, or the response was unusable. It is kept
+# distinct from `allow` so a classifier that never ran is not counted as a
+# classifier that passed the answer.
+HostSafetyAction = Literal[
+    "allow",
+    "flag",
+    "block",
+    "unavailable",
 ]
 
 _SAFETY_TOOL: dict[str, Any] = {
@@ -213,7 +225,7 @@ def classify_output_safety_node(
                 "has_accuracy_concerns": False,
                 "confidence": 0.0,
                 "risk_flags": ["budget_exceeded"],
-                "recommended_action": "allow",
+                "recommended_action": "unavailable",
             }
         }
 
@@ -241,7 +253,7 @@ def classify_output_safety_node(
                 "has_accuracy_concerns": False,
                 "confidence": 0.0,
                 "risk_flags": ["assessment_error"],
-                "recommended_action": "allow",
+                "recommended_action": "unavailable",
             }
         }
 
@@ -262,7 +274,7 @@ def classify_output_safety_node(
                 "has_accuracy_concerns": False,
                 "confidence": 0.0,
                 "risk_flags": ["invalid_tool_response"],
-                "recommended_action": "allow",
+                "recommended_action": "unavailable",
             }
         }
 
@@ -277,7 +289,7 @@ def classify_output_safety_node(
                 "has_accuracy_concerns": False,
                 "confidence": 0.0,
                 "risk_flags": ["validation_error"],
-                "recommended_action": "allow",
+                "recommended_action": "unavailable",
             }
         }
 

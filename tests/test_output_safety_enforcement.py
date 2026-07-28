@@ -7,6 +7,8 @@ the probabilistic node assesses and flags, the deterministic gate decides.
 
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 
 from agent_host.nodes.policy_nodes import result_safety_node
@@ -78,3 +80,25 @@ def test_deterministic_screen_still_wins_over_a_clean_assessment(tmp_path) -> No
     result = result_safety_node(state)
     assert result["policy_blocked"] is True
     assert result["policy_reason"].startswith("final_screen:")
+
+
+def test_unavailable_is_distinct_from_allow(tmp_path) -> None:
+    """A classifier that never ran must not be recorded as one that passed."""
+    result = result_safety_node(
+        _state(tmp_path, _assessment("unavailable", risk_flags=["assessment_error"]))
+    )
+    assert not result.get("policy_blocked")
+
+
+@pytest.mark.parametrize(
+    "flag",
+    ["budget_exceeded", "assessment_error", "invalid_tool_response", "validation_error"],
+)
+def test_every_failure_path_reports_unavailable(flag: str) -> None:
+    """The four failure paths must not claim the answer was assessed and clean."""
+    source = (
+        pathlib.Path(__file__).resolve().parents[1] / "src/agent_host/nodes/output_safety_nodes.py"
+    ).read_text(encoding="utf-8")
+    block = source[source.index(f'"{flag}"') :]
+    action = block[: block.index("}")]
+    assert '"recommended_action": "unavailable"' in action, f"{flag} still reports allow"

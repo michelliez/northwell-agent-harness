@@ -108,6 +108,11 @@ def result_safety_node(state: AgentState) -> dict:
     # The output safety classifier is probabilistic: it assesses and flags, but
     # this deterministic gate decides. Only an explicit `block` stops the answer;
     # `flag` is recorded for review and released.
+    #
+    # `unavailable` means the assessment never happened. It currently passes
+    # through, exactly as before this state existed, but is recorded separately
+    # so the failure rate is measurable. Whether an unassessed answer should be
+    # released at all is a policy decision that needs that rate first.
     assessment = state.get("output_safety_assessment") or {}
     if assessment.get("recommended_action") == "block":
         risk_flags = sorted(str(flag) for flag in assessment.get("risk_flags") or [])
@@ -127,9 +132,11 @@ def result_safety_node(state: AgentState) -> dict:
             "policy_reason": "output_safety_block",
         }
 
+    action = assessment.get("recommended_action")
     trace.record(
         "result_safety.passed",
-        output_safety_action=assessment.get("recommended_action"),
+        output_safety_action=action,
+        output_safety_assessed=action not in {None, "unavailable"},
         output_safety_flags=sorted(str(flag) for flag in assessment.get("risk_flags") or []),
     )
     return {}

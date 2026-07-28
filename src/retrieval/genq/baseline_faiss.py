@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-import numpy as np
+import numpy as np  # pyright: ignore[reportMissingImports]
 from pydantic import BaseModel, ValidationError
 
 from evals.retrieval_evaluator import ranked_metrics
@@ -88,8 +88,11 @@ class SentenceTransformerEncoder:
 
     def __init__(self, model_name: str, device: str) -> None:
         try:
-            import torch
-            from transformers import AutoModel, AutoTokenizer
+            import torch  # pyright: ignore[reportMissingImports]
+            from transformers import (  # pyright: ignore[reportMissingImports]
+                AutoModel,
+                AutoTokenizer,
+            )
         except ImportError as exc:
             raise RuntimeError(
                 "Baseline dependencies are missing. Run `uv sync --all-groups`."
@@ -203,7 +206,7 @@ def _write_atomic(path: Path, lines: Iterable[str]) -> None:
 
 
 def _write_faiss_atomic(path: Path, index: Any) -> None:
-    import faiss
+    import faiss  # pyright: ignore[reportMissingImports]
 
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
@@ -284,7 +287,7 @@ def run_baseline(
         expected_rows=len(queries),
     )
 
-    import faiss
+    import faiss  # pyright: ignore[reportMissingImports]
 
     dimension = int(chunk_vectors.shape[1])
     if query_vectors.shape[1] != dimension:
