@@ -25,19 +25,6 @@ var/
 evals/results/
 pytest-cache-files-*
 pytest-cache-files-*/
-<<<<<<< HEAD
-# Proprietary Clarity source data — never commit
-ClarityDictionaryHTML-full*
-data/ClarityDictionaryHTML-full*
-
-# Generated retrieval indexes and HTML-derived ML artifacts — never commit
-var/rag/*.sqlite
-rag/*.sqlite
-*.sqlite
-/var/genq/
-/data/genq/
-/artifacts/genq/
-=======
 
 # Git worktrees kept inside the repository
 .worktrees/
@@ -50,5 +37,10 @@ data/ClarityDictionaryHTML-full*
 # Only evals/retrieval/benchmark/ is tracked.
 evals/retrieval/generated/
 
+# Generated retrieval indexes and HTML-derived ML artifacts — never commit
+var/rag/*.sqlite
+rag/*.sqlite
+/var/genq/
+/data/genq/
+/artifacts/genq/
 *.sqlite
->>>>>>> ee9e21b5a9625d3264ff926382f6209fbc863097

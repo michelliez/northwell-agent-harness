@@ -22,10 +22,15 @@ from retrieval.genq.chunk_models import (
     GenerationReport,
     SplitChunkRecord,
 )
+from retrieval.genq.claude_query_generator import (
+    DEFAULT_CLAUDE_MODEL,
+    ClaudeHaikuQueryGenerator,
+)
 
 LOGGER = logging.getLogger(__name__)
-GENERATION_VERSION = "beir-t5-query-generation-v1"
+GENERATION_VERSION = "synthetic-query-generation-v2"
 DEFAULT_MODEL = "BeIR/query-gen-msmarco-t5-large-v1"
+PROVIDER_CHOICES = ("t5", "claude")
 DEFAULT_SEED = 42
 DEFAULT_BATCH_SIZE = 8
 DEFAULT_QUERIES_PER_CHUNK = 5
@@ -63,7 +68,9 @@ class GenerationConfig:
     input_path: Path
     output_path: Path
     report_path: Path
+    provider: str = "t5"
     model_name: str = DEFAULT_MODEL
+    claude_model_name: str = DEFAULT_CLAUDE_MODEL
     device: str = "auto"
     seed: int = DEFAULT_SEED
     batch_size: int = DEFAULT_BATCH_SIZE
@@ -82,6 +89,10 @@ class GenerationConfig:
             raise ValueError("output_path and report_path must be different")
         if not self.model_name.strip():
             raise ValueError("model_name must not be blank")
+        if not self.claude_model_name.strip():
+            raise ValueError("claude_model_name must not be blank")
+        if self.provider not in PROVIDER_CHOICES:
+            raise ValueError(f"provider must be one of {PROVIDER_CHOICES}")
         if self.device not in DEVICE_CHOICES:
             raise ValueError(f"device must be one of {DEVICE_CHOICES}")
         for name, value in (
@@ -245,7 +256,12 @@ def generate_queries(
     if not selected:
         raise ValueError("No chunks satisfy the configured passage length and limit")
 
-    active_generator = generator or HuggingFaceT5QueryGenerator(config.model_name, config.device)
+    if generator is not None:
+        active_generator = generator
+    elif config.provider == "claude":
+        active_generator = ClaudeHaikuQueryGenerator(config.claude_model_name)
+    else:
+        active_generator = HuggingFaceT5QueryGenerator(config.model_name, config.device)
     records: list[GeneratedQueryRecord] = []
     for batch_number, start in enumerate(range(0, len(selected), config.batch_size)):
         batch = selected[start : start + config.batch_size]
@@ -341,14 +357,16 @@ def generate_queries(
 
 
 def main() -> None:
-    """Run raw BEIR T5 query generation from the command line."""
+    """Run raw T5 or Claude query generation from the command line."""
     parser = argparse.ArgumentParser(
         description="Generate raw synthetic queries from Stage 2 Epic chunks."
     )
     parser.add_argument("input_path", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
-    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--provider", choices=PROVIDER_CHOICES, default="t5")
+    parser.add_argument("--model", default=DEFAULT_MODEL, help="T5 model ID")
+    parser.add_argument("--claude-model", default=DEFAULT_CLAUDE_MODEL)
     parser.add_argument("--device", choices=DEVICE_CHOICES, default="auto")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
@@ -374,7 +392,9 @@ def main() -> None:
                 input_path=args.input_path,
                 output_path=args.output,
                 report_path=args.report,
+                provider=args.provider,
                 model_name=args.model,
+                claude_model_name=args.claude_model,
                 device=args.device,
                 seed=args.seed,
                 batch_size=args.batch_size,
