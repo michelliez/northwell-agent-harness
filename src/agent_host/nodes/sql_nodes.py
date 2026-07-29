@@ -20,8 +20,9 @@ from sql.validation import validate_sql
 def query_plan_node(state: AgentState) -> dict:
     """Build a minimal QueryPlan from the schema snapshot in state.
 
-    If schema snapshot has unknown-safety columns, the plan will flag this
-    so plan_safety_node can request clarification.
+    Unknown-safety columns are recorded for generation guidance. They do not
+    block the table-level plan because the deterministic SQL validator checks
+    only columns actually referenced by the generated statement.
     """
     cfg = get_config()
     trace = _open_trace(state, cfg)
@@ -57,10 +58,12 @@ def query_plan_node(state: AgentState) -> dict:
 
 
 def plan_safety_node(state: AgentState) -> dict:
-    """Check that the query plan is safe to proceed to SQL generation.
+    """Check that an evidence-backed query plan exists before SQL generation.
 
-    Stub for future real authorization checks. Currently blocks plans with
-    unknown-safety columns and allows everything else.
+    Column-level safety cannot be decided at this stage because no SQL exists
+    yet. In particular, a safe ``COUNT(*)`` references no columns. The
+    deterministic validator applies unknown, sensitive, and identifier rules
+    to the columns the generated SQL actually uses.
     """
     cfg = get_config()
     trace = _open_trace(state, cfg)
@@ -71,18 +74,17 @@ def plan_safety_node(state: AgentState) -> dict:
         return {"answer": "I stopped because no query plan was available."}
 
     plan = QueryPlan.model_validate(raw_plan)
-    snapshot = plan.schema_snapshot
-
-    if snapshot.has_unknown_safety():
-        trace.record("plan_safety.unknown_safety_columns")
-        return {
-            "answer": (
-                "I couldn't determine the safety classification for some columns in the schema. "
-                "Please refine your question to reference specific documented columns."
-            )
-        }
-
-    trace.record("plan_safety.approved", tables=plan.tables)
+    unknown_column_count = sum(
+        column.safety == "unknown"
+        for table in plan.schema_snapshot.tables
+        for column in table.columns
+    )
+    trace.record(
+        "plan_safety.approved",
+        tables=plan.tables,
+        unknown_column_count=unknown_column_count,
+        column_checks_deferred=True,
+    )
     return {}
 
 
@@ -183,11 +185,12 @@ def validate_sql_node(
         }
 
     # Invalid SQL
-    if result.is_repairable and repair_count < budget.max_sql_repairs:
-        trace.record("validate_sql.routing_to_repair", repair_count=repair_count + 1)
+    next_repair_count = repair_count + 1
+    if result.is_repairable and next_repair_count < budget.max_sql_repairs:
+        trace.record("validate_sql.routing_to_repair", repair_count=next_repair_count)
         return {
             "validation_result": validation_dict,
-            "repair_count": repair_count + 1,
+            "repair_count": next_repair_count,
             "repair_hint": result.repair_hint,
         }
 

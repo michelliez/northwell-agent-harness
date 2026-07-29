@@ -149,6 +149,37 @@ def test_context_gate_sql_intent_routes_to_query_plan() -> None:
     assert _route_from_context_gate(state) == "query_plan"
 
 
+def test_context_gate_builds_sql_schema_from_retrieved_chunk_model_dump(
+    tmp_path, monkeypatch
+) -> None:
+    """RetrievedChunk uses document_id; the graph adapter must preserve that contract."""
+    from agent_host.nodes import retrieval_nodes
+    from retrieval.client import RetrievedChunk
+
+    monkeypatch.setattr(retrieval_nodes, "get_config", lambda: _FakeCfg(tmp_path))
+    retrieved_chunk = RetrievedChunk(
+        chunk_id="chunk-status",
+        document_id="doc-acc-config-blk",
+        source_path="ACC_CONFIG_BLK.html",
+        heading_path="ACC_CONFIG_BLK > CONFIG_STATUS",
+        category="column_info",
+        text="CONFIG_STATUS stores the configuration status.",
+        rank=1,
+        score=1.0,
+    )
+    state = _state(
+        intent="safe_sql_generation",
+        question="Count ACC_CONFIG_BLK records by CONFIG_STATUS",
+        retrieved_chunks=[retrieved_chunk.model_dump()],
+    )
+
+    result = retrieval_nodes.context_gate_node(state)
+
+    assert result["schema_snapshot"] is not None
+    assert result["schema_snapshot"]["tables"][0]["name"] == "ACC_CONFIG_BLK"
+    assert result["schema_snapshot"]["tables"][0]["columns"][0]["name"] == "CONFIG_STATUS"
+
+
 def test_context_gate_exploration_intents_route_to_documentation_answer() -> None:
     for intent in ["table_discovery", "schema_lookup", "aggregate_definition"]:
         state = _state(

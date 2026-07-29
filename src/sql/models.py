@@ -14,7 +14,7 @@ class SchemaColumn(BaseModel):
     # identifier: may appear only in COUNT/COUNT DISTINCT or identifier-to-identifier JOIN
     # sensitive: forbidden in output projections
     # safe_aggregate: no restrictions in aggregate queries
-    # unknown: unresolved; causes clarification before SQL generation
+    # unknown: unresolved; may not be referenced by generated SQL
     safety: Literal["identifier", "sensitive", "safe_aggregate", "unknown"] = "unknown"
     source_evidence: str | None = None  # chunk_id where this column info came from
 

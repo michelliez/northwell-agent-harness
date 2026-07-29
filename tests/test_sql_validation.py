@@ -1,6 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
+from sql.models import SchemaColumn, SchemaSnapshot, SchemaTable
 from sql.validation import validate_sql
 
 
@@ -148,6 +149,44 @@ def test_identifier_count_is_allowed_but_alias_filter_is_not(standard_snapshot) 
 
     assert allowed.allowed is True
     assert blocked.reason == "identifier_column_disallowed_context"
+
+
+def test_count_star_ignores_unreferenced_unknown_safety_column() -> None:
+    snapshot = SchemaSnapshot(
+        tables=[
+            SchemaTable(
+                name="a0h_map",
+                columns=[
+                    SchemaColumn(name="LINE", data_type="INTEGER", safety="unknown"),
+                ],
+                source_chunk_ids=["a0h-map-line"],
+            )
+        ],
+        derived_from_chunks=["a0h-map-line"],
+    )
+
+    allowed = validate_sql("SELECT COUNT(*) FROM A0H_MAP", ["a0h_map"], snapshot)
+    blocked = validate_sql(
+        "SELECT LINE, COUNT(*) FROM A0H_MAP GROUP BY LINE",
+        ["a0h_map"],
+        snapshot,
+    )
+
+    assert allowed.allowed is True
+    assert blocked.allowed is False
+    assert blocked.reason == "unknown_safety_column"
+
+
+def test_declared_table_comparison_is_case_insensitive(standard_snapshot) -> None:
+    result = validate_sql(
+        "SELECT COUNT(*) FROM APPOINTMENTS",
+        ["APPOINTMENTS"],
+        standard_snapshot,
+    )
+
+    assert result.allowed is True
+    assert result.declared_tables == ["appointments"]
+    assert result.referenced_tables == ["appointments"]
 
 
 def test_string_literals_and_comments_do_not_trigger_lexical_false_positives(

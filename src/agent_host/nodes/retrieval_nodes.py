@@ -114,7 +114,7 @@ def context_gate_node(state: AgentState) -> dict:
                 typed_chunks.append(
                     RetrievedChunk(
                         chunk_id=c["chunk_id"],
-                        document_id=c["doc_id"],
+                        document_id=c["document_id"],
                         source_path=c["source_path"],
                         heading_path=c.get("heading_path"),
                         category=c.get("category"),

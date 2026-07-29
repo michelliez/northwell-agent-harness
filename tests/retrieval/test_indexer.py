@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from bs4 import BeautifulSoup
+from bs4.element import Tag
 
 from retrieval import indexer as indexer_module
 from retrieval import search as search_module
@@ -43,6 +44,60 @@ def test_build_and_search_rag_index(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     chunk = context["chunks"][0]
     assert chunk["source_path"] == "appointments.html"
     assert "Scheduled or completed" in chunk["text"]
+
+
+def test_sqlite_column_chunks_use_canonical_genq_records(tmp_path: Path) -> None:
+    """Production indexing must store GenQ column IDs, headings, and passage text."""
+    from retrieval.genq.corpus_parser import parse_epic_html
+
+    html_path = tmp_path / "ACC_CONFIG_BLK.html"
+    html_path.write_text(
+        """
+        <html><head><title>ACC_CONFIG_BLK</title></head><body>
+        <div class="header">ACC_CONFIG_BLK</div>
+        <div id="oContent">
+          <table class="SubHeader3"><tr>
+            <td id="____Column-Information____">Column Information</td>
+          </tr></table>
+          <table class="SubList List"><tbody>
+            <tr><th></th><th>Name</th><th>INI</th><th>Item</th><th>Type</th></tr>
+            <tr><td class="T1Head">1</td><td class="T1Head">CONFIG_ID</td>
+              <td>SNR</td><td>.1</td><td>NUMERIC (18,0)</td></tr>
+            <tr><td></td><td colspan="4">The accessibility configuration identifier.</td></tr>
+            <tr><td class="T1Head">2</td><td class="T1Head">LINE</td>
+              <td></td><td></td><td>INTEGER</td></tr>
+            <tr><td></td><td colspan="4">The block restriction line number.</td></tr>
+          </tbody></table>
+        </div></body></html>
+        """,
+        encoding="utf-8",
+    )
+    expected = [
+        record
+        for record in parse_epic_html(html_path, corpus_root=tmp_path).records
+        if record.chunk_type == "column_definition"
+    ]
+    db_path = tmp_path / "rag.sqlite"
+
+    build_index(html_path, db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        stored = conn.execute(
+            """
+            SELECT chunk_id, heading_path, text
+            FROM chunks
+            WHERE category = 'column_info'
+            ORDER BY chunk_index
+            """
+        ).fetchall()
+    assert stored == [
+        (
+            record.chunk_id,
+            f"{record.table_name} > Column-Information > {record.column_name}",
+            record.text,
+        )
+        for record in expected
+    ]
 
 
 def test_search_with_no_fts_tokens_returns_no_results(
@@ -403,6 +458,32 @@ def test_every_content_row_covered_after_split() -> None:
         marker: all_text.count(marker) for marker in markers if all_text.count(marker) != 1
     }
     assert not wrong_counts, f"cells with incorrect split coverage: {wrong_counts}"
+
+
+def test_malformed_unclosed_table_rows_do_not_expand_cumulatively() -> None:
+    """Legacy unclosed cells must not repeatedly absorb all subsequent rows."""
+    count = 80
+    markers = [
+        marker
+        for i in range(count)
+        for marker in (f"MALFORMED_FIELD_{i:04d}", f"MALFORMED_VALUE_{i:04d}")
+    ]
+    rows_html = "".join(
+        f"<tr><td>MALFORMED_FIELD_{i:04d}<td>MALFORMED_VALUE_{i:04d}"
+        for i in range(count)
+    )
+    soup = BeautifulSoup(f"<table class='List'>{rows_html}</table>", "html.parser")
+    table = soup.find("table")
+    assert isinstance(table, Tag)
+
+    chunks = table_to_chunks("table_data", "Example > Foreign-Key-Information", table)
+    all_text = " ".join(chunk.text for chunk in chunks)
+    wrong_counts = {
+        marker: all_text.count(marker) for marker in markers if all_text.count(marker) != 1
+    }
+
+    assert not wrong_counts, f"malformed cells with incorrect coverage: {wrong_counts}"
+    assert len(chunks) <= 3
 
 
 # ---------------------------------------------------------------------------

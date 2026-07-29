@@ -106,6 +106,39 @@ def test_metadata_handles_epic_unclosed_table_cells(tmp_path: Path) -> None:
     )
 
 
+def test_columns_handle_epic_unclosed_rows_without_absorbing_later_columns(
+    tmp_path: Path,
+) -> None:
+    html_path = tmp_path / "MALFORMED_COLUMNS.html"
+    html_path.write_text(
+        """<html><body><div class="header">MALFORMED_COLUMNS</div><div id="oContent">
+        <table class="SubHeader3"><tr>
+        <td id="____Column-Information____">Column Information
+        </table>
+        <table class="SubList List"><tbody>
+        <tr><th><th>Name<th>INI<th>Item<th>Type
+        <tr><td class="T1Head">1<td class="T1Head">FIRST_ID
+        <td><table class="SubList"><tr><td>INI</table>
+        <td><table class="SubList"><tr><td>.1</table><td>NUMERIC (18,0)
+        <tr><td><td colspan="4"><table class="SubList List">
+        <tr><td><tr><td>The first identifier.</table>
+        <tr><td class="T1Head">2<td class="T1Head">SECOND_DATE
+        <td><table class="SubList"><tr><td>INI</table>
+        <td><table class="SubList"><tr><td>2</table><td>DATETIME
+        <tr><td><td colspan="4"><table class="SubList List">
+        <tr><td><tr><td>The second date.</table>
+        </tbody></table></div></body></html>""",
+        encoding="utf-8",
+    )
+
+    parsed = parse_epic_html(html_path, corpus_root=tmp_path)
+    columns = [record for record in parsed.records if record.chunk_type == "column_definition"]
+
+    assert [record.column_name for record in columns] == ["FIRST_ID", "SECOND_DATE"]
+    assert columns[0].chunk_id == "MALFORMED_COLUMNS__COLUMN_DEFINITION__FIRST_ID"
+    assert "SECOND_DATE" not in columns[0].text
+
+
 def test_logical_id_stays_stable_while_text_hash_detects_change(tmp_path: Path) -> None:
     html_path = tmp_path / "CLARITY_ADT.html"
     write_fixture(html_path, description="First description.")

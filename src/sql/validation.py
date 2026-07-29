@@ -101,7 +101,9 @@ def validate_sql(
     if snapshot is None:
         snapshot = SchemaSnapshot()
 
-    declared_tables = sorted(set(tables))
+    # BigQuery identifiers are case-insensitive. Normalize model-declared table
+    # names before comparing them with SQLGlot's normalized AST table names.
+    declared_tables = sorted({table.casefold() for table in tables})
 
     if len(declared_tables) != len(tables):
         return _blocked(
@@ -429,7 +431,7 @@ def _column_safety_label(
     if table is None:
         return None
     for col in table.columns:
-        if col.name == column.name:
+        if col.name.casefold() == column.name.casefold():
             return col.safety
     return None
 

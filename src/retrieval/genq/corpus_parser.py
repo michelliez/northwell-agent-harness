@@ -18,10 +18,15 @@ from bs4 import BeautifulSoup
 from bs4.element import Tag
 
 from retrieval.genq.chunk_models import ChunkRecord, ChunkType, ParseReport
-from retrieval.indexer import css_classes, discover_html_files, normalized_source_path
+from retrieval.indexer import (
+    css_classes,
+    discover_html_files,
+    normalized_source_path,
+    owned_cell_text,
+)
 
 LOGGER = logging.getLogger(__name__)
-PARSER_VERSION = "epic-genq-html-v1"
+PARSER_VERSION = "epic-genq-html-v3"
 DEFAULT_LIMIT = 100
 
 
@@ -79,21 +84,12 @@ def _owned_cells(row: Tag) -> list[Tag]:
 
 def _direct_cell_text(cell: Tag) -> str:
     """Read a cell once while still including values held in a nested one-cell table."""
-    return _clean_text(cell.get_text(" ", strip=True))
+    return owned_cell_text(cell)
 
 
 def _metadata_cell_text(cell: Tag) -> str:
     """Read only text owned by a metadata cell despite Epic's unclosed td tags."""
-    owned_strings = [
-        str(value)
-        for value in cell.find_all(string=True)
-        if value.find_parent(["td", "th"]) is cell
-    ]
-    direct_text = _clean_text(" ".join(owned_strings))
-    if direct_text:
-        return direct_text
-    nested_table = cell.find("table")
-    return _clean_text(nested_table.get_text(" ", strip=True)) if nested_table else ""
+    return owned_cell_text(cell)
 
 
 def _table_name(soup: BeautifulSoup, fallback: str) -> str:
@@ -154,7 +150,7 @@ def _make_record(
     )
 
 
-def _column_records(
+def parse_column_records(
     table: Tag,
     *,
     source_file: str,
@@ -309,7 +305,7 @@ def parse_epic_html(html_path: Path, *, corpus_root: Path) -> ParsedSource:
             continue
 
         if section_name.casefold() == "column information":
-            column_records, column_warnings = _column_records(
+            column_records, column_warnings = parse_column_records(
                 value,
                 source_file=source_file,
                 source_hash=source_hash,

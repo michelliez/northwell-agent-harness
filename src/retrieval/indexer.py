@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import sqlite3
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,8 +20,8 @@ CHUNK_TARGET_CHARS = 3200
 # ~1200 tokens; no indexed chunk may exceed this value
 CHUNK_HARD_MAX_CHARS = 4800
 
-PARSER_VERSION = "clarity-html-v2"
-CHUNKER_VERSION = "section-table-v3"
+PARSER_VERSION = "clarity-html-v5"
+CHUNKER_VERSION = "section-table-genq-columns-v5"
 PROGRESS_INTERVAL = 400
 
 
@@ -29,6 +30,7 @@ class IndexedChunk:
     category: str
     heading_path: str
     text: str
+    logical_chunk_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -94,21 +96,32 @@ def bound_chunks(chunks: list[IndexedChunk]) -> list[IndexedChunk]:
     """Enforce the configured target and hard maximum on every indexed chunk."""
     bounded: list[IndexedChunk] = []
     for chunk in chunks:
-        for text in split_text_to_limit(chunk.text):
+        pieces = split_text_to_limit(chunk.text)
+        for part_index, text in enumerate(pieces, start=1):
             if len(text) > CHUNK_HARD_MAX_CHARS:
                 raise ValueError("chunk splitting produced text above CHUNK_HARD_MAX_CHARS")
+            logical_chunk_id = chunk.logical_chunk_id
+            if logical_chunk_id is not None and len(pieces) > 1:
+                logical_chunk_id = f"{logical_chunk_id}__PART_{part_index}"
             bounded.append(
                 IndexedChunk(
                     category=chunk.category,
                     heading_path=chunk.heading_path,
                     text=text,
+                    logical_chunk_id=logical_chunk_id,
                 )
             )
     return bounded
 
 
+ColumnChunkFactory = Callable[[Tag, str, str], list[IndexedChunk]]
+
+
 def extract_chunks(
-    html: str, *, fallback_title: str
+    html: str,
+    *,
+    fallback_title: str,
+    column_chunk_factory: ColumnChunkFactory | None = None,
 ) -> tuple[str, list[IndexedChunk], list[SectionFact]]:
     """Extract Clarity-style documentation sections from one HTML file.
 
@@ -156,7 +169,18 @@ def extract_chunks(
             if isinstance(value, Tag) and value.name == "span" and "NA" in css_classes(value):
                 facts.append(SectionFact(heading_path=heading, fact="present_but_unavailable"))
             elif isinstance(value, Tag) and value.name == "table":
-                chunks.extend(table_to_chunks(classify_table(value), heading, value))
+                category = classify_table(value)
+                is_column_information = (
+                    section.replace("-", " ").casefold() == "column information"
+                )
+                if (
+                    category == "column_info"
+                    and is_column_information
+                    and column_chunk_factory is not None
+                ):
+                    chunks.extend(column_chunk_factory(value, document_title, section))
+                else:
+                    chunks.extend(table_to_chunks(category, heading, value))
             elif str(value).strip() == "None":
                 facts.append(SectionFact(heading_path=heading, fact="present_but_unavailable"))
 
@@ -197,13 +221,38 @@ def owned_cells(row: Tag) -> list[Tag]:
     return [cell for cell in row.find_all(["th", "td"]) if cell.find_parent("tr") is row]
 
 
+def owned_cell_text(cell: Tag) -> str:
+    """Read a cell without absorbing text from malformed descendant cells.
+
+    Some legacy Epic pages omit closing ``td`` and ``tr`` tags. BeautifulSoup
+    consequently nests every later row inside an earlier cell. Restricting
+    strings to those whose nearest cell is this cell prevents cumulative,
+    quadratic text expansion. The nested-table fallback preserves legitimate
+    KeyValue cells whose value is represented by a one-cell child table.
+    """
+    owned_strings = [
+        str(value)
+        for value in cell.find_all(string=True)
+        if value.find_parent(["td", "th"]) is cell
+    ]
+    direct_text = " ".join(" ".join(owned_strings).split()).strip()
+    if direct_text:
+        return direct_text
+    nested_table = cell.find("table")
+    return (
+        " ".join(nested_table.get_text(" ", strip=True).split()).strip()
+        if nested_table is not None
+        else ""
+    )
+
+
 def extract_table_content(table: Tag) -> str:
     """Render a small table (e.g. KeyValue) as a single pipe-delimited string."""
     parts: list[str] = []
     for row in owned_rows(table):
         row_text: list[str] = []
         for cell in owned_cells(row):
-            text = cell.get_text(" ", strip=True)
+            text = owned_cell_text(cell)
             if not text:
                 continue
             row_text.append(f"{text}:" if "T1Head" in css_classes(cell) else text)
@@ -226,7 +275,7 @@ def table_to_chunks(category: str, heading: str, table: Tag) -> list[IndexedChun
         row_text: list[str] = []
         is_header = False
         for cell in owned_cells(row):
-            text = cell.get_text(" ", strip=True)
+            text = owned_cell_text(cell)
             if not text:
                 continue
             if cell.name == "th":
@@ -343,8 +392,39 @@ def parse_one_document(
     html_bytes = html_path.read_bytes()
     html = html_bytes.decode("utf-8", errors="replace")
     source_hash = hashlib.sha256(html_bytes).hexdigest()
-    title, chunks, facts = extract_chunks(html, fallback_title=html_path.stem)
     source_path = normalized_source_path(html_path, corpus_root)
+
+    def genq_column_chunks(
+        table: Tag,
+        table_name: str,
+        section_name: str,
+    ) -> list[IndexedChunk]:
+        # Lazy import avoids a module cycle: the GenQ parser reuses generic
+        # path and CSS helpers from this module.
+        from retrieval.genq.corpus_parser import parse_column_records
+
+        records, _warnings = parse_column_records(
+            table,
+            source_file=source_path,
+            source_hash=source_hash,
+            table_name=table_name,
+            section_name=section_name.replace("-", " "),
+        )
+        return [
+            IndexedChunk(
+                category="column_info",
+                heading_path=f"{record.table_name} > Column-Information > {record.column_name}",
+                text=record.text,
+                logical_chunk_id=record.chunk_id,
+            )
+            for record in records
+        ]
+
+    title, chunks, facts = extract_chunks(
+        html,
+        fallback_title=html_path.stem,
+        column_chunk_factory=genq_column_chunks,
+    )
 
     return ParsedDocument(
         source_path=source_path,
@@ -379,7 +459,7 @@ def insert_parsed_document(
         occ_key = (chunk.heading_path, chunk.category)
         occurrence = occurrence_counter.get(occ_key, 0)
         occurrence_counter[occ_key] = occurrence + 1
-        chunk_id = sha256_text(
+        chunk_id = chunk.logical_chunk_id or sha256_text(
             f"{document_id}:{chunk.heading_path}:{chunk.category}:{occurrence}:{text_hash}"
         )
 

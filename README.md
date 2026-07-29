@@ -71,6 +71,19 @@ uv run agent-harness-rag-audit
 The index defaults to `.local/rag/index.sqlite`. Override it with `RAG_DB_PATH`.
 Approved proprietary HTML and generated SQLite files must remain uncommitted.
 
+Production column chunks use the canonical GenQ parser: each documented column
+is stored as its own SQLite/FTS chunk with the same logical chunk ID and passage
+text used for query generation and semantic-retrieval evaluation. After a
+parser or chunker version change, build a new database rather than modifying a
+working index in place:
+
+```powershell
+uv run agent-harness-rag-index <HTML_PATH> --workers 4 --bs 500 `
+  --db .local/rag/index-genq-columns.sqlite
+$env:RAG_DB_PATH=".local/rag/index-genq-columns.sqlite"
+uv run agent-harness-rag-audit
+```
+
 ## Ask the Agent
 
 ```powershell

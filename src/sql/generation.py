@@ -33,6 +33,8 @@ Rules:
   appointment_id. They may appear only inside COUNT or COUNT DISTINCT, or in
   identifier-to-identifier join equality.
 - Do not use columns labelled sensitive.
+- Do not reference columns labelled unknown. A table-level COUNT(*) is allowed
+  because it does not reference any column.
 - Do not generate multi-statement scripts, semicolon-separated SQL, remote
   functions, external connections, temporary function creation, unapproved
   wildcard table scans, or SELECT *.
