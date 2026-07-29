@@ -29,11 +29,23 @@ class JudgmentScope(StrEnum):
     corpus_complete = "corpus_complete"
 
 
+FAILURE_BUCKETS = frozenset(
+    {
+        "named_table_lookup",
+        "named_column_schema",
+        "business_concept_discovery",
+        "cross_table_synthesis",
+        "negative_unsupported",
+    }
+)
+
+
 @dataclass(frozen=True)
 class RetrievalQuery:
     query_id: str
     query: str
     intent: str
+    failure_bucket: str
     answerable: bool
     expected_answer: Mapping[str, Any]
     answerability_rationale: str
@@ -50,10 +62,14 @@ class RetrievalQuery:
         tags = data.get("tags", [])
         if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
             raise TypeError("tags must be a list of strings")
+        failure_bucket = str(data["failure_bucket"])
+        if failure_bucket not in FAILURE_BUCKETS:
+            raise ValueError(f"failure_bucket must be one of {', '.join(sorted(FAILURE_BUCKETS))}")
         return cls(
             query_id=str(data["query_id"]),
             query=str(data["query"]),
             intent=str(data["intent"]),
+            failure_bucket=failure_bucket,
             answerable=bool(data["answerable"]),
             expected_answer=dict(expected_answer),
             answerability_rationale=str(data["answerability_rationale"]),
@@ -654,6 +670,7 @@ def _query_metadata(query: RetrievalQuery) -> dict[str, Any]:
         "query": query.query,
         "intent": query.intent,
         "category": query.intent,
+        "failure_bucket": query.failure_bucket,
         "answerable": query.answerable,
         "expected_answer": query.expected_answer,
         "answerability_rationale": query.answerability_rationale,
@@ -880,6 +897,7 @@ def run_retrieval_evaluation(
     unjudged_document_total = sum(len(result["unjudged_doc_ids"]) for result in resolved_results)
     unjudged_chunk_total = sum(len(result["unjudged_chunk_ids"]) for result in resolved_results)
     intents = sorted({str(result["intent"]) for result in results})
+    failure_buckets = sorted({str(result["failure_bucket"]) for result in results})
 
     return {
         "suite": "retrieval",
@@ -926,6 +944,22 @@ def run_retrieval_evaluation(
                     ),
                 }
                 for intent in intents
+            },
+            "by_failure_bucket": {
+                bucket: {
+                    "query_count": sum(r["failure_bucket"] == bucket for r in resolved_results),
+                    "chunk": _macro_average(
+                        [r for r in resolved_results if r["failure_bucket"] == bucket],
+                        "chunk",
+                        normalized_k,
+                    ),
+                    "document": _macro_average(
+                        [r for r in resolved_results if r["failure_bucket"] == bucket],
+                        "document",
+                        normalized_k,
+                    ),
+                }
+                for bucket in failure_buckets
             },
         },
         "results": results,

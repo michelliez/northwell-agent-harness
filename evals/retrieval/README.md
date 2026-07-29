@@ -28,6 +28,22 @@ uv run python -m evals.retrieval_gold
 
 Reports are written to `.local/evals/retrieval-evaluation-<timestamp>.json`.
 
+## Reviewed failure buckets
+
+The tracked benchmark uses analyst-written questions rather than phrases copied
+from HTML descriptions. Its 24 queries cover five retrieval failure buckets:
+
+- `named_table_lookup`: a known table must yield its purpose or grain;
+- `named_column_schema`: known fields must yield types, meanings, or key roles;
+- `business_concept_discovery`: business language must find the right tables;
+- `cross_table_synthesis`: evidence must be compared across documents;
+- `negative_unsupported`: the corpus does not support the requested answer.
+
+The query file records `failure_bucket`, and reports include document- and
+chunk-level metrics for each bucket. The 70 chunk qrels are manually reviewed
+against the column-level v5 index; do not regenerate them from source
+descriptions or mechanically patch old heading paths.
+
 ## Comparability
 
 The qrels are **portable**: they name documents semantically
@@ -39,8 +55,8 @@ Every report records `index_version` and `chunker_version`, read from the index
 being evaluated rather than from the current source. **Numbers are only
 comparable within one `chunker_version`** — changing chunk boundaries changes
 what counts as a relevant chunk. `CHUNKER_VERSION` is currently
-`section-table-v3` (`src/retrieval/indexer.py`) and must be incremented whenever
-chunk boundaries change.
+`section-table-genq-columns-v5` (`src/retrieval/index_contract.py`) and must be
+incremented whenever chunk boundaries change.
 
 Reports also carry `judgment_complete`, `unjudged_document_total`, and
 `unjudged_chunk_total`. Treat recall as a lower bound whenever judgment is

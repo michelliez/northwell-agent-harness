@@ -196,6 +196,17 @@ def _print_retrieval_report(report: dict[str, Any], report_path: Path) -> None:
                 cells += f"{'N/A' if value is None else f'{value:.3f}':<15}"
             print(f"{metric.upper():<20}{cells}")
 
+    first_k = k_values[0]
+    print(f"\nHIT@{first_k} BY FAILURE BUCKET:")
+    print("-" * 70)
+    print(f"{'BUCKET':<32}{'QUERIES':<10}{'DOCUMENT':<14}{'CHUNK':<14}")
+    for bucket, bucket_metrics in metrics["by_failure_bucket"].items():
+        document_hit = bucket_metrics["document"][f"hit@{first_k}"]
+        chunk_hit = bucket_metrics["chunk"][f"hit@{first_k}"]
+        document_cell = "N/A" if document_hit is None else f"{document_hit:.3f}"
+        chunk_cell = "N/A" if chunk_hit is None else f"{chunk_hit:.3f}"
+        print(f"{bucket:<32}{bucket_metrics['query_count']:<10}{document_cell:<14}{chunk_cell:<14}")
+
     print("\nLATENCY (ms):")
     print("-" * 50)
     for label, key in (("Median", "median"), ("P95", "p95"), ("Max", "max")):
