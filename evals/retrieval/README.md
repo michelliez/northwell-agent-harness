@@ -16,8 +16,9 @@ data.
 uv run agent-harness-eval --suite retrieval --k 5 10
 ```
 
-The index defaults to `.local/rag/index.sqlite`. Point at another local index
-with `--db`, and at another benchmark directory with `--benchmark-dir`.
+The index defaults to `RAG_DB_PATH` when set, then `.local/rag/index.sqlite`.
+Override either value with `--db`, and point at another benchmark directory
+with `--benchmark-dir`.
 
 Validate the qrels without running retrieval:
 

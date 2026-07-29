@@ -18,13 +18,17 @@ from evals.intent_assertions import (
     summarize_intent_results,
 )
 from evals.retrieval_evaluator import run_retrieval_evaluation
-from retrieval.search import DEFAULT_INDEX_PATH
 
 INTENT_PROMPT_VERSION = "v6"
 
 DEFAULT_CASE_DIR = Path("evals")
 DEFAULT_RESULTS_DIR = Path(".local/evals")
 DEFAULT_BENCHMARK_DIR = DEFAULT_CASE_DIR / "retrieval" / "benchmark"
+
+
+def _default_index_path() -> Path:
+    """Use the same RAG_DB_PATH/.env resolution as the agent."""
+    return get_config().index_path
 
 
 def load_cases(path: Path) -> list[EvaluationCase]:
@@ -244,8 +248,11 @@ def main() -> None:
     parser.add_argument(
         "--db",
         type=Path,
-        default=DEFAULT_INDEX_PATH,
-        help="SQLite RAG index for the retrieval suite.",
+        default=_default_index_path(),
+        help=(
+            "SQLite RAG index for the retrieval suite "
+            "(default: RAG_DB_PATH or .local/rag/index.sqlite)."
+        ),
     )
     parser.add_argument(
         "--benchmark-dir",
