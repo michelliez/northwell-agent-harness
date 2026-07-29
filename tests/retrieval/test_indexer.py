@@ -46,6 +46,38 @@ def test_build_and_search_rag_index(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     assert "Scheduled or completed" in chunk["text"]
 
 
+def test_validation_rejects_incompatible_chunker_with_same_schema(tmp_path: Path) -> None:
+    html_path = tmp_path / "page.html"
+    html_path.write_text("<html><body>stable content</body></html>", encoding="utf-8")
+    db_path = tmp_path / "rag.sqlite"
+    build_index(html_path, db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE index_metadata SET value = ? WHERE key = 'chunker_version'",
+            ("section-table-old-v4",),
+        )
+
+    with pytest.raises(SystemExit, match="incompatible chunker_version"):
+        search_module.validate_index(db_path)
+
+
+def test_retrieval_rejects_incompatible_chunker_with_same_schema(tmp_path: Path) -> None:
+    html_path = tmp_path / "page.html"
+    html_path.write_text("<html><body>stable content</body></html>", encoding="utf-8")
+    db_path = tmp_path / "rag.sqlite"
+    build_index(html_path, db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE index_metadata SET value = ? WHERE key = 'chunker_version'",
+            ("section-table-old-v4",),
+        )
+
+    with pytest.raises(RuntimeError, match="incompatible chunker_version"):
+        search_module.retrieve_documentation_context("stable", db_path)
+
+
 def test_sqlite_column_chunks_use_canonical_genq_records(tmp_path: Path) -> None:
     """Production indexing must store GenQ column IDs, headings, and passage text."""
     from retrieval.genq.corpus_parser import parse_epic_html

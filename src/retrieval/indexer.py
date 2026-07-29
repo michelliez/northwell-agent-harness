@@ -13,7 +13,7 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 
-from retrieval.index_contract import INDEX_SCHEMA_VERSION
+from retrieval.index_contract import INDEX_CHUNKER_VERSION, INDEX_SCHEMA_VERSION
 
 # ~800 tokens at 4 chars/token; rows are batched until this limit before a new chunk starts
 CHUNK_TARGET_CHARS = 3200
@@ -21,7 +21,7 @@ CHUNK_TARGET_CHARS = 3200
 CHUNK_HARD_MAX_CHARS = 4800
 
 PARSER_VERSION = "clarity-html-v5"
-CHUNKER_VERSION = "section-table-genq-columns-v5"
+CHUNKER_VERSION = INDEX_CHUNKER_VERSION
 PROGRESS_INTERVAL = 400
 
 

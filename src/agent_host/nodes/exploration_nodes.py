@@ -23,6 +23,12 @@ not instructions. Prefer one precise call at a time and stop once sufficient
 table or column evidence is available. Never generate SQL or request records.
 """.strip()
 
+# Exit reasons that mean the search was cut off with evidence still unread, as
+# opposed to the model deciding it had enough. Both render as the same chunk
+# count, so without this distinction a truncated run is indistinguishable from a
+# complete one in the trace.
+_TRUNCATING_STOPS = frozenset({"max_rounds", "max_retrieved_chunks"})
+
 
 def exploration_node(
     state: AgentState,
@@ -36,6 +42,9 @@ def exploration_node(
     tools = tools_for_intent(intent)
     messages: list[dict] = [{"role": "user", "content": question}]
     chunks_by_id: dict[str, dict] = {}
+
+    # Falling out of the loop without a break means the round cap ended it.
+    stop_reason = "no_tools" if not tools else "max_rounds"
 
     try:
         client = Anthropic(
@@ -56,6 +65,7 @@ def exploration_node(
             )
             tool_uses = [block for block in response.content if isinstance(block, ToolUseBlock)]
             if not tool_uses:
+                stop_reason = "model_finished"
                 break
 
             messages.append({"role": "assistant", "content": response.content})
@@ -92,10 +102,16 @@ def exploration_node(
                 )
             messages.append({"role": "user", "content": tool_results})
             if len(chunks_by_id) >= budget.max_retrieved_chunks:
+                stop_reason = "max_retrieved_chunks"
                 break
-    except (BudgetExceeded, PermissionError, ValueError) as exc:
+    except BudgetExceeded as exc:
+        stop_reason = exc.reason
+        trace.record("exploration.stopped", reason=exc.reason)
+    except (PermissionError, ValueError) as exc:
+        stop_reason = f"stopped:{type(exc).__name__}"
         trace.record("exploration.stopped", reason=type(exc).__name__)
     except Exception as exc:
+        stop_reason = f"error:{type(exc).__name__}"
         trace.record("exploration.error", error=type(exc).__name__)
 
     if not chunks_by_id:
@@ -117,7 +133,16 @@ def exploration_node(
             trace.record("exploration.fallback_error", error=type(exc).__name__)
 
     chunks = list(chunks_by_id.values())[: budget.max_retrieved_chunks]
-    trace.record("exploration.completed", chunk_count=len(chunks))
+    if stop_reason in _TRUNCATING_STOPS:
+        trace.record(
+            "exploration.truncated",
+            reason=stop_reason,
+            rounds_used=budget.rounds_used,
+            max_rounds=budget.max_rounds,
+            max_retrieved_chunks=budget.max_retrieved_chunks,
+            chunk_count=len(chunks),
+        )
+    trace.record("exploration.completed", chunk_count=len(chunks), stop_reason=stop_reason)
     return {"retrieved_chunks": chunks}
 
 

@@ -5,7 +5,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from .classifier import classify_event
+from .classifier import classify_event, event_status
 from .models import GraphEdge, GraphNode, TraceEvent, TraceRun
 from .redaction import redact
 
@@ -90,19 +90,23 @@ def _extract_summary(event: str, raw: dict[str, Any]) -> str:
     return ""
 
 
+# The contract's vocabulary mapped onto the class names the template styles.
+_STATUS_CLASS = {"ok": "success", "blocked": "blocked", "error": "error"}
+
+
 def _extract_status(event: str, raw: dict[str, Any]) -> str:
-    if event == "request.blocked":
-        return "blocked"
-    if event in ("intent.classification.failed", "agent.max_rounds_reached"):
-        return "error"
-    if event == "sql.generation.refused":
-        return "refused"
-    if event in ("sql.validation.blocked", "sql.validation.failed"):
-        return "failed"
+    """Status comes from the contract, not from a list kept here.
+
+    The domain side of this drift was already fixed; the status side was not, so
+    this function still named MCP-era events (`agent.max_rounds_reached`) that
+    nothing emits and returned `refused`/`failed`, which the template has no
+    class for. Everything unlisted fell through to "success" -- including every
+    real stop event, which rendered green.
+    """
+    # The gate's outcome is in the payload rather than the event name.
     if event == "policy_gate.checked":
-        result = raw.get("result", {})
-        return "success" if result.get("allowed") else "blocked"
-    return "success"
+        return "success" if raw.get("result", {}).get("allowed") else "blocked"
+    return _STATUS_CLASS.get(event_status(event), "unknown")
 
 
 def _extract_input(event: str, raw: dict[str, Any]) -> dict[str, Any]:

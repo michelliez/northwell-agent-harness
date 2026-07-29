@@ -115,7 +115,6 @@ def documentation_answer_node(
     ]
 
     try:
-        budget.check_context(messages)
         budget.reserve_model_call(messages)
     except BudgetExceeded as exc:
         trace.record("documentation_answer.budget_exceeded", reason=exc.reason)

@@ -308,14 +308,16 @@ def ask(
         clarification_prompt is set; the caller should call resume() with
         the user's reply and the same thread_id.
     """
-    graph = _get_graph()
     tid = thread_id or uuid.uuid4().hex
     run_id = uuid.uuid4().hex
     started_at = time.monotonic()
+    budget = budget_from_env()
+    budget.check_input(question)
+    graph = _get_graph()
 
     initial_state = make_initial_state(question, run_id=run_id, started_at=started_at)
     config: RunnableConfig = {"configurable": {"thread_id": tid}}
-    context = AgentContext(budget=budget_from_env())
+    context = AgentContext(budget=budget)
     _thread_contexts[tid] = context
 
     try:
@@ -355,10 +357,11 @@ def resume(
     Returns:
         AskResponse with the completed answer, or another interruption.
     """
+    context = _thread_contexts.get(thread_id) or AgentContext(budget=budget_from_env())
+    context.budget.check_input(reply)
+    _thread_contexts[thread_id] = context
     graph = _get_graph()
     config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
-    context = _thread_contexts.get(thread_id) or AgentContext(budget=budget_from_env())
-    _thread_contexts[thread_id] = context
 
     # Recover run_id from checkpoint state
     try:
