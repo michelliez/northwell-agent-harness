@@ -1,16 +1,23 @@
 # Repository Context
 
 This repository is the agent harness. Read this file first, then load only the
-canonical document needed for the task:
+canonical documents you need:
 
-- [README.md](README.md): setup, commands, and current architecture.
-- [docs/PRD.md](docs/PRD.md): requirements and acceptance criteria.
-- [docs/RAG.md](docs/RAG.md): retrieval and schema-evidence design.
-- [docs/adr/](docs/adr/): accepted decisions and rationale. Start with
-  [ADR 001](docs/adr/001-graph-trunk-and-mcp-boundary.md), which owns the
-  graph-trunk and MCP-boundary decisions that shape this layout.
+**Current State & Roadmap:**
+- [docs/PROGRESS.md](docs/PROGRESS.md): living tracker of completed work (422 tests passing)
+- [docs/PLANS.md](docs/PLANS.md): complete roadmap (4 phases, all tracks, UI specification)
 
-Other files under `docs/` are reference material, not current instructions.
+**Requirements:**
+- [docs/PRD.md](docs/PRD.md): requirements and acceptance criteria
+- [docs/RAG.md](docs/RAG.md): retrieval and schema-evidence design
+
+**Architecture Decisions:**
+- [docs/adr/](docs/adr/): all decisions with rationale
+  - [ADR 001](docs/adr/001-graph-trunk-and-mcp-boundary.md): Graph & MCP boundary (existing)
+  - [ADR 002-006](docs/adr/): SQL execution track (all implemented ✅)
+
+**Background** (reference only):
+- [docs/reference/](docs/reference/): research, examples, threat models
 Never add Co-Authored-By or any AI attribution to commits, PRs, or comments.
 
 ## Invariants
@@ -24,8 +31,9 @@ Never add Co-Authored-By or any AI attribution to commits, PRs, or comments.
   widen one; unresolved column safety stays `unknown` and blocks.
 - SQL generation may use only an evidence-backed `SchemaSnapshot`.
 - SQL validation is deterministic and never executes a query.
-- BigQuery integration remains disabled until dry-run, cost, authorization,
-  read-only execution, and result-safety controls are implemented.
+- BigQuery integration: dry-run (ADR 002), cost gates (cost_gate.py), read-only
+  execution (ADR 003), result safety (ADR 004), and audit logging (ADR 005) are
+  implemented and tested (422 tests passing). User-facing layer pending.
 - All execution limits live in `agent_host/budget.py`, not configuration.
 - Generated artifacts live under ignored `.local/`.
 - Never commit credentials, PHI, proprietary schemas or HTML, SQLite indexes,
@@ -38,6 +46,7 @@ agent_host/    graph lifecycle, state, nodes, config, budget, trace, CLI
 policy/        deterministic screening and policy results
 retrieval/     indexing, search, evidence extraction, index audit
 sql/           SQL domain models, generation, validation, BigQuery boundary
+               ✅ Complete: dry_run, read_only executor, result safety, audit logging
 evals/         evaluation execution and assertions
 trace_viewer/  trace parsing, redaction, and rendering
 ```
