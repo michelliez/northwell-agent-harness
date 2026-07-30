@@ -171,9 +171,7 @@ def validate_query_plan(
             "COUNT",
             "COUNT_DISTINCT",
         }:
-            violations.append(
-                _violation("identifier_usage", "Identifier may only be counted.")
-            )
+            violations.append(_violation("identifier_usage", "Identifier may only be counted."))
 
     for planned_filter in [*proposed.filters, *proposed.time_constraints]:
         column = _resolve_column(planned_filter.column, tables)
@@ -188,9 +186,7 @@ def validate_query_plan(
 
     parameter_names = [parameter.name for parameter in proposed.parameters]
     if len({name.casefold() for name in parameter_names}) != len(parameter_names):
-        violations.append(
-            _violation("duplicate_parameter", "Parameter names must be unique.")
-        )
+        violations.append(_violation("duplicate_parameter", "Parameter names must be unique."))
     referenced_parameter_names = {
         name.casefold()
         for planned_filter in [*proposed.filters, *proposed.time_constraints]
@@ -213,9 +209,7 @@ def validate_query_plan(
                 declared_parameter_names - referenced_parameter_names,
             )
         )
-    parameters_by_name = {
-        parameter.name.casefold(): parameter for parameter in proposed.parameters
-    }
+    parameters_by_name = {parameter.name.casefold(): parameter for parameter in proposed.parameters}
     for planned_filter in [*proposed.filters, *proposed.time_constraints]:
         column = _resolve_column(planned_filter.column, tables)
         if column is None or column.data_type is None:
@@ -243,8 +237,10 @@ def validate_query_plan(
     for join in proposed.joins:
         left = _resolve_column(join.left, tables)
         right = _resolve_column(join.right, tables)
-        if left is not None and right is not None and (
-            left.safety != "identifier" or right.safety != "identifier"
+        if (
+            left is not None
+            and right is not None
+            and (left.safety != "identifier" or right.safety != "identifier")
         ):
             violations.append(
                 _violation("unsafe_join", "Joins must compare catalog-backed identifiers.")
@@ -260,9 +256,9 @@ def validate_query_plan(
             )
         )
 
-    expected_outputs = {
-        aggregation.alias.casefold() for aggregation in proposed.aggregations
-    } | {group.column.casefold() for group in proposed.groupings}
+    expected_outputs = {aggregation.alias.casefold() for aggregation in proposed.aggregations} | {
+        group.column.casefold() for group in proposed.groupings
+    }
     if {value.casefold() for value in proposed.expected_output} != expected_outputs:
         violations.append(
             _violation(
@@ -341,5 +337,7 @@ def _hash_model(value: Any) -> str:
 
 
 def _violation(code: str, message: str, value: Any | None = None) -> PlanViolation:
-    evidence = {} if value is None else {"value": sorted(value) if isinstance(value, set) else value}
+    evidence = (
+        {} if value is None else {"value": sorted(value) if isinstance(value, set) else value}
+    )
     return PlanViolation(code=code, message=message, evidence=evidence)

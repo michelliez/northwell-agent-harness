@@ -129,8 +129,7 @@ def test_plan_aware_validation_rejects_sql_that_broadens_plan() -> None:
     approved = _approved()
 
     result = validate_sql(
-        "SELECT COUNT(*) AS row_count FROM A0H_MAP "
-        "WHERE A0H_MAP.STATUS_CODE = @status",
+        "SELECT COUNT(*) AS row_count FROM A0H_MAP WHERE A0H_MAP.STATUS_CODE = @status",
         approved.plan.tables,
         approved.permission_scope.schema_snapshot,
         approved,

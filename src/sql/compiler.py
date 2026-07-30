@@ -29,9 +29,7 @@ def plan_to_bigquery_sql(approved: ApprovedQueryPlan) -> CompiledQuery:
     if not plan.tables:
         raise UnsupportedPlanError("missing_table")
 
-    projections: list[exp.Expression] = [
-        _column(reference) for reference in plan.groupings
-    ]
+    projections: list[exp.Expression] = [_column(reference) for reference in plan.groupings]
     projections.extend(_aggregation(item) for item in plan.aggregations)
     query = exp.select(*projections).from_(exp.to_table(plan.tables[0]))
 
@@ -52,9 +50,7 @@ def plan_to_bigquery_sql(approved: ApprovedQueryPlan) -> CompiledQuery:
     if joined_tables != {table.casefold() for table in plan.tables}:
         raise UnsupportedPlanError("disconnected_table")
 
-    predicates = [
-        _predicate(item) for item in [*plan.filters, *plan.time_constraints]
-    ]
+    predicates = [_predicate(item) for item in [*plan.filters, *plan.time_constraints]]
     if predicates:
         combined = predicates[0]
         for predicate in predicates[1:]:
@@ -96,9 +92,7 @@ def _aggregation(item: PlannedAggregation) -> exp.Expression:
 
 def _predicate(item: PlannedFilter) -> exp.Expression:
     column = _column(item.column)
-    parameters = [
-        exp.Parameter(this=exp.Var(this=name)) for name in item.parameter_names
-    ]
+    parameters = [exp.Parameter(this=exp.Var(this=name)) for name in item.parameter_names]
     if item.operator == "BETWEEN":
         return exp.Between(
             this=column,

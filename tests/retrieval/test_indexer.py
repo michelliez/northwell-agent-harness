@@ -469,8 +469,7 @@ def test_malformed_unclosed_table_rows_do_not_expand_cumulatively() -> None:
         for marker in (f"MALFORMED_FIELD_{i:04d}", f"MALFORMED_VALUE_{i:04d}")
     ]
     rows_html = "".join(
-        f"<tr><td>MALFORMED_FIELD_{i:04d}<td>MALFORMED_VALUE_{i:04d}"
-        for i in range(count)
+        f"<tr><td>MALFORMED_FIELD_{i:04d}<td>MALFORMED_VALUE_{i:04d}" for i in range(count)
     )
     soup = BeautifulSoup(f"<table class='List'>{rows_html}</table>", "html.parser")
     table = soup.find("table")

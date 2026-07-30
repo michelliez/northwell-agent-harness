@@ -179,9 +179,7 @@ def test_token_rejects_tampering_expiry_and_changed_ceiling() -> None:
 
     changed_sql = compiled.model_copy(update={"sql": compiled.sql + "\n"})
     with pytest.raises(ApprovalTokenError, match="does not match"):
-        require_valid_approval_token(
-            result.approval_token, changed_sql, approved, SECRET, now=NOW
-        )
+        require_valid_approval_token(result.approval_token, changed_sql, approved, SECRET, now=NOW)
     with pytest.raises(ApprovalTokenError, match="expired"):
         require_valid_approval_token(
             result.approval_token,

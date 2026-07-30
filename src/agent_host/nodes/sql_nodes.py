@@ -207,10 +207,7 @@ def fix_sql_node(
 
     input_hash = _sql_hash(candidate)
     output_hash = _sql_hash(result.sql)
-    previous_hashes = {
-        str(item.get("output_sql_hash"))
-        for item in state.get("repair_history", [])
-    }
+    previous_hashes = {str(item.get("output_sql_hash")) for item in state.get("repair_history", [])}
     if output_hash == input_hash or output_hash in previous_hashes:
         trace.record("fix_sql.loop_detected")
         return {"answer": "SQL repair stopped because it repeated an earlier candidate."}

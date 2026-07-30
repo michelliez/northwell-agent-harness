@@ -52,9 +52,7 @@ def dry_run(
     try:
         client = bigquery.Client(project=project)
     except Exception as exc:
-        raise BigQueryNotConfigured(
-            f"Failed to initialize BigQuery client: {exc}"
-        ) from exc
+        raise BigQueryNotConfigured(f"Failed to initialize BigQuery client: {exc}") from exc
 
     try:
         job_config = bigquery.QueryJobConfig(
@@ -74,8 +72,7 @@ def dry_run(
             # For now, we rely on the caller to provide declared tables
             if hasattr(job, "referenced_tables") and job.referenced_tables:
                 referenced_tables = [
-                    f"{t.project}.{t.dataset_id}.{t.table_id}"
-                    for t in job.referenced_tables
+                    f"{t.project}.{t.dataset_id}.{t.table_id}" for t in job.referenced_tables
                 ]
         except Exception:
             # If extraction fails, just return empty list

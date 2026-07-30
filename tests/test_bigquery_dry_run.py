@@ -10,12 +10,10 @@ import os
 from unittest.mock import MagicMock, patch
 
 import pytest
-from google.cloud import bigquery
 from google.cloud.exceptions import BadRequest, NotFound
 
 from sql.bigquery_adapter import BigQueryNotConfigured, dry_run
 from sql.models import DryRunResult
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
@@ -219,10 +217,12 @@ def test_dry_run_default_location_fallback(mock_bigquery_client, mock_job_valid)
 
 def test_dry_run_missing_project_raises(mock_bigquery_client):
     """Test dry-run raises if project cannot be determined."""
-    with patch.dict(os.environ, {}, clear=True):
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        pytest.raises(BigQueryNotConfigured, match="project must be provided"),
+    ):
         # Remove all env vars
-        with pytest.raises(BigQueryNotConfigured, match="project must be provided"):
-            dry_run("SELECT COUNT(*) FROM APPOINTMENT_FACT")
+        dry_run("SELECT COUNT(*) FROM APPOINTMENT_FACT")
 
 
 def test_dry_run_client_initialization_error(mock_bigquery_client):
@@ -385,9 +385,7 @@ def test_dry_run_zero_bytes_valid(mock_bigquery_client, mock_job_valid):
 def test_dry_run_multistatement_sql_error(mock_bigquery_client):
     """Test dry-run rejects multi-statement SQL."""
     # BigQuery should reject this
-    mock_bigquery_client.query.side_effect = BadRequest(
-        "Unexpected end of statement"
-    )
+    mock_bigquery_client.query.side_effect = BadRequest("Unexpected end of statement")
 
     result = dry_run(
         "SELECT 1; SELECT 2;",
