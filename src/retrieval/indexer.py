@@ -170,9 +170,7 @@ def extract_chunks(
                 facts.append(SectionFact(heading_path=heading, fact="present_but_unavailable"))
             elif isinstance(value, Tag) and value.name == "table":
                 category = classify_table(value)
-                is_column_information = (
-                    section.replace("-", " ").casefold() == "column information"
-                )
+                is_column_information = section.replace("-", " ").casefold() == "column information"
                 if (
                     category == "column_info"
                     and is_column_information

@@ -64,9 +64,9 @@ class PlannedFilter(BaseModel):
 
     column: CatalogRef
     operator: Literal["=", "!=", "<", "<=", ">", ">=", "IN", "BETWEEN"]
-    parameter_names: list[
-        Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")]
-    ] = Field(min_length=1, max_length=2)
+    parameter_names: list[Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")]] = Field(
+        min_length=1, max_length=2
+    )
 
     @model_validator(mode="after")
     def validate_parameter_arity(self) -> Self:

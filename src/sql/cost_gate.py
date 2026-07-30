@@ -103,7 +103,9 @@ def evaluate_cost_execution(
         )
     if not dry_run.valid:
         violations.append(
-            _violation("dry_run_failed", "BigQuery did not validate the query.", error=dry_run.error)
+            _violation(
+                "dry_run_failed", "BigQuery did not validate the query.", error=dry_run.error
+            )
         )
     if (
         dry_run.total_bytes_processed is not None
