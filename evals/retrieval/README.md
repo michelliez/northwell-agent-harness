@@ -31,7 +31,7 @@ Reports are written to `.local/evals/retrieval-evaluation-<timestamp>.json`.
 ## Reviewed failure buckets
 
 The tracked benchmark uses analyst-written questions rather than phrases copied
-from HTML descriptions. Its 24 queries cover five retrieval failure buckets:
+from HTML descriptions. Its 50 queries cover five retrieval failure buckets:
 
 - `named_table_lookup`: a known table must yield its purpose or grain;
 - `named_column_schema`: known fields must yield types, meanings, or key roles;
@@ -40,9 +40,47 @@ from HTML descriptions. Its 24 queries cover five retrieval failure buckets:
 - `negative_unsupported`: the corpus does not support the requested answer.
 
 The query file records `failure_bucket`, and reports include document- and
-chunk-level metrics for each bucket. The 70 chunk qrels are manually reviewed
+chunk-level metrics for each bucket. The 110 chunk qrels are manually reviewed
 against the column-level v5 index; do not regenerate them from source
 descriptions or mechanically patch old heading paths.
+
+## Coverage
+
+The first 24 queries covered 17 documents that were all the head or tail of an
+alphabetical directory listing — `A0H_*`, `AAG_*`, `ABF_*`, `ABN_DOCUMENT_ID`,
+and `ZC_XPR_*`. Those are Hyperspace-access maintenance feeds and code lookups
+that no analyst queries, so the benchmark measured retrieval on the least
+representative 0.04% of the corpus.
+
+Queries Q25–Q50 add twelve tables analysts actually use: `PAT_ENC`,
+`PAT_ENC_HSP`, `CLARITY_ADT`, `ORDER_PROC`, `ORDER_MED`, `PATIENT`,
+`CLARITY_SER`, `CLARITY_DEP`, `HSP_ACCOUNT`, `CLARITY_EAP`, `PAT_ENC_DX`, and
+`PROBLEM_LIST`. Keep extending along that axis: representativeness of the tables
+matters more than query count.
+
+## Judgment scope and what each metric means
+
+`judgment_scope` records how far judging actually went, and it changes which
+metrics are reported:
+
+| Scope | Reported | Suppressed |
+|---|---|---|
+| `corpus_complete` | everything | — |
+| `positive_only` | `recall@k`, `hit@k`, `mrr` | `precision@k`, `ndcg@k` |
+
+Recall and hit survive incomplete judgments: a known positive either appears in
+the ranking or it does not. Precision and nDCG cannot, because both must treat
+every unjudged result as irrelevant, and across 40,551 documents that assumption
+is unearned.
+
+`business_concept_discovery` queries are judged `positive_only` by necessity —
+asserting that no other table could answer "which table holds the people who
+deliver care" would mean judging the whole corpus. Claiming `corpus_complete`
+there would silently inflate precision.
+
+Per-bucket rows print `SCORED/TOTAL`. When those differ, some queries in the
+bucket contributed to no average — read the total as coverage, never as sample
+size.
 
 ## Comparability
 

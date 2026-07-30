@@ -91,8 +91,8 @@ def test_documentation_stays_in_the_canonical_set() -> None:
 def test_report_canonical_documentation_ratio() -> None:
     """Report the ratio so the trend is visible, not just individual files."""
     tracked = tracked_markdown()
-    archived = [p for p in tracked if p.startswith("docs/reference/")]
-    live = [p for p in tracked if p not in archived]
+    reference = [p for p in tracked if p.startswith("docs/reference/")]
+    live = [p for p in tracked if p not in reference]
     canonical = [p for p in live if is_canonical(p)]
 
     live_lines = sum(line_count(p) for p in live)
@@ -105,7 +105,7 @@ def test_report_canonical_documentation_ratio() -> None:
         warnings.warn(
             f"\n\n  Canonical documentation is {ratio:.0%} of {live_lines} live markdown lines "
             f"({canonical_lines} canonical, {live_lines - canonical_lines} other).\n"
-            f"  Archived and excluded from this ratio: {len(archived)} file(s).\n"
+            f"  Reference material excluded from this ratio: {len(reference)} file(s).\n"
             f"{GUIDANCE}",
             UserWarning,
             stacklevel=2,

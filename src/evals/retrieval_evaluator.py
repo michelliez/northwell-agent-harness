@@ -563,8 +563,18 @@ def ranked_metrics(
     ranked_ids: Sequence[str],
     relevance_by_id: Mapping[str, int],
     k_values: Sequence[int],
+    *,
+    positives_only: bool = False,
 ) -> dict[str, float | bool | None]:
-    """Calculate standard ranking metrics for one ranked result list."""
+    """Calculate standard ranking metrics for one ranked result list.
+
+    ``positives_only`` marks judgments that name the relevant items but have not
+    swept the rest of the corpus. Recall, hit, and MRR stay valid there — a known
+    positive either appears in the ranking or it does not. Precision and nDCG do
+    not, because both must assume every unjudged result is irrelevant, and at
+    40,000 documents that assumption is unearned. They are reported as ``None``
+    rather than as a number that would read as measured.
+    """
     grades = [relevance_by_id.get(item_id, 0) for item_id in ranked_ids]
     ideal_grades = list(relevance_by_id.values())
     relevant_total = sum(grade > 0 for grade in ideal_grades)
@@ -573,9 +583,9 @@ def ranked_metrics(
         "relevant_total": float(relevant_total),
     }
     for k in k_values:
-        metrics[f"precision@{k}"] = precision_at_k(grades, k)
+        metrics[f"precision@{k}"] = None if positives_only else precision_at_k(grades, k)
         metrics[f"recall@{k}"] = recall_at_k(grades, relevant_total, k)
-        metrics[f"ndcg@{k}"] = ndcg_at_k(grades, ideal_grades, k)
+        metrics[f"ndcg@{k}"] = None if positives_only else ndcg_at_k(grades, ideal_grades, k)
         metrics[f"hit@{k}"] = any(grade > 0 for grade in grades[:k])
     return metrics
 
@@ -840,6 +850,19 @@ def run_retrieval_evaluation(
                     "document": ranked_metrics(ranked_doc_ids, relevance_by_doc_id, normalized_k),
                 }
                 metrics_status = "complete"
+            elif query.judgment_scope == JudgmentScope.positive_only:
+                # Recall and hit survive incomplete judgments; precision and nDCG
+                # do not. Reporting nothing at all made these queries invisible
+                # while they still counted toward per-bucket query totals.
+                metrics = {
+                    "chunk": ranked_metrics(
+                        ranked_chunk_ids, relevance_by_chunk_id, normalized_k, positives_only=True
+                    ),
+                    "document": ranked_metrics(
+                        ranked_doc_ids, relevance_by_doc_id, normalized_k, positives_only=True
+                    ),
+                }
+                metrics_status = "recall_only"
 
             retrieved_doc_ids = set(ranked_doc_ids)
             results.append(
@@ -948,6 +971,14 @@ def run_retrieval_evaluation(
             "by_failure_bucket": {
                 bucket: {
                     "query_count": sum(r["failure_bucket"] == bucket for r in resolved_results),
+                    # A query with no metrics contributes to no average. Report it
+                    # separately so a bucket total is never read as a sample size.
+                    "scored_query_count": sum(
+                        r["failure_bucket"] == bucket
+                        and r["answerable"]
+                        and r["metrics"] is not None
+                        for r in resolved_results
+                    ),
                     "chunk": _macro_average(
                         [r for r in resolved_results if r["failure_bucket"] == bucket],
                         "chunk",

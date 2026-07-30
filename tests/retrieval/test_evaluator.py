@@ -193,6 +193,18 @@ def test_public_ranked_metrics_calculator() -> None:
     assert metrics["mrr"] == 0.5
 
 
+def test_positives_only_suppresses_precision_and_ndcg() -> None:
+    """Metrics that require judging non-positives must not be reported as measured."""
+    metrics = ranked_metrics(["wrong", "relevant"], {"relevant": 1}, [1, 5], positives_only=True)
+
+    assert metrics["recall@5"] == 1.0
+    assert metrics["hit@5"] is True
+    assert metrics["mrr"] == 0.5
+    assert metrics["precision@1"] is None
+    assert metrics["precision@5"] is None
+    assert metrics["ndcg@5"] is None
+
+
 def test_dataset_loads_long_term_schema(tmp_path: Path) -> None:
     queries_path, qrels_path, chunk_qrels_path, catalog_path = _write_dataset(
         tmp_path, [_query()], [_target()]
@@ -217,15 +229,20 @@ def test_reviewed_benchmark_covers_analyst_failure_buckets() -> None:
     )
 
     assert Counter(query.failure_bucket for query in queries) == {
-        "named_table_lookup": 5,
-        "named_column_schema": 5,
-        "business_concept_discovery": 5,
-        "cross_table_synthesis": 5,
-        "negative_unsupported": 4,
+        "named_table_lookup": 10,
+        "named_column_schema": 10,
+        "business_concept_discovery": 11,
+        "cross_table_synthesis": 10,
+        "negative_unsupported": 9,
     }
-    assert len(targets) == 40
-    assert len(chunk_targets) == 70
+    assert len(targets) == 69
+    assert len(chunk_targets) == 110
     assert all("analyst_phrased" in query.tags for query in queries)
+
+    # The original 17 documents were the head and tail of a directory listing.
+    # Coverage must include tables an analyst actually queries.
+    covered = {document.object_name for document in _documents.values()}
+    assert {"PAT_ENC", "CLARITY_ADT", "ORDER_MED", "CLARITY_SER", "HSP_ACCOUNT"} <= covered
 
 
 def test_reviewed_queries_do_not_reuse_dictionary_probe_phrases() -> None:
@@ -418,7 +435,7 @@ def test_evaluation_computes_document_metrics_only(tmp_path: Path) -> None:
     assert report["results"][0]["metrics_status"] == "complete"
 
 
-def test_positive_only_with_unjudged_document_has_no_metrics(tmp_path: Path) -> None:
+def test_positive_only_reports_recall_but_not_precision(tmp_path: Path) -> None:
     corpus = tmp_path / "corpus"
     _write_html(corpus / "data.html")
     _write_html(corpus / "other.html", "IMPORTANT OTHER")
@@ -439,9 +456,18 @@ def test_positive_only_with_unjudged_document_has_no_metrics(tmp_path: Path) -> 
         k_values=(5,),
     )
 
+    # Recall and hit survive incomplete judgments because a known positive
+    # either appears in the ranking or does not. Precision and nDCG would have
+    # to assume every unjudged result is irrelevant, so they stay None rather
+    # than reporting a number that reads as measured.
     result = report["results"][0]
     assert result["unjudged_doc_ids"]
-    assert result["metrics"] is None
+    assert result["metrics_status"] == "recall_only"
+    document = result["metrics"]["document"]
+    assert document["recall@5"] == 1.0
+    assert document["hit@5"] is True
+    assert document["precision@5"] is None
+    assert document["ndcg@5"] is None
 
 
 def test_missing_positive_document_excludes_query_from_metrics(tmp_path: Path) -> None:
