@@ -31,3 +31,8 @@ jobs:
 
       - name: Tests
         run: uv run pytest -q
+
+      # Advisory only: annotates the pull request, never fails the build.
+      - name: Documentation layout
+        if: always()
+        run: uv run python tests/test_documentation_layout.py

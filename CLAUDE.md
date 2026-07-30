@@ -4,7 +4,7 @@ This repository is the agent harness. Read this file first, then load only the
 canonical documents you need:
 
 **Current State & Roadmap:**
-- [docs/PROGRESS.md](docs/PROGRESS.md): living tracker of completed work (422 tests passing)
+- [docs/PROGRESS.md](docs/PROGRESS.md): living tracker of completed work
 - [docs/PLANS.md](docs/PLANS.md): complete roadmap (4 phases, all tracks, UI specification)
 
 **Requirements:**
@@ -16,9 +16,31 @@ canonical documents you need:
   - [ADR 001](docs/adr/001-graph-trunk-and-mcp-boundary.md): Graph & MCP boundary (existing)
   - [ADR 002-006](docs/adr/): SQL execution track (all implemented ✅)
 
-**Background** (reference only):
+**Background** (reference only, never a requirement):
 - [docs/reference/](docs/reference/): research, examples, threat models
+
 Never add Co-Authored-By or any AI attribution to commits, PRs, or comments.
+
+## Documentation
+
+Canonical documentation is a **closed set**: the requirement documents above,
+ADRs, and READMEs beside the code they describe. `docs/reference/` is historical
+and never updated. `tests/test_documentation_layout.py` warns when anything else
+appears; it does not fail the build, because this is a norm rather than a wall.
+
+Before adding a markdown file, place the content instead:
+
+| Content | Home |
+|---|---|
+| A decision or trade-off | `docs/adr/NNN-short-title.md` |
+| A changed contract | the one canonical document that owns it |
+| A plan, roadmap, status, or TODO | the pull-request description or an issue |
+| Superseded material | `docs/reference/` |
+
+A plan stored in `docs/` silently claims to be current forever, and the next
+reader cannot tell when it stopped being true. The same words in a pull-request
+description are dated by construction. Prefer editing an existing document over
+adding one, and deleting a wrong document over annotating it.
 
 ## Invariants
 
