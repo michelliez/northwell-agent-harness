@@ -38,6 +38,8 @@ _RECORD_CALL = re.compile(r"\.record\(\s*\"([a-z_][a-z_.]*)\"", re.MULTILINE)
 def _emitted_event_names() -> set[str]:
     names: set[str] = set()
     for path in SRC.rglob("*.py"):
+        if not path.is_file():
+            continue
         names.update(_RECORD_CALL.findall(path.read_text(encoding="utf-8")))
     return names
 

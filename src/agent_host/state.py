@@ -39,12 +39,22 @@ class AgentState(TypedDict, total=False):
     schema_snapshot: dict | None  # serialized SchemaSnapshot
 
     # SQL workflow
-    query_plan: dict | None  # serialized QueryPlan
+    permission_scope: dict | None  # serialized host-owned PermissionScope
+    query_plan: dict | None  # serialized untrusted QueryPlanAST
+    plan_validation: dict | None  # serialized PlanValidationResult
+    approved_plan: dict | None  # serialized ApprovedQueryPlan
+    compiled_query: dict | None  # serialized CompiledQuery
+    candidate_sql: str | None
+    query_parameters: list[dict]
     generated_sql: str | None
     validation_result: dict | None  # serialized SqlValidationResult
+    dry_run_result: dict | None  # serialized trusted DryRunResult
+    cost_gate_result: dict | None  # serialized CostGateResult
+    approval_token: str | None
     execution_status: str | None  # "not_configured" | None
     repair_count: int
     repair_hint: str | None
+    repair_history: Annotated[list[dict], _append]
 
     # Output
     citations: Annotated[list[str], _append]
@@ -74,12 +84,22 @@ def make_initial_state(question: str, run_id: str, started_at: float) -> AgentSt
         permissions={},
         retrieved_chunks=[],
         schema_snapshot=None,
+        permission_scope=None,
         query_plan=None,
+        plan_validation=None,
+        approved_plan=None,
+        compiled_query=None,
+        candidate_sql=None,
+        query_parameters=[],
         generated_sql=None,
         validation_result=None,
+        dry_run_result=None,
+        cost_gate_result=None,
+        approval_token=None,
         execution_status=None,
         repair_count=0,
         repair_hint=None,
+        repair_history=[],
         citations=[],
         output_safety_assessment=None,
         answer=None,

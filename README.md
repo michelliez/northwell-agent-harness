@@ -21,17 +21,20 @@ input policy -> intent
         `-> deterministic keyword retrieval
       -> context gate
         |-> documentation answer
-        `-> query plan -> plan safety -> SQL generation -> SQL validation
-              `-> bounded repair cycle
+        `-> Claude QueryPlanAST -> deterministic plan safety
+              -> approved plan -> deterministic SQL compiler -> SQL validation
+              `-> bounded Claude repair -> SQL validation
                     -> execution not configured
 -> result safety -> citations -> final answer -> bounded follow-up
 ```
 
 The working core includes policy screening, model-backed intent classification,
 SQLite FTS retrieval, documentation answers, evidence-backed schema snapshots,
-SQL generation, SQLGlot validation, traces, and evaluations. BigQuery dry-run,
-cost approval, execution, result redaction, real authorization, semantic/vector
-retrieval, and Python generation remain explicit future boundaries.
+typed plan proposals, deterministic plan authorization and BigQuery SQL
+compilation, named query parameters, plan-aware SQLGlot validation, bounded
+repairs, traces, and evaluations. BigQuery dry-run, cost approval, execution,
+result redaction, real identity/role authorization, semantic/vector retrieval,
+and Python generation remain explicit future boundaries.
 
 There are no internal MCP services and no fabricated data catalog.
 
@@ -130,7 +133,7 @@ uv build
 - Nodes: ordinary Python functions that return partial state updates.
 - Fixed edges: define unconditional sequence.
 - Conditional edges: route from policy, intent, context, and validation results.
-- Reducers: append citations instead of overwriting them.
+- Reducers: append citations and SQL repair history instead of overwriting them.
 - `interrupt()`: pauses when clarification is required.
 - `Command(resume=...)`: supplies the user's clarification and resumes the same
 checkpoint.

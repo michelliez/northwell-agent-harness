@@ -41,10 +41,11 @@ from agent_host.nodes.retrieval_nodes import (
 )
 from agent_host.nodes.sql_nodes import (
     execution_not_configured_node,
-    generate_sql_node,
+    fix_sql_node,
     plan_safety_node,
     query_plan_node,
     validate_sql_node,
+    write_sql_node,
 )
 from agent_host.schemas import AskResponse
 from agent_host.state import AgentContext, AgentState, make_initial_state
@@ -106,18 +107,28 @@ def _route_from_query_plan(state: AgentState) -> str:
 def _route_from_plan_safety(state: AgentState) -> str:
     if state.get("answer"):
         return "result_safety"
-    return "generate_sql"
+    return "write_sql"
 
 
-def _route_from_generate_sql(state: AgentState) -> str:
+def _route_from_write_sql(state: AgentState) -> str:
     if state.get("answer"):
         return "result_safety"
-    if state.get("generated_sql"):
+    if state.get("candidate_sql") or state.get("generated_sql"):
+        return "validate_sql"
+    return "result_safety"
+
+
+def _route_from_fix_sql(state: AgentState) -> str:
+    if state.get("answer"):
+        return "result_safety"
+    if state.get("candidate_sql"):
         return "validate_sql"
     return "result_safety"
 
 
 def _route_from_validate_sql(state: AgentState) -> str:
+    if state.get("answer"):
+        return "result_safety"
     raw_validation = state.get("validation_result")
     if not raw_validation:
         # No validation result means an error; answer is already set
@@ -133,10 +144,14 @@ def _route_from_validate_sql(state: AgentState) -> str:
 
     repair_count = state.get("repair_count", 0)
     if result.is_repairable and repair_count < budget.max_sql_repairs:
-        return "generate_sql"
+        return "fix_sql"
 
     # Failed or exhausted — answer already set in validate_sql_node
     return "result_safety"
+
+
+# Compatibility alias for existing imports while the node name migrates.
+_route_from_generate_sql = _route_from_write_sql
 
 
 # ── graph construction ────────────────────────────────────────────────────────
@@ -167,7 +182,8 @@ def build_graph(checkpointer=None):
     builder.add_node("documentation_answer", documentation_answer_node)
     builder.add_node("query_plan", query_plan_node)
     builder.add_node("plan_safety", plan_safety_node)
-    builder.add_node("generate_sql", generate_sql_node)
+    builder.add_node("write_sql", write_sql_node)
+    builder.add_node("fix_sql", fix_sql_node)
     builder.add_node("validate_sql", validate_sql_node)
     builder.add_node("execution_not_configured", execution_not_configured_node)
     builder.add_node("classify_output_safety", classify_output_safety_node)
@@ -228,11 +244,19 @@ def build_graph(checkpointer=None):
     builder.add_conditional_edges(
         "plan_safety",
         _route_from_plan_safety,
-        {"result_safety": "result_safety", "generate_sql": "generate_sql"},
+        {"result_safety": "result_safety", "write_sql": "write_sql"},
     )
     builder.add_conditional_edges(
-        "generate_sql",
-        _route_from_generate_sql,
+        "write_sql",
+        _route_from_write_sql,
+        {
+            "result_safety": "result_safety",
+            "validate_sql": "validate_sql",
+        },
+    )
+    builder.add_conditional_edges(
+        "fix_sql",
+        _route_from_fix_sql,
         {
             "result_safety": "result_safety",
             "validate_sql": "validate_sql",
@@ -243,7 +267,7 @@ def build_graph(checkpointer=None):
         _route_from_validate_sql,
         {
             "execution_not_configured": "execution_not_configured",
-            "generate_sql": "generate_sql",
+            "fix_sql": "fix_sql",
             "result_safety": "result_safety",
         },
     )
@@ -384,7 +408,12 @@ def _result_to_response(result: dict, run_id: str, thread_id: str) -> AskRespons
     used_tools: list[str] = []
     if result.get("retrieved_chunks"):
         used_tools.append("retrieve_documentation_context")
-    if result.get("generated_sql"):
+    raw_compiled = result.get("compiled_query") or {}
+    if raw_compiled.get("source") == "deterministic":
+        used_tools.append("compile_sql")
+    elif raw_compiled.get("source") == "claude_repair":
+        used_tools.append("fix_sql")
+    elif result.get("generated_sql"):
         used_tools.append("generate_sql")
     if result.get("validation_result"):
         used_tools.append("validate_sql")
