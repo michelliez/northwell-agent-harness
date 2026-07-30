@@ -122,6 +122,26 @@ interfaces and tests:
 8. Traces record authorization, dry-run, cost, execution, and result-safety
    decisions without exposing sensitive content.
 
+### Current gate status
+
+The list above is a completeness requirement, not a build order, and the gates
+were not built in order. As of 2026-07-30, gates 3 and 4 have implementations
+and tests (`sql/bigquery_adapter.dry_run`, `sql/cost_gate`), and gate 5 has a
+token-gated boundary (`sql/execution.execute_approved_query`) with no executor
+behind it. Gates 1, 2, 6, and 7 are unstarted.
+
+Nothing about that ordering relaxes the rule: **integration may still begin only
+when all eight are met.** Two consequences follow while gates 1 and 2 are open.
+The cost gate issues approval tokens bound to a query and a byte ceiling, but
+there is no authenticated identity to bind them to, so a token establishes
+budget authority and never user authority. And `cost_execution_gate_node` is
+deliberately not registered in `build_graph`; execution stays unreachable from
+the graph regardless of what the adapters can do. Both are load-bearing —
+verify them before wiring anything further.
+
+The BigQuery SDK is an optional dependency group for the same reason. Installing
+it enables the dry-run adapter and its tests; it does not enable execution.
+
 ## Acceptance Criteria
 
 - The graph compiles with an in-memory checkpointer.
@@ -134,6 +154,7 @@ interfaces and tests:
 - Destructive, multi-statement, wildcard, unknown-schema, sensitive-column,
   and row-level SQL are rejected.
 - BigQuery adapter functions fail closed and are not called by the graph.
+- Importing the graph does not import the BigQuery SDK.
 - Full pytest, Ruff, Pyright, package build, CLI help, and local index/search
   smoke checks pass.
 

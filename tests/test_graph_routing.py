@@ -7,6 +7,12 @@ are tested by monkeypatching the Anthropic client.
 
 from __future__ import annotations
 
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
+from unittest.mock import patch
+
 import pytest
 
 from agent_host.graph import (
@@ -399,6 +405,46 @@ def test_bigquery_adapter_raises_on_all_entry_points() -> None:
     for fn in (dry_run, estimate_cost, execute_read_only, redact_result):
         with pytest.raises(BigQueryNotConfigured):
             fn("SELECT COUNT(*) FROM t")  # type: ignore[call-arg]
+
+
+def test_request_path_does_not_import_the_bigquery_sdk() -> None:
+    """BigQuery is an optional group, so no graph import may pull the SDK in.
+
+    Execution is disabled, and `pyarrow` alone is a ~100 MB install. If this
+    fails, something on the request path imported the SDK at module scope.
+
+    Runs in a subprocess: `sys.modules` is process-global, and the dry-run tests
+    import the SDK legitimately, so an in-process check would depend on order.
+    """
+    probe = textwrap.dedent("""
+        import sys
+        import agent_host.graph
+        import sql.bigquery_adapter
+        print(",".join(sorted(
+            name for name in sys.modules if name.startswith(("google.", "pyarrow"))
+        )))
+    """)
+    completed = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=Path(__file__).parent.parent,
+    )
+    imported = [name for name in completed.stdout.strip().split(",") if name]
+    assert imported == [], f"request path imported the optional BigQuery SDK: {imported}"
+
+
+def test_dry_run_fails_closed_when_the_sdk_is_absent() -> None:
+    """Without the optional group, dry-run must fail closed and say how to fix it."""
+    from sql.bigquery_adapter import BigQueryNotConfigured, dry_run
+
+    # Setting a module to None makes `import` raise ImportError.
+    with (
+        patch.dict(sys.modules, {"google.cloud": None}),
+        pytest.raises(BigQueryNotConfigured, match="uv sync --group bigquery"),
+    ):
+        dry_run("SELECT COUNT(*) FROM t", project="test-project")
 
 
 def test_inactive_retrieval_strategies_fail_closed() -> None:

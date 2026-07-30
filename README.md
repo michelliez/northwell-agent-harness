@@ -64,6 +64,17 @@ Copy-Item .env.example .env
 Configure the Anthropic gateway values in `.env`. Model-backed commands may
 incur API usage.
 
+Optional dependency groups are not needed to run the agent:
+
+| Group | Installs | Needed for |
+|---|---|---|
+| `bigquery` | `google-cloud-bigquery`, `pyarrow` | `sql/bigquery_adapter.dry_run` and its tests |
+| `genq` | Torch, Transformers, FAISS, SentenceTransformers | offline synthetic-query generation |
+
+`uv sync --group bigquery` enables the dry-run adapter. Without it the graph
+still runs unchanged — no node imports the BigQuery SDK, and `dry_run` fails
+closed with an install hint. Tests for those paths skip rather than fail.
+
 ## Index Documentation
 
 ```powershell

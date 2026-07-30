@@ -7,8 +7,6 @@ requires-python = ">=3.14"
 dependencies = [
     "anthropic>=0.116.0",
     "beautifulsoup4>=4.15.0",
-    "google-cloud-bigquery>=3.26.0",
-    "pyarrow>=16.0.0",
     "langgraph>=1.2.9,<2",
     "pydantic>=2.13.4",
     "python-dotenv>=1.2.2",
@@ -62,6 +60,13 @@ dev = [
     "pytest-mock>=3.15.0",
     "ruff>=0.9.0",
     "pyright>=1.1.400",
+]
+# BigQuery stays optional while execution is disabled: no graph node imports the
+# SDK, and `pyarrow` alone is a ~100 MB install. `sql/bigquery_adapter.dry_run`
+# imports it lazily and fails closed when the group is absent.
+bigquery = [
+    "google-cloud-bigquery>=3.26.0",
+    "pyarrow>=16.0.0",
 ]
 genq = [
     "datasets>=5.0.0",

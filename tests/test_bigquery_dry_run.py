@@ -10,18 +10,27 @@ import os
 from unittest.mock import MagicMock, patch
 
 import pytest
-from google.cloud.exceptions import BadRequest, NotFound
 
 from sql.bigquery_adapter import BigQueryNotConfigured, dry_run
 from sql.models import DryRunResult
 
+pytest.importorskip(
+    "google.cloud.bigquery",
+    reason="BigQuery SDK is an optional group; run `uv sync --group bigquery`.",
+)
+
+from google.cloud.exceptions import BadRequest, NotFound  # noqa: E402
+
 # ── Fixtures ──────────────────────────────────────────────────────────────
+
+# `dry_run` imports the SDK lazily, so the patch target is the source module
+# rather than an attribute re-exported by the adapter.
 
 
 @pytest.fixture
 def mock_bigquery_client():
     """Mock BigQuery client."""
-    with patch("sql.bigquery_adapter.bigquery.Client") as mock_client_class:
+    with patch("google.cloud.bigquery.Client") as mock_client_class:
         mock_client = MagicMock()
         mock_client_class.return_value = mock_client
         yield mock_client
@@ -227,7 +236,7 @@ def test_dry_run_missing_project_raises(mock_bigquery_client):
 
 def test_dry_run_client_initialization_error(mock_bigquery_client):
     """Test dry-run handles client initialization errors."""
-    with patch("sql.bigquery_adapter.bigquery.Client") as mock_client_class:
+    with patch("google.cloud.bigquery.Client") as mock_client_class:
         mock_client_class.side_effect = Exception("Failed to load credentials")
 
         with pytest.raises(BigQueryNotConfigured, match="Failed to initialize"):
