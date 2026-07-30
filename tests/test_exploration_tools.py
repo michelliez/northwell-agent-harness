@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from agent_host.budget import ExecutionBudget
 from agent_host.tools import execute_retrieval_tool, tools_for_intent
+from retrieval.index_contract import INDEX_CHUNKER_VERSION, INDEX_SCHEMA_VERSION
 
 
 def _index(tmp_path):
@@ -30,7 +31,18 @@ def _index(tmp_path):
         CREATE VIRTUAL TABLE chunks_fts USING fts5(
             chunk_id, source_path, title, category, heading_path, text
         );
+        CREATE TABLE index_metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
         """
+    )
+    conn.executemany(
+        "INSERT INTO index_metadata VALUES (?, ?)",
+        [
+            ("schema_version", INDEX_SCHEMA_VERSION),
+            ("chunker_version", INDEX_CHUNKER_VERSION),
+        ],
     )
     conn.execute(
         "INSERT INTO docs VALUES (?, ?, ?)",

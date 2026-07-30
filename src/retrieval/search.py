@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from collections import Counter
 from pathlib import Path
 
-from retrieval.index_contract import INDEX_SCHEMA_VERSION
+from retrieval.index_contract import INDEX_CHUNKER_VERSION, INDEX_SCHEMA_VERSION
 
 STOPWORDS = {
     "a",
@@ -62,6 +63,18 @@ STOPWORDS = {
 MAX_FTS_QUERY_TOKENS = 8
 MAX_RAG_TOP_K = 25
 
+# Results are chunk-level and were previously ungrouped, so one verbose document
+# could take the entire budget: a probe for "patient primary care provider"
+# returned five chunks of DM_CANCER_PATIENT_HX out of eight. That is correct when
+# the document is the answer and useless when it is not. Take the best few chunks
+# per document first, then backfill, so a single-document match still fills the
+# budget while a broad question sees more than one table.
+MAX_CHUNKS_PER_DOCUMENT = 3
+
+# Diversity needs candidates to choose between; the caller's top_k alone leaves
+# nothing to trim.
+CANDIDATE_POOL_MULTIPLIER = 4
+
 
 class RetrievalStrategyNotConfigured(RuntimeError):
     """Raised when a retrieval strategy has not been implemented."""
@@ -99,11 +112,44 @@ REQUIRED_INDEX_METADATA = frozenset(
 DEFAULT_INDEX_PATH = Path(".local/rag/index.sqlite")
 
 
+def _compatibility_error(metadata: dict[str, str], db_path: Path) -> str | None:
+    expected_versions = {
+        "schema_version": INDEX_SCHEMA_VERSION,
+        "chunker_version": INDEX_CHUNKER_VERSION,
+    }
+    for key, expected in expected_versions.items():
+        actual = metadata.get(key)
+        if actual != expected:
+            return (
+                f"RAG database {db_path} uses incompatible {key} "
+                f"{actual!r}; expected {expected!r}. Rebuild the index."
+            )
+    return None
+
+
 def open_connection(db_path: Path) -> sqlite3.Connection:
     if not db_path.is_file():
         raise RuntimeError(f"RAG index does not exist: {db_path}")
-    conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
+    try:
+        conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        metadata = {
+            str(row["key"]): str(row["value"])
+            for row in conn.execute(
+                "SELECT key, value FROM index_metadata "
+                "WHERE key IN ('schema_version', 'chunker_version')"
+            ).fetchall()
+            if row["value"]
+        }
+        compatibility_error = _compatibility_error(metadata, db_path)
+        if compatibility_error:
+            raise RuntimeError(compatibility_error)
+    except (RuntimeError, sqlite3.DatabaseError) as exc:
+        if "conn" in locals():
+            conn.close()
+        if isinstance(exc, RuntimeError):
+            raise
+        raise RuntimeError(f"RAG database {db_path} is corrupt or unreadable: {exc}") from exc
     return conn
 
 
@@ -144,12 +190,9 @@ def validate_index(db_path: Path) -> None:
                 f"{', '.join(sorted(missing_meta))}"
             )
 
-        if metadata["schema_version"] != INDEX_SCHEMA_VERSION:
-            raise SystemExit(
-                f"RAG database {db_path} uses incompatible schema_version "
-                f"{metadata['schema_version']!r}; expected {INDEX_SCHEMA_VERSION!r}. "
-                "Rebuild the index."
-            )
+        compatibility_error = _compatibility_error(metadata, db_path)
+        if compatibility_error:
+            raise SystemExit(compatibility_error)
 
         doc_count = cur.execute("SELECT COUNT(*) FROM docs").fetchone()[0]
         chunk_count = cur.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
@@ -287,7 +330,7 @@ def keyword_search(
     hint = document_name_hint or ""
     cur.execute(
         """
-        SELECT chunk_id, title, heading_path, text,
+        SELECT chunk_id, source_path, title, heading_path, text,
                CASE
                    WHEN ? != '' AND (
                        upper(source_path) = ?
@@ -315,6 +358,7 @@ def keyword_search(
     return [
         {
             "chunk_id": row["chunk_id"],
+            "source_path": row["source_path"],
             "title": row["title"],
             "heading_path": row["heading_path"],
             "score": row["score"],
@@ -324,35 +368,89 @@ def keyword_search(
     ]
 
 
+def document_key(result: dict) -> str:
+    """Identify the document a chunk came from, for grouping."""
+    return normalize_lookup_text(str(result.get("source_path") or result.get("title") or ""))
+
+
+def apply_document_diversity(
+    ranked: list[dict],
+    *,
+    top_k: int,
+    max_per_document: int = MAX_CHUNKS_PER_DOCUMENT,
+    exempt_document: str | None = None,
+) -> list[dict]:
+    """Cap chunks per document, then backfill with what the cap displaced.
+
+    Rank order is preserved inside both passes. A query that genuinely matches a
+    single document still fills the budget from it -- those chunks arrive in the
+    backfill rather than the first pass -- so this trades ordering, not recall.
+
+    `exempt_document` is the document the caller named outright. Asking about
+    ABN_ORDERS should return ABN_ORDERS, so breadth is not wanted there and the
+    cap does not apply to it.
+    """
+    if max_per_document < 1:
+        return ranked[:top_k]
+
+    exempt = normalize_lookup_text(exempt_document) if exempt_document else None
+    kept: list[dict] = []
+    displaced: list[dict] = []
+    per_document: Counter[str] = Counter()
+
+    for result in ranked:
+        if len(kept) == top_k:
+            break
+        key = document_key(result)
+        if (exempt is not None and key == exempt) or per_document[key] < max_per_document:
+            per_document[key] += 1
+            kept.append(result)
+        else:
+            displaced.append(result)
+
+    if len(kept) < top_k:
+        kept.extend(displaced[: top_k - len(kept)])
+    return kept
+
+
 def search_ranked_chunks(
     cur: sqlite3.Cursor,
     *,
     query: str,
     top_k: int,
+    max_per_document: int = MAX_CHUNKS_PER_DOCUMENT,
 ) -> list[dict]:
     queries = fts5_queries(query)
     if not queries:
         return []
 
-    results: list[dict] = []
+    # Gather a wider pool than requested so the diversity pass has something to
+    # choose between, then trim it back to top_k.
+    pool_target = top_k * CANDIDATE_POOL_MULTIPLIER
+    candidates: list[dict] = []
     seen_chunk_ids: set[str] = set()
     hint = document_hint(query)
     for fts_query in queries:
-        candidate_limit = max(top_k * 2, top_k + len(results))
         for result in keyword_search(
             cur,
             fts_query=fts_query,
-            top_k=candidate_limit,
+            top_k=pool_target,
             document_name_hint=hint,
         ):
             chunk_id = str(result["chunk_id"])
             if chunk_id in seen_chunk_ids:
                 continue
-            results.append(result)
+            candidates.append(result)
             seen_chunk_ids.add(chunk_id)
-            if len(results) == top_k:
-                return results
-    return results
+        if len(candidates) >= pool_target:
+            break
+
+    return apply_document_diversity(
+        candidates,
+        top_k=top_k,
+        max_per_document=max_per_document,
+        exempt_document=hint,
+    )
 
 
 def retrieve_documentation_context(

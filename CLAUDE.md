@@ -11,6 +11,7 @@ canonical document needed for the task:
   graph-trunk and MCP-boundary decisions that shape this layout.
 
 Other files under `docs/` are reference material, not current instructions.
+Never add Co-Authored-By or any AI attribution to commits, PRs, or comments.
 
 ## Invariants
 

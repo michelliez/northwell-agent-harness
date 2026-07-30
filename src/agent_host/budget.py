@@ -28,17 +28,26 @@ class ModelStopError(RuntimeError):
 
 @dataclass
 class ExecutionBudget:
-    max_rounds: int = 3
-    max_model_calls: int = 4
-    max_tool_calls: int = 12
+    # `max_model_calls` is a whole-run cap shared by every node, so it silently
+    # bounds exploration: intent, the answer, and the output-safety assessment
+    # take one call each, leaving `max_model_calls - 3` for exploration rounds.
+    # At the previous 4/3 pairing exploration got exactly one round no matter
+    # what `max_rounds` said. Keep `max_model_calls >= max_rounds + 3`.
+    max_rounds: int = 5
+    max_model_calls: int = 8
+    max_tool_calls: int = 20
     max_calls_per_tool: int = 6
     max_candidate_schemas: int = 5
-    max_retrieved_chunks: int = 5
+    # Discovery questions span several tables; five chunks cannot cover three
+    # table documents, so the model answered from a single one.
+    max_retrieved_chunks: int = 15
     max_sql_repairs: int = 3
     max_input_bytes: int = 16_000
     max_tool_result_bytes: int = 32_000
     max_context_bytes: int = 128_000
-    max_wall_seconds: float = 60.0
+    # Raised with the call ceiling: eight model calls cannot finish inside the
+    # previous sixty seconds, and the wall check fires before the round cap.
+    max_wall_seconds: float = 120.0
     model_call_timeout_seconds: float = 30.0
     model_max_tokens: int = 800
     intent_max_tokens: int = 200
@@ -53,16 +62,20 @@ class ExecutionBudget:
         if time.monotonic() - self.started_at > self.max_wall_seconds:
             raise BudgetExceeded("max_wall_seconds")
 
-    def reserve_model_call(self, messages: Any) -> None:
+    def check_input(self, user_input: str) -> None:
+        """Bound one external user message, not an accumulated model payload."""
         self.check_wall()
-        self._check_bytes(messages, self.max_input_bytes, "max_input_bytes")
+        if len(user_input.encode("utf-8")) > self.max_input_bytes:
+            raise BudgetExceeded("max_input_bytes")
+
+    def reserve_model_call(self, messages: Any) -> None:
+        self.check_context(messages)
         if self.model_calls >= self.max_model_calls:
             raise BudgetExceeded("max_model_calls")
         self.model_calls += 1
 
     def reserve_tool_call(self, name: str, arguments: Any) -> None:
         self.check_wall()
-        self._check_bytes(arguments, self.max_input_bytes, "max_input_bytes")
         if self.tool_calls >= self.max_tool_calls:
             raise BudgetExceeded("max_tool_calls")
         if self.tool_calls_by_name[name] >= self.max_calls_per_tool:
@@ -127,17 +140,17 @@ def budget_from_env() -> ExecutionBudget:
             raise RuntimeError(f"{name} must be numeric.") from exc
 
     return ExecutionBudget(
-        max_rounds=_int("MAX_TOOL_ROUNDS", 3),
-        max_model_calls=_int("MAX_MODEL_CALLS", 4),
-        max_tool_calls=_int("MAX_TOOL_CALLS", 12),
+        max_rounds=_int("MAX_TOOL_ROUNDS", 5),
+        max_model_calls=_int("MAX_MODEL_CALLS", 8),
+        max_tool_calls=_int("MAX_TOOL_CALLS", 20),
         max_calls_per_tool=_int("MAX_CALLS_PER_TOOL", 6),
         max_candidate_schemas=_int("MAX_CANDIDATE_SCHEMAS", 5),
-        max_retrieved_chunks=_int("MAX_RETRIEVED_CHUNKS", 5),
+        max_retrieved_chunks=_int("MAX_RETRIEVED_CHUNKS", 15),
         max_sql_repairs=_int("MAX_SQL_REPAIRS", 3),
         max_input_bytes=_int("MAX_INPUT_BYTES", 16_000),
         max_tool_result_bytes=_int("MAX_TOOL_RESULT_BYTES", 32_000),
         max_context_bytes=_int("MAX_CONTEXT_BYTES", 128_000),
-        max_wall_seconds=_float("MAX_WALL_SECONDS", 60.0),
+        max_wall_seconds=_float("MAX_WALL_SECONDS", 120.0),
         model_call_timeout_seconds=_float("MODEL_CALL_TIMEOUT_SECONDS", 30.0),
         model_max_tokens=_int("MODEL_MAX_TOKENS", 800),
         intent_max_tokens=_int("INTENT_MAX_TOKENS", 200),

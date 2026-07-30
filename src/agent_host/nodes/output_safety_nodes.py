@@ -215,7 +215,6 @@ def classify_output_safety_node(
     messages = [{"role": "user", "content": "\n".join(prompt_parts)}]
 
     try:
-        budget.check_context(messages)
         budget.reserve_model_call(messages)
     except BudgetExceeded as exc:
         trace.record("output_safety.budget_exceeded", reason=exc.reason)

@@ -52,6 +52,13 @@ def test_smoke_suite_loads() -> None:
     ]
 
 
+def test_retrieval_db_default_uses_rag_db_path(monkeypatch, tmp_path: Path) -> None:
+    configured_index = tmp_path / "index-genq-columns-v5.sqlite"
+    monkeypatch.setenv("RAG_DB_PATH", str(configured_index))
+
+    assert runner._default_index_path() == configured_index
+
+
 def test_sql_validation_expectation_uses_structural_trace_evidence() -> None:
     case = EvaluationCase.from_dict(
         {

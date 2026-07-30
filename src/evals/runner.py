@@ -18,13 +18,17 @@ from evals.intent_assertions import (
     summarize_intent_results,
 )
 from evals.retrieval_evaluator import run_retrieval_evaluation
-from retrieval.search import DEFAULT_INDEX_PATH
 
 INTENT_PROMPT_VERSION = "v6"
 
 DEFAULT_CASE_DIR = Path("evals")
 DEFAULT_RESULTS_DIR = Path(".local/evals")
 DEFAULT_BENCHMARK_DIR = DEFAULT_CASE_DIR / "retrieval" / "benchmark"
+
+
+def _default_index_path() -> Path:
+    """Use the same RAG_DB_PATH/.env resolution as the agent."""
+    return get_config().index_path
 
 
 def load_cases(path: Path) -> list[EvaluationCase]:
@@ -192,6 +196,17 @@ def _print_retrieval_report(report: dict[str, Any], report_path: Path) -> None:
                 cells += f"{'N/A' if value is None else f'{value:.3f}':<15}"
             print(f"{metric.upper():<20}{cells}")
 
+    first_k = k_values[0]
+    print(f"\nHIT@{first_k} BY FAILURE BUCKET:")
+    print("-" * 70)
+    print(f"{'BUCKET':<32}{'QUERIES':<10}{'DOCUMENT':<14}{'CHUNK':<14}")
+    for bucket, bucket_metrics in metrics["by_failure_bucket"].items():
+        document_hit = bucket_metrics["document"][f"hit@{first_k}"]
+        chunk_hit = bucket_metrics["chunk"][f"hit@{first_k}"]
+        document_cell = "N/A" if document_hit is None else f"{document_hit:.3f}"
+        chunk_cell = "N/A" if chunk_hit is None else f"{chunk_hit:.3f}"
+        print(f"{bucket:<32}{bucket_metrics['query_count']:<10}{document_cell:<14}{chunk_cell:<14}")
+
     print("\nLATENCY (ms):")
     print("-" * 50)
     for label, key in (("Median", "median"), ("P95", "p95"), ("Max", "max")):
@@ -244,8 +259,11 @@ def main() -> None:
     parser.add_argument(
         "--db",
         type=Path,
-        default=DEFAULT_INDEX_PATH,
-        help="SQLite RAG index for the retrieval suite.",
+        default=_default_index_path(),
+        help=(
+            "SQLite RAG index for the retrieval suite "
+            "(default: RAG_DB_PATH or .local/rag/index.sqlite)."
+        ),
     )
     parser.add_argument(
         "--benchmark-dir",

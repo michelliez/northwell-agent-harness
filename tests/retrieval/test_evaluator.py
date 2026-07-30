@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,8 @@ from evals.retrieval_evaluator import (
 from evals.retrieval_gold import validate_semantic_dataset
 from retrieval.indexer import build_index
 
+BENCHMARK_DIR = Path("evals/retrieval/benchmark")
+
 
 def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
     path.write_text(
@@ -45,6 +48,7 @@ def _query(
         "query_id": query_id,
         "query": "important value",
         "intent": "test",
+        "failure_bucket": "named_table_lookup",
         "answerable": answerable,
         "expected_answer": {
             "type": "string" if answerable else "abstain",
@@ -197,10 +201,51 @@ def test_dataset_loads_long_term_schema(tmp_path: Path) -> None:
         queries_path, qrels_path, chunk_qrels_path, catalog_path
     )
     assert queries[0].intent == "test"
+    assert queries[0].failure_bucket == "named_table_lookup"
     assert targets[0].document_key.startswith("epic_clarity:")
     assert chunk_targets[0].heading_path.endswith("Info")
     assert documents["epic_clarity:table:data"].source_path == "data.html"
     validate_semantic_dataset(queries_path, qrels_path, chunk_qrels_path, catalog_path)
+
+
+def test_reviewed_benchmark_covers_analyst_failure_buckets() -> None:
+    queries, targets, chunk_targets, _documents = load_retrieval_dataset(
+        BENCHMARK_DIR / "retrieval_queries.jsonl",
+        BENCHMARK_DIR / "retrieval_qrels.jsonl",
+        BENCHMARK_DIR / "retrieval_chunk_qrels.jsonl",
+        BENCHMARK_DIR / "retrieval_catalog.jsonl",
+    )
+
+    assert Counter(query.failure_bucket for query in queries) == {
+        "named_table_lookup": 5,
+        "named_column_schema": 5,
+        "business_concept_discovery": 5,
+        "cross_table_synthesis": 5,
+        "negative_unsupported": 4,
+    }
+    assert len(targets) == 40
+    assert len(chunk_targets) == 70
+    assert all("analyst_phrased" in query.tags for query in queries)
+
+
+def test_reviewed_queries_do_not_reuse_dictionary_probe_phrases() -> None:
+    queries, _targets, _chunk_targets, _documents = load_retrieval_dataset(
+        BENCHMARK_DIR / "retrieval_queries.jsonl",
+        BENCHMARK_DIR / "retrieval_qrels.jsonl",
+        BENCHMARK_DIR / "retrieval_chunk_qrels.jsonl",
+        BENCHMARK_DIR / "retrieval_catalog.jsonl",
+    )
+    forbidden_probe_phrases = {
+        "load type",
+        "chronicles ini",
+        "job-divided extract",
+        "may contain ehi",
+        "paper form records",
+    }
+
+    for query in queries:
+        normalized = query.query.casefold()
+        assert not any(phrase in normalized for phrase in forbidden_probe_phrases)
 
 
 def test_dataset_rejects_index_specific_ids(tmp_path: Path) -> None:
@@ -369,6 +414,7 @@ def test_evaluation_computes_document_metrics_only(tmp_path: Path) -> None:
     assert report["resolved_query_count"] == 1
     assert report["metrics"]["document"]["hit@5"] == 1.0
     assert report["metrics"]["chunk"]["hit@5"] == 1.0
+    assert report["metrics"]["by_failure_bucket"]["named_table_lookup"]["query_count"] == 1
     assert report["results"][0]["metrics_status"] == "complete"
 
 
