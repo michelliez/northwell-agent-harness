@@ -15,7 +15,13 @@ from sqlglot import exp
 from sqlglot.errors import OptimizeError, ParseError
 from sqlglot.optimizer.qualify import qualify
 
-from sql.models import SchemaSnapshot, SqlValidationResult, SqlViolation
+from sql.compiler import plan_to_bigquery_sql
+from sql.models import (
+    ApprovedQueryPlan,
+    SchemaSnapshot,
+    SqlValidationResult,
+    SqlViolation,
+)
 
 SQL_DIALECT = "bigquery"
 MAX_DECLARED_TABLES = 50
@@ -78,6 +84,7 @@ def validate_sql(
     sql: str,
     tables: list[str],
     snapshot: SchemaSnapshot | None = None,
+    approved_plan: ApprovedQueryPlan | None = None,
 ) -> SqlValidationResult:
     """Apply deterministic safety gates to a candidate BigQuery query.
 
@@ -382,6 +389,28 @@ def validate_sql(
             statement_type=statement_type,
             evidence={"column": _column_reference(unsafe_identifier)},
         )
+
+    if approved_plan is not None:
+        expected_sql = plan_to_bigquery_sql(approved_plan).sql
+        expected_expression = sqlglot.parse_one(expected_sql, read=SQL_DIALECT)
+        candidate_canonical = expression.sql(dialect=SQL_DIALECT, normalize=True)
+        expected_canonical = expected_expression.sql(
+            dialect=SQL_DIALECT,
+            normalize=True,
+        )
+        if candidate_canonical != expected_canonical:
+            return _blocked(
+                "plan_sql_mismatch",
+                declared_tables,
+                referenced_tables=referenced_tables,
+                referenced_columns=referenced_columns,
+                statement_type=statement_type,
+                evidence={
+                    "candidate": candidate_canonical,
+                    "expected": expected_canonical,
+                },
+                repairable=True,
+            )
 
     # Gate 7: normalize
     normalized_sql = qualified.sql(dialect=SQL_DIALECT, pretty=True)

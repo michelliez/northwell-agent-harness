@@ -12,6 +12,7 @@ import pytest
 from agent_host.graph import (
     _route_from_classify_intent,
     _route_from_context_gate,
+    _route_from_fix_sql,
     _route_from_generate_sql,
     _route_from_plan_safety,
     _route_from_policy,
@@ -40,12 +41,19 @@ def _state(**kwargs) -> dict:
         "permissions": {},
         "retrieved_chunks": [],
         "schema_snapshot": None,
+        "permission_scope": None,
         "query_plan": None,
+        "plan_validation": None,
+        "approved_plan": None,
+        "compiled_query": None,
+        "candidate_sql": None,
+        "query_parameters": [],
         "generated_sql": None,
         "validation_result": None,
         "execution_status": None,
         "repair_count": 0,
         "repair_hint": None,
+        "repair_history": [],
         "citations": [],
         "answer": None,
         "clarification_count": 0,
@@ -207,9 +215,9 @@ def test_plan_safety_with_answer_routes_to_result_safety() -> None:
     assert _route_from_plan_safety(state) == "result_safety"
 
 
-def test_plan_safety_without_answer_routes_to_generate_sql() -> None:
+def test_plan_safety_without_answer_routes_to_write_sql() -> None:
     state = _state(answer=None)
-    assert _route_from_plan_safety(state) == "generate_sql"
+    assert _route_from_plan_safety(state) == "write_sql"
 
 
 def test_generate_sql_with_answer_routes_to_result_safety() -> None:
@@ -220,6 +228,16 @@ def test_generate_sql_with_answer_routes_to_result_safety() -> None:
 def test_generate_sql_with_sql_routes_to_validate_sql() -> None:
     state = _state(generated_sql="SELECT COUNT(*) FROM appointments")
     assert _route_from_generate_sql(state) == "validate_sql"
+
+
+def test_successful_fix_routes_back_through_validation() -> None:
+    state = _state(candidate_sql="SELECT COUNT(*) FROM A0H_MAP", answer=None)
+    assert _route_from_fix_sql(state) == "validate_sql"
+
+
+def test_failed_fix_routes_to_result_safety() -> None:
+    state = _state(candidate_sql="old SQL", answer="Repair loop stopped.")
+    assert _route_from_fix_sql(state) == "result_safety"
 
 
 def test_validate_sql_allowed_routes_to_execution_not_configured() -> None:
@@ -244,11 +262,11 @@ def _blocked_result(reason: str, repairable: bool) -> SqlValidationResult:
     )
 
 
-def test_validate_sql_repairable_within_budget_routes_to_generate_sql() -> None:
+def test_validate_sql_repairable_within_budget_routes_to_fix_sql() -> None:
     result = _blocked_result("ungrouped_projection", repairable=True)
-    # repair_count=1 < max_sql_repairs=3 → route to generate_sql
+    # repair_count=1 < max_sql_repairs=3 → route to fix_sql
     state = _state(validation_result=result.model_dump(), repair_count=1)
-    assert _route_from_validate_sql(state) == "generate_sql"
+    assert _route_from_validate_sql(state) == "fix_sql"
 
 
 def test_validate_sql_budget_exhausted_routes_to_result_safety() -> None:

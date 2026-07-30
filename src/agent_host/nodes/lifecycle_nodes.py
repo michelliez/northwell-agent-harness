@@ -58,7 +58,12 @@ def _infer_used_tools(state: AgentState) -> list[str]:
     tools = []
     if state.get("retrieved_chunks"):
         tools.append("retrieve_documentation_context")
-    if state.get("generated_sql"):
+    raw_compiled = state.get("compiled_query") or {}
+    if raw_compiled.get("source") == "deterministic":
+        tools.append("compile_sql")
+    elif raw_compiled.get("source") == "claude_repair":
+        tools.append("fix_sql")
+    elif state.get("generated_sql"):
         tools.append("generate_sql")
     if state.get("validation_result"):
         tools.append("validate_sql")
