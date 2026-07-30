@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from retrieval.genq.dataset_split import (
+from evals.dataset_split import (
     SPLIT_VERSION,
     SplitConfig,
     assign_source_split,

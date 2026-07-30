@@ -44,10 +44,12 @@ Never add Co-Authored-By or any AI attribution to commits, PRs, or comments.
 ```text
 agent_host/    graph lifecycle, state, nodes, config, budget, trace, CLI
 policy/        deterministic screening and policy results
-retrieval/     indexing, search, evidence extraction, index audit
+retrieval/     HTML parsing, indexing, search, evidence extraction, index audit
+retrieval/genq/ offline synthetic-query generation; never in the request path
 sql/           SQL domain models, generation, validation, BigQuery boundary
-               ✅ Complete: dry_run, read_only executor, result safety, audit logging
-evals/         evaluation execution and assertions
+               dry_run, read-only executor, result safety, and audit logging
+               exist as adapters; no graph route reaches them
+evals/         evaluation execution, assertions, dataset splits, query filters
 trace_viewer/  trace parsing, redaction, and rendering
 ```
 

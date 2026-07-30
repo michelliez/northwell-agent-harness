@@ -17,7 +17,7 @@ from typing import Protocol
 
 from pydantic import ValidationError
 
-from retrieval.genq.chunk_models import (
+from retrieval.chunk_models import (
     GeneratedQueryRecord,
     GenerationReport,
     SplitChunkRecord,
@@ -29,8 +29,6 @@ from retrieval.genq.claude_query_generator import (
 
 LOGGER = logging.getLogger(__name__)
 GENERATION_VERSION = "synthetic-query-generation-v2"
-DEFAULT_MODEL = "BeIR/query-gen-msmarco-t5-large-v1"
-PROVIDER_CHOICES = ("t5", "claude")
 DEFAULT_SEED = 42
 DEFAULT_BATCH_SIZE = 8
 DEFAULT_QUERIES_PER_CHUNK = 5
@@ -38,7 +36,6 @@ DEFAULT_MAX_INPUT_TOKENS = 300
 DEFAULT_MAX_QUERY_TOKENS = 64
 DEFAULT_TOP_P = 0.95
 DEFAULT_MIN_PASSAGE_CHARS = 100
-DEVICE_CHOICES = ("auto", "cpu", "cuda", "mps")
 
 
 class QueryGenerator(Protocol):
@@ -68,10 +65,7 @@ class GenerationConfig:
     input_path: Path
     output_path: Path
     report_path: Path
-    provider: str = "t5"
-    model_name: str = DEFAULT_MODEL
-    claude_model_name: str = DEFAULT_CLAUDE_MODEL
-    device: str = "auto"
+    model_name: str = DEFAULT_CLAUDE_MODEL
     seed: int = DEFAULT_SEED
     batch_size: int = DEFAULT_BATCH_SIZE
     queries_per_chunk: int = DEFAULT_QUERIES_PER_CHUNK
@@ -89,12 +83,6 @@ class GenerationConfig:
             raise ValueError("output_path and report_path must be different")
         if not self.model_name.strip():
             raise ValueError("model_name must not be blank")
-        if not self.claude_model_name.strip():
-            raise ValueError("claude_model_name must not be blank")
-        if self.provider not in PROVIDER_CHOICES:
-            raise ValueError(f"provider must be one of {PROVIDER_CHOICES}")
-        if self.device not in DEVICE_CHOICES:
-            raise ValueError(f"device must be one of {DEVICE_CHOICES}")
         for name, value in (
             ("batch_size", self.batch_size),
             ("queries_per_chunk", self.queries_per_chunk),
@@ -111,84 +99,6 @@ class GenerationConfig:
             raise ValueError("min_passage_chars must be non-negative")
         if self.limit is not None and self.limit < 1:
             raise ValueError("limit must be at least 1 or None")
-
-
-class HuggingFaceT5QueryGenerator:
-    """Modern Transformers wrapper for the BEIR MS MARCO query generator."""
-
-    def __init__(self, model_name: str, device: str) -> None:
-        try:
-            import torch  # pyright: ignore[reportMissingImports]
-            from transformers import (  # pyright: ignore[reportMissingImports]
-                AutoModelForSeq2SeqLM,
-                T5Tokenizer,
-            )
-        except ImportError as exc:
-            raise RuntimeError(
-                "GenQ dependencies are missing. Run `uv sync --group genq`."
-            ) from exc
-
-        self._torch = torch
-        self.model_name = model_name
-        self.device_name = self._resolve_device(device)
-        LOGGER.info("Loading tokenizer %s", model_name)
-        # This older T5 checkpoint ships a SentencePiece model, not tokenizer.json.
-        # Avoid Transformers' optional protobuf/tiktoken fast-tokenizer conversion.
-        self._tokenizer = T5Tokenizer.from_pretrained(model_name)
-        LOGGER.info("Loading model %s on %s", model_name, self.device_name)
-        self._model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
-        self._model.eval()
-        self._model.to(self.device_name)
-
-    def _resolve_device(self, requested: str) -> str:
-        if requested != "auto":
-            if requested == "cuda" and not self._torch.cuda.is_available():
-                raise ValueError("CUDA was requested but is not available")
-            if requested == "mps" and not self._torch.backends.mps.is_available():
-                raise ValueError("MPS was requested but is not available")
-            return requested
-        if self._torch.cuda.is_available():
-            return "cuda"
-        if self._torch.backends.mps.is_available():
-            return "mps"
-        return "cpu"
-
-    def generate(
-        self,
-        passages: Sequence[str],
-        *,
-        queries_per_passage: int,
-        max_input_tokens: int,
-        max_query_tokens: int,
-        top_p: float,
-        seed: int,
-    ) -> list[list[str]]:
-        self._torch.manual_seed(seed)
-        if self._torch.cuda.is_available():
-            self._torch.cuda.manual_seed_all(seed)
-        inputs = self._tokenizer(
-            list(passages),
-            max_length=max_input_tokens,
-            truncation=True,
-            padding=True,
-            return_tensors="pt",
-        ).to(self.device_name)
-        with self._torch.inference_mode():
-            outputs = self._model.generate(
-                **inputs,
-                max_new_tokens=max_query_tokens,
-                do_sample=True,
-                top_p=top_p,
-                num_return_sequences=queries_per_passage,
-            )
-        decoded = self._tokenizer.batch_decode(outputs, skip_special_tokens=True)
-        expected = len(passages) * queries_per_passage
-        if len(decoded) != expected:
-            raise RuntimeError(f"Model returned {len(decoded)} sequences; expected {expected}")
-        return [
-            decoded[start : start + queries_per_passage]
-            for start in range(0, len(decoded), queries_per_passage)
-        ]
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -259,12 +169,7 @@ def generate_queries(
     if not selected:
         raise ValueError("No chunks satisfy the configured passage length and limit")
 
-    if generator is not None:
-        active_generator = generator
-    elif config.provider == "claude":
-        active_generator = ClaudeHaikuQueryGenerator(config.claude_model_name)
-    else:
-        active_generator = HuggingFaceT5QueryGenerator(config.model_name, config.device)
+    active_generator = generator or ClaudeHaikuQueryGenerator(config.model_name)
     records: list[GeneratedQueryRecord] = []
     for batch_number, start in enumerate(range(0, len(selected), config.batch_size)):
         batch = selected[start : start + config.batch_size]
@@ -360,17 +265,14 @@ def generate_queries(
 
 
 def main() -> None:
-    """Run raw T5 or Claude query generation from the command line."""
+    """Run raw Claude query generation from the command line."""
     parser = argparse.ArgumentParser(
         description="Generate raw synthetic queries from Stage 2 Epic chunks."
     )
     parser.add_argument("input_path", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
-    parser.add_argument("--provider", choices=PROVIDER_CHOICES, default="t5")
-    parser.add_argument("--model", default=DEFAULT_MODEL, help="T5 model ID")
-    parser.add_argument("--claude-model", default=DEFAULT_CLAUDE_MODEL)
-    parser.add_argument("--device", choices=DEVICE_CHOICES, default="auto")
+    parser.add_argument("--model", default=DEFAULT_CLAUDE_MODEL, help="Claude model ID")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--queries-per-chunk", type=int, default=DEFAULT_QUERIES_PER_CHUNK)
@@ -395,10 +297,7 @@ def main() -> None:
                 input_path=args.input_path,
                 output_path=args.output,
                 report_path=args.report,
-                provider=args.provider,
                 model_name=args.model,
-                claude_model_name=args.claude_model,
-                device=args.device,
                 seed=args.seed,
                 batch_size=args.batch_size,
                 queries_per_chunk=args.queries_per_chunk,

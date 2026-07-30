@@ -64,20 +64,21 @@ incomplete.
 
 ## Synthetic query generation
 
-Synthetic queries are produced by the GenQ pipeline under `src/retrieval/genq/`,
-which is a complete stack of its own: parse the HTML corpus, split it, generate
-queries, filter them, then score retrieval with a FAISS baseline.
+Synthetic queries come from the GenQ pipeline: parse the HTML corpus, split it,
+generate queries with Claude, filter them, then score retrieval with a FAISS
+baseline. It spans three packages by concern — parsing in `retrieval/`,
+splitting and filtering in `evals/`, generation and the baseline in
+`retrieval/genq/`. See [that README](../../src/retrieval/genq/README.md).
 
 ```powershell
 uv run agent-harness-genq-parse <HTML_PATH>
 uv run agent-harness-genq-split
-uv run agent-harness-genq-generate --provider claude
+uv run agent-harness-genq-generate
 uv run agent-harness-genq-filter
-uv run agent-harness-genq-baseline
+uv run --group genq agent-harness-genq-baseline
 ```
 
-`--provider claude` generates with Claude; `--provider t5` uses the local T5
-model. Both need the optional `genq` dependency group:
+Only the FAISS baseline needs the optional `genq` dependency group:
 
 ```powershell
 uv sync --group genq

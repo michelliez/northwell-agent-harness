@@ -44,9 +44,10 @@ There are no internal MCP services and no fabricated data catalog.
 src/
   agent_host/    LangGraph assembly, state, nodes, config, budgets, traces, CLI
   policy/        deterministic content and workflow policy
-  retrieval/     HTML indexing, SQLite search, schema-evidence extraction, audit
-  sql/           SQL models, generation, validation, disabled BigQuery adapter
-  evals/         evaluation runner and deterministic assertions
+  retrieval/     HTML parsing and indexing, SQLite search, schema evidence, audit
+    genq/        offline synthetic-query generation (never in the request path)
+  sql/           SQL models, planning, compilation, validation, BigQuery adapter
+  evals/         evaluation runner, assertions, dataset splits and query filters
   trace_viewer/  local trace rendering
 tests/           unit and graph-routing tests
 evals/           versioned evaluation cases
@@ -85,11 +86,11 @@ uv run agent-harness-rag-audit
 The index defaults to `.local/rag/index.sqlite`. Override it with `RAG_DB_PATH`.
 Approved proprietary HTML and generated SQLite files must remain uncommitted.
 
-Production column chunks use the canonical GenQ parser: each documented column
-is stored as its own SQLite/FTS chunk with the same logical chunk ID and passage
-text used for query generation and semantic-retrieval evaluation. After a
-parser or chunker version change, build a new database rather than modifying a
-working index in place:
+Production column chunks come from `retrieval/column_parser.py`: each documented
+column is stored as its own SQLite/FTS chunk with the same logical chunk ID and
+passage text that offline query generation and semantic-retrieval evaluation
+use. After a parser or chunker version change, build a new database rather than
+modifying a working index in place:
 
 ```powershell
 uv run agent-harness-rag-index <HTML_PATH> --workers 4 --bs 500 `

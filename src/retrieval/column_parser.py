@@ -17,12 +17,14 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 
-from retrieval.genq.chunk_models import ChunkRecord, ChunkType, ParseReport
-from retrieval.indexer import (
+from retrieval.chunk_models import ChunkRecord, ChunkType, ParseReport
+from retrieval.html_utils import (
     css_classes,
     discover_html_files,
     normalized_source_path,
     owned_cell_text,
+    owned_cells,
+    owned_rows,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -74,24 +76,6 @@ def _identifier(value: str) -> str:
     return normalized or "UNNAMED"
 
 
-def _owned_rows(table: Tag) -> list[Tag]:
-    return [row for row in table.find_all("tr") if row.find_parent("table") is table]
-
-
-def _owned_cells(row: Tag) -> list[Tag]:
-    return [cell for cell in row.find_all(["th", "td"]) if cell.find_parent("tr") is row]
-
-
-def _direct_cell_text(cell: Tag) -> str:
-    """Read a cell once while still including values held in a nested one-cell table."""
-    return owned_cell_text(cell)
-
-
-def _metadata_cell_text(cell: Tag) -> str:
-    """Read only text owned by a metadata cell despite Epic's unclosed td tags."""
-    return owned_cell_text(cell)
-
-
 def _table_name(soup: BeautifulSoup, fallback: str) -> str:
     content = soup.find("div", id="oContent")
     header = content.find_previous("div", class_="header") if content else None
@@ -105,16 +89,16 @@ def _table_name(soup: BeautifulSoup, fallback: str) -> str:
 def _metadata_pairs(table: Tag) -> list[tuple[str, str]]:
     """Extract direct KeyValue label/value pairs without flattening whole rows."""
     pairs: list[tuple[str, str]] = []
-    for row in _owned_rows(table):
-        cells = _owned_cells(row)
+    for row in owned_rows(table):
+        cells = owned_cells(row)
         for index, cell in enumerate(cells):
             if "T1Head" not in css_classes(cell):
                 continue
-            label = _metadata_cell_text(cell).rstrip(":").strip()
+            label = owned_cell_text(cell).rstrip(":").strip()
             value = ""
             for candidate in cells[index + 1 :]:
                 if "T1Value" in css_classes(candidate):
-                    value = _metadata_cell_text(candidate)
+                    value = owned_cell_text(candidate)
                     break
                 if "T1Head" in css_classes(candidate):
                     break
@@ -158,19 +142,19 @@ def parse_column_records(
     table_name: str,
     section_name: str,
 ) -> tuple[list[ChunkRecord], list[str]]:
-    rows = _owned_rows(table)
+    rows = owned_rows(table)
     if not rows:
         return [], [f"{source_file}: Column Information contains no rows"]
 
-    header_cells = _owned_cells(rows[0])
-    headers = [_direct_cell_text(cell) or "Ordinal" for cell in header_cells]
+    header_cells = owned_cells(rows[0])
+    headers = [owned_cell_text(cell) or "Ordinal" for cell in header_cells]
     records: list[ChunkRecord] = []
     warnings: list[str] = []
     index = 1
 
     while index < len(rows):
-        cells = _owned_cells(rows[index])
-        texts = [_direct_cell_text(cell) for cell in cells]
+        cells = owned_cells(rows[index])
+        texts = [owned_cell_text(cell) for cell in cells]
         is_definition = len(texts) >= 2 and "T1Head" in css_classes(cells[1])
         if not is_definition:
             index += 1
@@ -184,9 +168,9 @@ def parse_column_records(
         ]
         description = ""
         if index + 1 < len(rows):
-            next_cells = _owned_cells(rows[index + 1])
+            next_cells = owned_cells(rows[index + 1])
             if next_cells and not (len(next_cells) >= 2 and "T1Head" in css_classes(next_cells[1])):
-                description = _clean_text(" ".join(_direct_cell_text(cell) for cell in next_cells))
+                description = _clean_text(" ".join(owned_cell_text(cell) for cell in next_cells))
                 index += 1
 
         parts = [f"Table {table_name}.", f"Column {column_name}."]
@@ -220,8 +204,8 @@ def _generic_table_record(
     section_name: str,
 ) -> ChunkRecord | None:
     rows: list[str] = []
-    for row in _owned_rows(table):
-        values = [_direct_cell_text(cell) for cell in _owned_cells(row)]
+    for row in owned_rows(table):
+        values = [owned_cell_text(cell) for cell in owned_cells(row)]
         rendered = " | ".join(value for value in values if value)
         if rendered:
             rows.append(rendered)

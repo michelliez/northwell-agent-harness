@@ -80,7 +80,7 @@ def test_retrieval_rejects_incompatible_chunker_with_same_schema(tmp_path: Path)
 
 def test_sqlite_column_chunks_use_canonical_genq_records(tmp_path: Path) -> None:
     """Production indexing must store GenQ column IDs, headings, and passage text."""
-    from retrieval.genq.corpus_parser import parse_epic_html
+    from retrieval.column_parser import parse_epic_html
 
     html_path = tmp_path / "ACC_CONFIG_BLK.html"
     html_path.write_text(

@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from retrieval.genq.chunk_models import ChunkRecord
-from retrieval.genq.corpus_parser import ParserConfig, build_corpus, parse_epic_html
+from retrieval.chunk_models import ChunkRecord
+from retrieval.column_parser import ParserConfig, build_corpus, parse_epic_html
 
 HASH = hashlib.sha256(b"value").hexdigest()
 

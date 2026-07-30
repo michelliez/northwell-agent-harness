@@ -18,7 +18,7 @@ import numpy as np  # pyright: ignore[reportMissingImports]
 from pydantic import BaseModel, ValidationError
 
 from evals.retrieval_evaluator import ranked_metrics
-from retrieval.genq.chunk_models import (
+from retrieval.chunk_models import (
     BaselineEvaluationReport,
     BaselineIndexMetadata,
     BaselineQueryResult,

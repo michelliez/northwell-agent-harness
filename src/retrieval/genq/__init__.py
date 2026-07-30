@@ -1,35 +1,6 @@
-"""Corpus preparation for GenQ-based semantic retrieval."""
+"""Offline synthetic-query generation and the MiniLM/FAISS baseline.
 
-from retrieval.genq.chunk_models import (
-    BaselineEvaluationReport,
-    BaselineIndexMetadata,
-    BaselineQueryResult,
-    ChunkRecord,
-    FaissMappingRecord,
-    FilteredQueryRecord,
-    FilterReport,
-    GeneratedQueryRecord,
-    GenerationReport,
-    ParseReport,
-    QueryReviewRecord,
-    RankedChunkHit,
-    SplitChunkRecord,
-    SplitReport,
-)
-
-__all__ = [
-    "BaselineEvaluationReport",
-    "BaselineIndexMetadata",
-    "BaselineQueryResult",
-    "ChunkRecord",
-    "FaissMappingRecord",
-    "FilteredQueryRecord",
-    "FilterReport",
-    "GeneratedQueryRecord",
-    "GenerationReport",
-    "ParseReport",
-    "QueryReviewRecord",
-    "RankedChunkHit",
-    "SplitChunkRecord",
-    "SplitReport",
-]
+Everything here is offline tooling for the future embeddings work and must
+never enter the request path. The corpus schemas it operates on live in
+``retrieval.chunk_models``; splitting and filtering live in ``evals``.
+"""

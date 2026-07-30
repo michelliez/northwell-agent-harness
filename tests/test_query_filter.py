@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from retrieval.genq.query_filter import FilterConfig, filter_queries
+from evals.query_filter import FilterConfig, filter_queries
 
 HASH = hashlib.sha256(b"value").hexdigest()
 

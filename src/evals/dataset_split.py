@@ -16,7 +16,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from retrieval.genq.chunk_models import (
+from retrieval.chunk_models import (
     ChunkRecord,
     SplitChunkRecord,
     SplitName,
