@@ -199,7 +199,7 @@ def test_last_failed_repair_returns_an_answer(
 
     result = sql_nodes.validate_sql_node(
         {
-            "generated_sql": "SELECT COUNT(*) FROM A0H_MAP",
+            "candidate_sql": "SELECT COUNT(*) FROM A0H_MAP",
             "repair_count": 2,
         }  # type: ignore[arg-type]
     )

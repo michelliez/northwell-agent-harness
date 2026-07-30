@@ -24,6 +24,7 @@ from sql.models import (
     DryRunResult,
     PermissionScope,
     QueryPlanAST,
+    RepairAttempt,
     SchemaSnapshot,
     SqlValidationResult,
 )
@@ -168,7 +169,6 @@ def write_sql_node(
     return {
         "compiled_query": compiled.model_dump(),
         "candidate_sql": compiled.sql,
-        "generated_sql": compiled.sql,
         "query_parameters": [item.model_dump() for item in compiled.parameters],
         "validation_result": None,
     }
@@ -183,7 +183,7 @@ def fix_sql_node(
     budget = runtime.context.budget if runtime is not None else budget_from_env()
     trace = _open_trace(state, cfg)
     raw_plan = state.get("approved_plan")
-    candidate = state.get("candidate_sql") or state.get("generated_sql")
+    candidate = state.get("candidate_sql")
     raw_validation = state.get("validation_result")
     if not raw_plan or not candidate or not raw_validation:
         trace.record("fix_sql.missing_state")
@@ -224,22 +224,19 @@ def fix_sql_node(
     return {
         "compiled_query": compiled.model_dump(),
         "candidate_sql": compiled.sql,
-        "generated_sql": compiled.sql,
         "query_parameters": [item.model_dump() for item in compiled.parameters],
         "validation_result": None,
+        # Through RepairAttempt rather than a bare dict: the model already
+        # declares the hash format and attempt floor, and it was being bypassed.
         "repair_history": [
-            {
-                "attempt": attempt,
-                "input_sql_hash": input_hash,
-                "output_sql_hash": output_hash,
-                "error_code": validation.reason or "validation_error",
-            }
+            RepairAttempt(
+                attempt=attempt,
+                input_sql_hash=input_hash,
+                output_sql_hash=output_hash,
+                error_code=validation.reason or "validation_error",
+            ).model_dump()
         ],
     }
-
-
-# Temporary API compatibility for callers importing the former node name.
-generate_sql_node = write_sql_node
 
 
 def validate_sql_node(
@@ -253,7 +250,7 @@ def validate_sql_node(
     """
     cfg = get_config()
     trace = _open_trace(state, cfg)
-    sql = state.get("candidate_sql") or state.get("generated_sql")
+    sql = state.get("candidate_sql")
     raw_plan = state.get("approved_plan")
     repair_count = state.get("repair_count", 0)
     budget = runtime.context.budget if runtime is not None else budget_from_env()
@@ -320,7 +317,7 @@ def execution_not_configured_node(state: AgentState) -> dict:
     """
     cfg = get_config()
     trace = _open_trace(state, cfg)
-    sql = state.get("candidate_sql") or state.get("generated_sql") or ""
+    sql = state.get("candidate_sql") or ""
     raw_validation = state.get("validation_result")
 
     notes: list[str] = []

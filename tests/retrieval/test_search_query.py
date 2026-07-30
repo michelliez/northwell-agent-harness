@@ -4,7 +4,6 @@ import sqlite3
 
 from retrieval.search import (
     document_hint,
-    escape_fts5,
     fts5_queries,
     search_ranked_chunks,
     search_tokens,
@@ -15,7 +14,7 @@ def test_conversational_admissions_query_keeps_only_content_term() -> None:
     query = "which documents can I look at for admissions info"
 
     assert search_tokens(query) == ["admission"]
-    assert escape_fts5(query) == '"admission"*'
+    assert fts5_queries(query) == ['"admission"*']
 
 
 def test_search_tokens_preserve_clinical_identifiers_and_meaningful_suffixes() -> None:
@@ -34,8 +33,8 @@ def test_multiple_terms_use_strict_query_then_or_fallback() -> None:
 
 
 def test_identifiers_use_exact_terms_instead_of_prefix_matching() -> None:
-    assert escape_fts5("What does PAT_ID represent?") == '"pat_id"'
-    assert escape_fts5("What does code 7020 mean?") == '"code"* AND "7020"'
+    assert fts5_queries("What does PAT_ID represent?") == ['"pat_id"']
+    assert fts5_queries("What does code 7020 mean?")[0] == '"code"* AND "7020"'
 
 
 def test_document_hint_prefers_explicit_table_identifier() -> None:

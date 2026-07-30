@@ -32,9 +32,13 @@ The working core includes policy screening, model-backed intent classification,
 SQLite FTS retrieval, documentation answers, evidence-backed schema snapshots,
 typed plan proposals, deterministic plan authorization and BigQuery SQL
 compilation, named query parameters, plan-aware SQLGlot validation, bounded
-repairs, traces, and evaluations. BigQuery dry-run, cost approval, execution,
-result redaction, real identity/role authorization, semantic/vector retrieval,
-and Python generation remain explicit future boundaries.
+repairs, traces, and evaluations.
+
+Execution, result redaction, real identity/role authorization, semantic/vector
+retrieval, and Python generation are future work. Dry-run and cost approval have
+adapters and tests but no graph route. The rest have no code at all — a
+placeholder that only raises reads as partial support, so the boundary gets
+written when the integration is real.
 
 There are no internal MCP services and no fabricated data catalog.
 

@@ -76,22 +76,6 @@ MAX_CHUNKS_PER_DOCUMENT = 3
 CANDIDATE_POOL_MULTIPLIER = 4
 
 
-class RetrievalStrategyNotConfigured(RuntimeError):
-    """Raised when a retrieval strategy has not been implemented."""
-
-
-def vector_search(*_args: object, **_kwargs: object) -> None:
-    raise RetrievalStrategyNotConfigured("Vector retrieval is not configured.")
-
-
-def graph_search(*_args: object, **_kwargs: object) -> None:
-    raise RetrievalStrategyNotConfigured("Graph retrieval is not configured.")
-
-
-def semantic_lookup(*_args: object, **_kwargs: object) -> None:
-    raise RetrievalStrategyNotConfigured("Semantic retrieval is not configured.")
-
-
 FTS_BM25_WEIGHTS = (0.0, 8.0, 10.0, 0.5, 5.0, 1.0)
 DOCUMENT_HINT_EXCLUSIONS = frozenset({"EHI", "ETL", "INI", "SQL"})
 
@@ -270,11 +254,6 @@ def document_hint(query: str) -> str | None:
     if not candidates:
         return None
     return max(candidates, key=lambda c: ("_" in c, len(c)))
-
-
-def escape_fts5(query: str) -> str:
-    queries = fts5_queries(query)
-    return queries[0] if queries else ""
 
 
 def normalize_lookup_text(text: str) -> str:
