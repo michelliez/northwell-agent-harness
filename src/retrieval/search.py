@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 
 from retrieval.index_contract import INDEX_CHUNKER_VERSION, INDEX_SCHEMA_VERSION
@@ -62,6 +63,18 @@ STOPWORDS = {
 
 MAX_FTS_QUERY_TOKENS = 8
 MAX_RAG_TOP_K = 25
+
+# Short tokens become prefix terms, and a prefix term one or two characters long
+# matches a large fraction of the index: measured against the live index, "m"*
+# spans 511,742 chunk-term rows and "a"* spans 905,255, while "hyperspace"* spans
+# 651. They arrive from contractions and filler -- `I'm` splits on the apostrophe
+# and leaves `m` -- so they carry no intent and cost a full posting-list scan.
+# Tokens containing a digit are exempt: they are identifiers, not filler.
+MIN_FTS_TOKEN_CHARS = 3
+
+# fts5vocab exposes the FTS index's own per-term document counts. It is created
+# in `temp` so the main database stays open read-only, and it needs no rebuild.
+FTS_VOCAB_TABLE = "chunks_fts_vocab"
 
 # Results are chunk-level and were previously ungrouped, so one verbose document
 # could take the entire budget: a probe for "patient primary care provider"
@@ -199,9 +212,21 @@ def validate_index(db_path: Path) -> None:
         conn.close()
 
 
+def is_identifier_token(token: str) -> bool:
+    """Identifier-like tokens are the highest-value terms this corpus contains.
+
+    `a0h_delete` matches three chunks; `access` matches 5,690. Underscores and
+    digits mark a Clarity table or column name, so these are never dropped for a
+    filler word and never need a frequency lookup to prove they are rare.
+    """
+    return "_" in token or any(character.isdigit() for character in token)
+
+
 def normalize_search_token(token: str) -> str | None:
     normalized = token.casefold()
     if normalized in STOPWORDS:
+        return None
+    if len(normalized) < MIN_FTS_TOKEN_CHARS and not is_identifier_token(normalized):
         return None
     if (
         normalized.isalpha()
@@ -215,7 +240,44 @@ def normalize_search_token(token: str) -> str | None:
     return normalized
 
 
-def search_tokens(query: str) -> list[str]:
+def select_query_tokens(
+    tokens: list[str],
+    *,
+    limit: int = MAX_FTS_QUERY_TOKENS,
+    document_frequency: Callable[[str], int] | None = None,
+) -> list[str]:
+    """Keep the `limit` most selective tokens, preserving query order.
+
+    Truncating to the first `limit` tokens ranks by position in the sentence,
+    which is unrelated to how much a term narrows the search: on the live
+    benchmark the identifier `a0h_delete` survives as the eighth token by luck,
+    and one more filler word ahead of it would have dropped the only term that
+    identifies anything. Rank by document frequency instead, rarest first.
+
+    Without a `document_frequency` provider this falls back to the positional
+    truncation, so callers holding no index still get a bounded query.
+    """
+    if len(tokens) <= limit:
+        return tokens
+    if document_frequency is None:
+        return tokens[:limit]
+
+    position = {token: index for index, token in enumerate(tokens)}
+
+    def selectivity(token: str) -> tuple[int, int, int]:
+        if is_identifier_token(token):
+            return (0, 0, position[token])
+        return (1, document_frequency(token), position[token])
+
+    keep = set(sorted(tokens, key=selectivity)[:limit])
+    return [token for token in tokens if token in keep]
+
+
+def search_tokens(
+    query: str,
+    *,
+    document_frequency: Callable[[str], int] | None = None,
+) -> list[str]:
     tokens: list[str] = []
     seen: set[str] = set()
     for raw_token in re.findall(r"\w+", query):
@@ -224,15 +286,17 @@ def search_tokens(query: str) -> list[str]:
             continue
         tokens.append(token)
         seen.add(token)
-        if len(tokens) == MAX_FTS_QUERY_TOKENS:
-            break
-    return tokens
+    return select_query_tokens(tokens, document_frequency=document_frequency)
 
 
-def fts5_queries(query: str) -> list[str]:
+def fts5_queries(
+    query: str,
+    *,
+    document_frequency: Callable[[str], int] | None = None,
+) -> list[str]:
     terms = [
         f'"{token}"' if "_" in token or token.isdigit() else f'"{token}"*'
-        for token in search_tokens(query)
+        for token in search_tokens(query, document_frequency=document_frequency)
     ]
     if not terms:
         return []
@@ -240,6 +304,43 @@ def fts5_queries(query: str) -> list[str]:
     if len(terms) == 1:
         return [strict]
     return [strict, " OR ".join(terms)]
+
+
+def document_frequency_lookup(cur: sqlite3.Cursor) -> Callable[[str], int] | None:
+    """Count documents a prefix term would reach, using the FTS index's vocabulary.
+
+    The count is taken over the prefix range rather than the exact term because a
+    prefix term is what `fts5_queries` emits: `"admission"*` also reaches
+    `admissions`, and scoring the exact form would make plural-stripped tokens
+    look rarer than they are.
+
+    Returns None when the index predates fts5vocab support or the table is
+    unavailable, which leaves token selection on its positional fallback.
+    """
+    try:
+        cur.execute(
+            f"CREATE VIRTUAL TABLE IF NOT EXISTS temp.{FTS_VOCAB_TABLE} "
+            "USING fts5vocab(main, chunks_fts, 'row')"
+        )
+    except sqlite3.DatabaseError:
+        return None
+
+    # A private cursor: lookups happen while the caller still holds result rows.
+    vocab_cur = cur.connection.cursor()
+    cache: dict[str, int] = {}
+
+    def lookup(term: str) -> int:
+        if term not in cache:
+            upper_bound = term[:-1] + chr(ord(term[-1]) + 1)
+            row = vocab_cur.execute(
+                f"SELECT COALESCE(SUM(doc), 0) FROM temp.{FTS_VOCAB_TABLE} "
+                "WHERE term >= ? AND term < ?",
+                (term, upper_bound),
+            ).fetchone()
+            cache[term] = int(row[0]) if row is not None else 0
+        return cache[term]
+
+    return lookup
 
 
 def document_hint(query: str) -> str | None:
@@ -399,7 +500,7 @@ def search_ranked_chunks(
     top_k: int,
     max_per_document: int = MAX_CHUNKS_PER_DOCUMENT,
 ) -> list[dict]:
-    queries = fts5_queries(query)
+    queries = fts5_queries(query, document_frequency=document_frequency_lookup(cur))
     if not queries:
         return []
 

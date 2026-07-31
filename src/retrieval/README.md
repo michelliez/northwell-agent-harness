@@ -39,29 +39,51 @@ terms, so any query requiring many terms to co-occur in one chunk will fail.
 ### 1. Tokenize
 
 `search_tokens()` splits on `\w+`, lowercases, drops a 40-word stopword list,
-strips a trailing `s` from words over four characters, dedupes, and **takes the
-first 8** (`MAX_FTS_QUERY_TOKENS`).
+drops tokens under three characters unless they carry a digit
+(`MIN_FTS_TOKEN_CHARS`), strips a trailing `s` from words over four characters,
+dedupes, and keeps the **8 rarest** survivors (`MAX_FTS_QUERY_TOKENS`).
 
-Two problems live here, both visible on a real benchmark query:
+Both rules exist because of measured failures, not taste.
+
+**Short tokens are contraction debris.** `\w+` splits `I'm` on the apostrophe
+and leaves `m`, which step 2 turns into the prefix term `"m"*` — spanning
+511,742 chunk-term rows against 651 for `"hyperspace"*`. 31 of the 50 benchmark
+queries produced such a token (`m`, `in`, `as`, `it`, `id`) and they were the
+slowest 31. Dropping them cut median latency from 599 ms to 228 ms. Tokens with
+a digit are exempt, so `R1` and the `30` in "30-day readmission" survive.
+
+**Rarity beats position.** Truncating to the first 8 tokens ranks by where a
+word sits in the sentence, which is unrelated to how much it narrows the search.
+`select_query_tokens()` ranks by document frequency instead, and identifiers —
+anything containing `_` or a digit — are kept unconditionally without a lookup,
+because they are the most selective terms this corpus has.
+
+The frequencies are exact, from the FTS index's own vocabulary
+(`document_frequency_lookup()`), via an `fts5vocab` table created in `temp` so
+the index stays open read-only and needs no rebuild. The count is taken over the
+prefix range rather than the exact term, because a prefix term is what step 2
+emits: `"admission"*` also reaches `admissions`. Without a provider the function
+falls back to positional truncation, so callers holding no index still work.
+
+On a real benchmark query the difference is not subtle:
 
 ```
 "I'm reviewing the incremental cleanup feed for Hyperspace access.
  What does A0H_DELETE contain, and what field identifies each row?"
 
-tokens: ['m', 'reviewing', 'incremental', 'cleanup', 'feed',
-         'hyperspace', 'access', 'a0h_delete']
+by position:  m, reviewing, incremental, cleanup, feed, hyperspace,
+              access, a0h_delete
+by rarity:    a0h_delete(0), reviewing(64), hyperspace(651), cleanup(698),
+              feed(1050), field(2997), access(5690), each(9049)
+dropped:      row(9911), identifie(23773), incremental(36742), contain(63172)
 ```
 
-**`'m'` comes from `I'm`.** `\w+` splits on the apostrophe, `m` is not in the
-stopword list, and step 2 turns it into the prefix term `"m"*` — which matches
-**219,280 chunks, 45% of the index**. `"a"*` would match 72%. Eleven of the
-24 benchmark queries contain a token of two characters or fewer (`m`, `in`,
-`as`, `it`, `id`), and those eleven are exactly the slowest eleven queries.
+`incremental` looks like a content word and is one of the commonest terms in the
+index — it is the `Load Frequency::` enum value stamped on nearly every metadata
+chunk. Positional truncation kept it and dropped `field`; frequency knows
+better. `a0h_delete` had been surviving at position eight by luck.
 
-**The cap takes the first 8 tokens, not the most informative 8.** Above,
-`a0h_delete` — the only term that identifies anything, matching 3 chunks — is
-the eighth. One more word earlier in the sentence and it would have been
-dropped entirely. Document frequency is never consulted.
+38 of 50 queries still exceed the cap, so this selection runs on most of them.
 
 ### 2. Build FTS queries
 
@@ -81,15 +103,20 @@ tokens to co-occur in a 333-character chunk is close to impossible, so in
 practice retrieval is always the OR fallback. The strict pass is a latency cost
 that returns nothing.
 
-That is also where the latency tail comes from. Measured, whole benchmark:
-median **398 ms**, p95 **2,083 ms**, max **7,061 ms**. A query with a junk
-prefix term scans an enormous posting list in the fallback:
+That is also where the latency tail comes from, because a junk prefix term scans
+an enormous posting list in the fallback. Removing those terms in step 1 is what
+moved the whole distribution:
 
 ```
-"m"*           219,280 chunks    82 ms just to count
-"hyperspace"*      651 chunks     0.5 ms
-"a0h_delete"         3 chunks     0.3 ms
+                        before    after
+median                  599 ms    228 ms
+p95                   2,334 ms  1,614 ms
+max                   7,007 ms  5,318 ms
 ```
+
+The per-token frequency lookups added by step 1 did not cost this back — the
+terms expensive enough to matter are exactly the ones now dropped before any
+lookup happens.
 
 ### 3. Extract a document hint
 
@@ -157,14 +184,14 @@ text, attaches rank and score, and returns them with the index version.
 
 ## What this is good and bad at
 
-Measured, Hit@5 by failure bucket:
+Measured on the 50-query benchmark, document Hit@5 by failure bucket:
 
 | Bucket | Hit@5 | Why |
 |---|---:|---|
 | `named_table_lookup` | **1.000** | Hint fires; exact identifier match |
+| `named_column_schema` | 0.600 | Column names are not unique across 40K docs |
 | `cross_table_synthesis` | 0.400 | Works when a table is named |
-| `named_column_schema` | 0.200 | Column names are not unique across 40K docs |
-| `business_concept_discovery` | **0.000** | No lexical overlap to match on |
+| `business_concept_discovery` | **0.091** | No lexical overlap to match on |
 
 The pattern is one thing: **this system retrieves identifiers, not meaning.**
 
@@ -189,23 +216,24 @@ Expect hybrid, not replacement.
 
 ## Known defects, unfixed on purpose
 
-These are cheap and measurable, and are deliberately **not** fixed yet: the
-benchmark is the instrument, and you do not recalibrate the instrument and the
-subject in the same change. Grow the benchmark first, then fix these and read
-the delta.
+The two tokenizer defects listed here are fixed; see step 1. These three remain,
+deliberately, so that each is readable as its own delta against the benchmark:
 
-1. **Drop tokens of ≤2 characters.** `"m"*` from `I'm` scans 45% of the index.
-   Affects 11 of 24 queries and every slow one.
-2. **Select the 8 most informative tokens, not the first 8.** Rank by document
-   frequency so an identifier is never dropped for a filler word.
-3. **Reconsider the strict AND pass.** It returns nothing on 24 of 24 queries
+1. **Reconsider the strict AND pass.** It returns nothing on 50 of 50 queries
    while costing a full query round trip. Either require a subset of tokens or
    remove it.
-4. **Validate the document hint.** Confirm the candidate matches a real
+2. **Validate the document hint.** Confirm the candidate matches a real
    `source_path` before letting it override ranking; `LINE` and `ABN` currently
    do not.
-5. **Reconsider `MAX_CHUNKS_PER_DOCUMENT = 3` at `k=5`.** Three chunks of one
+3. **Reconsider `MAX_CHUNKS_PER_DOCUMENT = 3` at `k=5`.** Three chunks of one
    wrong document is most of a top-5 budget.
+
+Fixing the tokenizer moved document Hit@5 from 0.488 to 0.512 and recall@5 from
+0.427 to 0.463 while holding `named_table_lookup` at 1.000. Document MRR fell
+0.476 → 0.462: a wider token set surfaces more correct documents but not always
+at the same rank. Hit and recall rising while MRR dips is the expected shape of
+a recall change, and it is the trade this system wants — a document that was
+absent is now retrievable.
 
 Numbers here are comparable only within one `chunker_version`
 (`index_contract.py`). Re-measure with `agent-harness-eval --suite retrieval`
