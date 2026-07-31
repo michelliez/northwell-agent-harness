@@ -38,32 +38,36 @@ terms, so any query requiring many terms to co-occur in one chunk will fail.
 
 ### 1. Tokenize
 
-`search_tokens()` splits on `\w+`, lowercases, drops a 40-word stopword list,
-drops tokens under three characters unless they carry a digit
-(`MIN_FTS_TOKEN_CHARS`), strips a trailing `s` from words over four characters,
-dedupes, and keeps the **8 rarest** survivors (`MAX_FTS_QUERY_TOKENS`).
+`search_tokens()` splits on `\w+`, lowercases, drops the stopword list, strips a
+trailing `s` from words over four characters, removes terms that cannot match
+the index, dedupes, and keeps the **8 most selective** survivors
+(`MAX_FTS_QUERY_TOKENS`).
 
 Both rules exist because of measured failures, not taste.
 
-**Short tokens are contraction debris.** `\w+` splits `I'm` on the apostrophe
-and leaves `m`, which step 2 turns into the prefix term `"m"*` — spanning
-511,742 chunk-term rows against 651 for `"hyperspace"*`. 31 of the 50 benchmark
-queries produced such a token (`m`, `in`, `as`, `it`, `id`) and they were the
-slowest 31. Dropping them cut median latency from 599 ms to 228 ms. Tokens with
-a digit are exempt, so `R1` and the `30` in "30-day readmission" survive.
+**Short tokens must not become prefixes.** `\w+` splits `I'm` on the apostrophe
+and leaves `m`; `"m"*` spans 511,742 chunk-term rows against 651 for
+`"hyperspace"*`. Tokens under three characters are therefore dropped except for
+a small domain set (`DX`, `ED`, `ER`, `IP`, `OR`, `RX`), which is matched exactly.
+Digit-bearing tokens survive normalization but are also matched exactly.
 
 **Rarity beats position.** Truncating to the first 8 tokens ranks by where a
 word sits in the sentence, which is unrelated to how much it narrows the search.
-`select_query_tokens()` ranks by document frequency instead, and identifiers —
-anything containing `_` or a digit — are kept unconditionally without a lookup,
-because they are the most selective terms this corpus has.
+`select_query_tokens()` ranks by estimated FTS match volume instead. A schema
+identifier contains `_` or mixes letters and digits; it receives priority only
+after the index confirms that its exact phrase matches at least one row. Numeric
+literals are exact terms but are not automatically treated as identifiers.
 
-The frequencies are exact, from the FTS index's own vocabulary
-(`document_frequency_lookup()`), via an `fts5vocab` table created in `temp` so
-the index stays open read-only and needs no rebuild. The count is taken over the
-prefix range rather than the exact term, because a prefix term is what step 2
-emits: `"admission"*` also reaches `admissions`. Without a provider the function
-falls back to positional truncation, so callers holding no index still work.
+`match_count_lookup()` uses real MATCH row counts for exact terms and identifier
+phrases. Prefix terms use the sum of the FTS vocabulary posting counts across
+the prefix range, via an `fts5vocab` table created in `temp` so the main index
+stays read-only. That sum is a fast estimate, not an exact distinct-row count: a
+chunk containing both `admission` and `admissions` contributes to both posting
+lists. Without a provider the function falls back to positional truncation.
+
+Zero-count terms are removed. An OR clause that cannot match cannot improve
+recall, and treating zero as "rarest" allowed unseen jargon or misspellings to
+consume the eight-token budget and displace terms that could retrieve rows.
 
 On a real benchmark query the difference is not subtle:
 
@@ -73,7 +77,7 @@ On a real benchmark query the difference is not subtle:
 
 by position:  m, reviewing, incremental, cleanup, feed, hyperspace,
               access, a0h_delete
-by rarity:    a0h_delete(0), reviewing(64), hyperspace(651), cleanup(698),
+by rarity:    a0h_delete(3), reviewing(64), hyperspace(651), cleanup(698),
               feed(1050), field(2997), access(5690), each(9049)
 dropped:      row(9911), identifie(23773), incremental(36742), contain(63172)
 ```
@@ -93,37 +97,39 @@ better. `a0h_delete` had been surviving at position eight by luck.
 " OR ".join(terms)    # any token
 ```
 
-Tokens containing `_` or consisting of digits become exact terms (`"a0h_delete"`);
-everything else becomes a prefix term (`"access"*`).
+Schema identifiers, numeric literals, and the short domain terms become exact
+terms (`"a0h_delete"`, `"r1"`, `"ed"`); ordinary words become prefix terms
+(`"access"*`). `fts5_term()` owns this classification so selection and query
+construction cannot disagree about a token's match mode.
 
 A conjunctive pass used to run first, and its rows were preferred on the theory
-that a chunk containing every term beats one containing any term. It does — it
-just never happens. **The strict pass returned zero rows for 50 of 50 benchmark
-queries.** Not "rarely useful": never useful, on any analyst-phrased question,
-because requiring eight tokens to co-occur inside a 333-character chunk is close
-to impossible. It was removed.
+that a chunk containing every term beats one containing any term. **The strict
+pass returned zero rows for all 50 gold benchmark queries.** That establishes
+that it was dead for this workload, not that conjunction can never match some
+future short query. It was removed; the OR ranking already rewards chunks that
+match multiple terms through BM25.
 
 Be precise about what removing it bought. Measured across the benchmark, the
 strict pass cost **13 ms per query** against the disjunction's **133 ms** — it
-was dead weight, not the latency tail. Deleting a branch that could never fire
-is the reason; the 9% is a side effect.
+was dead weight for the measured workload, not the latency tail.
 
-Requiring a *subset* — the two or three rarest terms — is plausible, and cheap to
-build now that step 1 already ranks by frequency. That is a precision change with
-its own delta, and it has not been tried.
+Subset conjunction is deliberately not pursued in this baseline. It is another
+ranking parameter to tune on the same small gold set, while dense retrieval is
+the component intended to address the measured semantic-recall deficit.
 
 The latency tail comes from step 1, not from here: a junk prefix term scans an
 enormous posting list, and dropping those terms moved the whole distribution.
 
 ```
-                    original   tokenizer   no AND pass
-median                599 ms      228 ms        199 ms
-p95                 2,334 ms    1,614 ms      1,507 ms
+                    original   tokenizer   no AND pass   frozen
+median                599 ms      228 ms        199 ms    209 ms
+p95                 2,334 ms    1,614 ms      1,507 ms  1,518 ms
 ```
 
-The per-token frequency lookups added by step 1 did not cost this back — the
-terms expensive enough to matter are exactly the ones now dropped before any
-lookup happens.
+The frozen pass checks every surviving token for index evidence, including
+queries below the eight-token cap. Across all 50 queries those checks took about
+0.83 seconds total in a direct live-index probe. The warm end-to-end run added
+10 ms at the median and 11 ms at p95 versus the previous pass.
 
 `max` is deliberately absent. It lands on whichever query runs first and pays the
 cold read on a 1.1 GB index, so it moves by seconds between runs that are
@@ -226,17 +232,21 @@ precise about the scope: the deficit is concentrated in
 rare tokens like `ABN_STATUS_C`, which is exactly what this corpus is made of.
 Expect hybrid, not replacement.
 
-## Known defects, unfixed on purpose
+## Frozen lexical baseline
 
-The two tokenizer defects and the strict AND pass are fixed; see steps 1 and 2.
-These two remain, deliberately, so each is readable as its own delta:
+The lexical ranker is frozen after the evidence-aware token-selection pass.
+Further work should compare dense and hybrid retrieval rather than tune more FTS
+parameters against these same 50 gold queries.
 
-1. **Validate the document hint.** Confirm the candidate matches a real
-   `source_path` before letting it override ranking; `LINE` and `ABN` currently
-   do not. This is the highest-value one left — step 4 sorts by the hint before
-   score, so a wrong hint outranks every correct result.
-2. **Reconsider `MAX_CHUNKS_PER_DOCUMENT = 3` at `k=5`.** Three chunks of one
-   wrong document is most of a top-5 budget.
+Two behaviors remain visible but move to hybrid evaluation:
+
+1. Invalid document hints such as `LINE` and `ABN` match no live document, so
+   the current SQL assigns every result the same `document_rank`; existence
+   validation alone would not change these rankings. A future hint feature needs
+   confidence semantics, not merely a catalog lookup.
+2. `MAX_CHUNKS_PER_DOCUMENT = 3` can let one wrong document consume most of a
+   top-5 budget. The best cap depends on the lexical/dense fusion candidate set,
+   so it should be selected with the hybrid postprocessor rather than here.
 
 Fixing the tokenizer moved document Hit@5 from 0.488 to 0.512 and recall@5 from
 0.427 to 0.463 while holding `named_table_lookup` at 1.000. Document MRR fell
@@ -245,9 +255,14 @@ at the same rank. Hit and recall rising while MRR dips is the expected shape of
 a recall change, and it is the trade this system wants — a document that was
 absent is now retrievable.
 
-Removing the strict AND pass changed **no quality metric at any level**, to three
-decimals. That is the expected result for deleting a branch that returned zero
-rows on every query, and it is the evidence that it really did.
+Removing the strict AND pass changed all 50 complete chunk rankings by exactly
+zero positions. That is stronger evidence than rounded aggregate metrics that
+the branch never contributed to this workload.
+
+The final evidence-aware pass preserved every aggregate document and chunk
+quality metric exactly through `k=10`. Two rankings changed: Q18 dropped the
+zero-hit word `joinable`, and unsupported Q47 dropped another zero-hit term.
+Neither change affected a scored metric.
 
 Numbers here are comparable only within one `chunker_version`
 (`index_contract.py`). Re-measure with `agent-harness-eval --suite retrieval`

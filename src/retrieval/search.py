@@ -43,6 +43,7 @@ STOPWORDS = {
     "me",
     "of",
     "on",
+    "or",
     "please",
     "represent",
     "represents",
@@ -64,13 +65,14 @@ STOPWORDS = {
 MAX_FTS_QUERY_TOKENS = 8
 MAX_RAG_TOP_K = 25
 
-# Short tokens become prefix terms, and a prefix term one or two characters long
-# matches a large fraction of the index: measured against the live index, "m"*
-# spans 511,742 chunk-term rows and "a"* spans 905,255, while "hyperspace"* spans
-# 651. They arrive from contractions and filler -- `I'm` splits on the apostrophe
-# and leaves `m` -- so they carry no intent and cost a full posting-list scan.
-# Tokens containing a digit are exempt: they are identifiers, not filler.
+# Short prefix terms match a large fraction of the index: measured against the
+# live index, "m"* spans 511,742 chunk-term rows and "a"* spans 905,255, while
+# "hyperspace"* spans 651. Most short tokens are contractions or filler, but a
+# few domain acronyms are useful. Keep those and query them exactly, never as
+# prefixes. Tokens containing a digit also survive normalization so exact codes
+# can be considered, but their index evidence decides whether they stay.
 MIN_FTS_TOKEN_CHARS = 3
+SHORT_EXACT_TERMS = frozenset({"dx", "ed", "er", "ip", "or", "rx"})
 
 # fts5vocab exposes the FTS index's own per-term document counts. It is created
 # in `temp` so the main database stays open read-only, and it needs no rebuild.
@@ -215,18 +217,38 @@ def validate_index(db_path: Path) -> None:
 def is_identifier_token(token: str) -> bool:
     """Identifier-like tokens are the highest-value terms this corpus contains.
 
-    `a0h_delete` matches three chunks; `access` matches 5,690. Underscores and
-    digits mark a Clarity table or column name, so these are never dropped for a
-    filler word and never need a frequency lookup to prove they are rare.
+    `a0h_delete` matches three chunks; `access` matches 5,690. Underscores and a
+    mixture of letters and digits mark a likely Clarity table or column name.
+    All-digit tokens are values or codes, not schema identifiers.
     """
-    return "_" in token or any(character.isdigit() for character in token)
+    has_digit = any(character.isdigit() for character in token)
+    has_alpha = any(character.isalpha() for character in token)
+    return "_" in token or (has_digit and has_alpha)
+
+
+def uses_exact_fts_term(token: str) -> bool:
+    """Return whether a token should be matched exactly rather than as a prefix."""
+    return is_identifier_token(token) or token.isdigit() or token in SHORT_EXACT_TERMS
+
+
+def fts5_term(token: str) -> str:
+    """Render one normalized token using its single authoritative match mode."""
+    quoted = f'"{token}"'
+    return quoted if uses_exact_fts_term(token) else f"{quoted}*"
 
 
 def normalize_search_token(token: str) -> str | None:
     normalized = token.casefold()
-    if normalized in STOPWORDS:
+    # Lowercase "or" is syntax; uppercase "OR" is the clinical operating-room
+    # acronym and belongs to the exact-match short domain set.
+    preserve_stopword = token == "OR"
+    if normalized in STOPWORDS and not preserve_stopword:
         return None
-    if len(normalized) < MIN_FTS_TOKEN_CHARS and not is_identifier_token(normalized):
+    if (
+        len(normalized) < MIN_FTS_TOKEN_CHARS
+        and not is_identifier_token(normalized)
+        and normalized not in SHORT_EXACT_TERMS
+    ):
         return None
     if (
         normalized.isalpha()
@@ -235,7 +257,7 @@ def normalize_search_token(token: str) -> str | None:
         and not normalized.endswith(("is", "ss", "us"))
     ):
         normalized = normalized[:-1]
-    if normalized in STOPWORDS:
+    if normalized in STOPWORDS and not preserve_stopword:
         return None
     return normalized
 
@@ -244,39 +266,43 @@ def select_query_tokens(
     tokens: list[str],
     *,
     limit: int = MAX_FTS_QUERY_TOKENS,
-    document_frequency: Callable[[str], int] | None = None,
+    match_count: Callable[[str], int] | None = None,
 ) -> list[str]:
-    """Keep the `limit` most selective tokens, preserving query order.
+    """Keep up to `limit` evidence-backed selective tokens in query order.
 
     Truncating to the first `limit` tokens ranks by position in the sentence,
     which is unrelated to how much a term narrows the search: on the live
     benchmark the identifier `a0h_delete` survives as the eighth token by luck,
     and one more filler word ahead of it would have dropped the only term that
-    identifies anything. Rank by document frequency instead, rarest first.
+    identifies anything. Rank by estimated match volume instead, rarest first.
 
-    Without a `document_frequency` provider this falls back to the positional
-    truncation, so callers holding no index still get a bounded query.
+    A zero-count term cannot add a row to an OR query, so it is removed rather
+    than treated as maximally selective. Identifier-like terms receive priority
+    only after the index confirms that their exact phrase can match.
+
+    Without a `match_count` provider this falls back to positional truncation,
+    so callers holding no index still get a bounded query.
     """
-    if len(tokens) <= limit:
-        return tokens
-    if document_frequency is None:
+    if match_count is None:
         return tokens[:limit]
 
     position = {token: index for index, token in enumerate(tokens)}
+    counts = {token: match_count(token) for token in tokens}
+    matching_tokens = [token for token in tokens if counts[token] > 0]
 
     def selectivity(token: str) -> tuple[int, int, int]:
         if is_identifier_token(token):
             return (0, 0, position[token])
-        return (1, document_frequency(token), position[token])
+        return (1, counts[token], position[token])
 
-    keep = set(sorted(tokens, key=selectivity)[:limit])
-    return [token for token in tokens if token in keep]
+    keep = set(sorted(matching_tokens, key=selectivity)[:limit])
+    return [token for token in matching_tokens if token in keep]
 
 
 def search_tokens(
     query: str,
     *,
-    document_frequency: Callable[[str], int] | None = None,
+    match_count: Callable[[str], int] | None = None,
 ) -> list[str]:
     tokens: list[str] = []
     seen: set[str] = set()
@@ -286,13 +312,13 @@ def search_tokens(
             continue
         tokens.append(token)
         seen.add(token)
-    return select_query_tokens(tokens, document_frequency=document_frequency)
+    return select_query_tokens(tokens, match_count=match_count)
 
 
 def fts5_query(
     query: str,
     *,
-    document_frequency: Callable[[str], int] | None = None,
+    match_count: Callable[[str], int] | None = None,
 ) -> str:
     """Build the FTS5 MATCH expression, or an empty string if nothing survives.
 
@@ -302,24 +328,20 @@ def fts5_query(
     up to eight terms to co-occur inside a 333-character chunk returned zero rows
     for 50 of 50 benchmark queries, so the branch only ever cost a round trip.
 
-    Requiring a *subset* -- the two or three rarest terms -- is plausible and now
-    cheap to build, since `document_frequency_lookup` already ranks them. That is
-    a precision change with its own delta to measure, not part of this removal.
+    Requiring a *subset* -- the two or three rarest terms -- is possible, but it
+    is deliberately outside the frozen lexical baseline.
     """
-    terms = [
-        f'"{token}"' if "_" in token or token.isdigit() else f'"{token}"*'
-        for token in search_tokens(query, document_frequency=document_frequency)
-    ]
+    terms = [fts5_term(token) for token in search_tokens(query, match_count=match_count)]
     return " OR ".join(terms)
 
 
-def document_frequency_lookup(cur: sqlite3.Cursor) -> Callable[[str], int] | None:
-    """Count documents a prefix term would reach, using the FTS index's vocabulary.
+def match_count_lookup(cur: sqlite3.Cursor) -> Callable[[str], int] | None:
+    """Estimate how many FTS rows a token's emitted expression can reach.
 
-    The count is taken over the prefix range rather than the exact term because a
-    prefix term is what `fts5_query` emits: `"admission"*` also reaches
-    `admissions`, and scoring the exact form would make plural-stripped tokens
-    look rarer than they are.
+    Exact terms and identifier phrases use their real MATCH row count. Prefix
+    terms use the sum of the FTS vocabulary's per-term row counts across the
+    prefix range. That is a fast posting-volume estimate, not an exact distinct
+    row count: a row containing two matching vocabulary terms is counted twice.
 
     Returns None when the index predates fts5vocab support or the table is
     unavailable, which leaves token selection on its positional fallback.
@@ -338,12 +360,18 @@ def document_frequency_lookup(cur: sqlite3.Cursor) -> Callable[[str], int] | Non
 
     def lookup(term: str) -> int:
         if term not in cache:
-            upper_bound = term[:-1] + chr(ord(term[-1]) + 1)
-            row = vocab_cur.execute(
-                f"SELECT COALESCE(SUM(doc), 0) FROM temp.{FTS_VOCAB_TABLE} "
-                "WHERE term >= ? AND term < ?",
-                (term, upper_bound),
-            ).fetchone()
+            if uses_exact_fts_term(term):
+                row = vocab_cur.execute(
+                    "SELECT COUNT(*) FROM chunks_fts WHERE chunks_fts MATCH ?",
+                    (fts5_term(term),),
+                ).fetchone()
+            else:
+                upper_bound = term[:-1] + chr(ord(term[-1]) + 1)
+                row = vocab_cur.execute(
+                    f"SELECT COALESCE(SUM(doc), 0) FROM temp.{FTS_VOCAB_TABLE} "
+                    "WHERE term >= ? AND term < ?",
+                    (term, upper_bound),
+                ).fetchone()
             cache[term] = int(row[0]) if row is not None else 0
         return cache[term]
 
@@ -507,7 +535,7 @@ def search_ranked_chunks(
     top_k: int,
     max_per_document: int = MAX_CHUNKS_PER_DOCUMENT,
 ) -> list[dict]:
-    match_expression = fts5_query(query, document_frequency=document_frequency_lookup(cur))
+    match_expression = fts5_query(query, match_count=match_count_lookup(cur))
     if not match_expression:
         return []
 

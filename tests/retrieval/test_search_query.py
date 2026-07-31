@@ -4,9 +4,9 @@ import sqlite3
 
 from retrieval.search import (
     MAX_FTS_QUERY_TOKENS,
-    document_frequency_lookup,
     document_hint,
     fts5_query,
+    match_count_lookup,
     search_ranked_chunks,
     search_tokens,
     select_query_tokens,
@@ -37,6 +37,7 @@ def test_multiple_terms_join_as_a_disjunction() -> None:
 def test_identifiers_use_exact_terms_instead_of_prefix_matching() -> None:
     assert fts5_query("What does PAT_ID represent?") == '"pat_id"'
     assert fts5_query("What does code 7020 mean?") == '"code"* OR "7020"'
+    assert fts5_query("What does R1 mean?") == '"r1"'
 
 
 def test_query_with_no_surviving_tokens_matches_nothing() -> None:
@@ -58,26 +59,58 @@ def test_short_tokens_carrying_a_digit_survive_as_identifiers() -> None:
     assert search_tokens("what does R1 mean") == ["r1"]
 
 
+def test_short_domain_terms_survive_as_exact_terms() -> None:
+    assert fts5_query("ED visits and IP admissions") == ('"ed" OR "visit"* OR "ip" OR "admission"*')
+    assert fts5_query("OR cases") == '"or" OR "case"*'
+    assert fts5_query("current snapshot or history") == '"current"* OR "snapshot"* OR "history"*'
+
+
 def test_token_selection_keeps_the_rarest_terms_not_the_earliest() -> None:
     tokens = ["reviewing", "cleanup", "feed", "hyperspace"]
     frequencies = {"reviewing": 90_000, "cleanup": 40_000, "feed": 8_000, "hyperspace": 651}
 
-    selected = select_query_tokens(tokens, limit=2, document_frequency=frequencies.__getitem__)
+    selected = select_query_tokens(tokens, limit=2, match_count=frequencies.__getitem__)
 
     assert selected == ["feed", "hyperspace"]
 
 
-def test_token_selection_never_drops_an_identifier_for_a_common_word() -> None:
+def test_token_selection_prioritizes_an_identifier_only_when_it_can_match() -> None:
     tokens = ["patient", "encounter", "pat_enc"]
+    frequencies = {"patient": 60_000, "encounter": 12_000, "pat_enc": 3}
 
     selected = select_query_tokens(
         tokens,
         limit=1,
-        # An identifier is kept without consulting frequency at all.
-        document_frequency=lambda _: 0,
+        match_count=frequencies.__getitem__,
     )
 
     assert selected == ["pat_enc"]
+
+
+def test_token_selection_drops_terms_that_cannot_match() -> None:
+    tokens = ["unknown", "encounter", "missing_identifier"]
+    frequencies = {"unknown": 0, "encounter": 12_000, "missing_identifier": 0}
+
+    assert select_query_tokens(tokens, match_count=frequencies.__getitem__) == ["encounter"]
+
+
+def test_zero_count_terms_cannot_crowd_a_real_term_out_of_the_cap() -> None:
+    unknown = [f"unknown{index}" for index in range(MAX_FTS_QUERY_TOKENS)]
+    tokens = [*unknown, "encounter"]
+
+    selected = select_query_tokens(
+        tokens,
+        match_count=lambda term: 12_000 if term == "encounter" else 0,
+    )
+
+    assert selected == ["encounter"]
+
+
+def test_numeric_values_are_not_prioritized_as_schema_identifiers() -> None:
+    tokens = ["patient", "448219"]
+    frequencies = {"patient": 60_000, "448219": 0}
+
+    assert select_query_tokens(tokens, limit=1, match_count=frequencies.__getitem__) == ["patient"]
 
 
 def test_token_selection_falls_back_to_position_without_an_index() -> None:
@@ -103,7 +136,7 @@ def _fts_connection(rows: list[tuple[str, ...]]) -> sqlite3.Connection:
     return conn
 
 
-def test_document_frequency_counts_the_prefix_range_not_the_exact_term() -> None:
+def test_match_count_estimates_prefix_posting_volume() -> None:
     conn = _fts_connection(
         [
             ("one", "A.html", "A", "metadata", "A", "admissions admissions"),
@@ -112,14 +145,28 @@ def test_document_frequency_counts_the_prefix_range_not_the_exact_term() -> None
         ]
     )
 
-    lookup = document_frequency_lookup(conn.cursor())
+    lookup = match_count_lookup(conn.cursor())
     assert lookup is not None
 
-    # "admission"* reaches both the singular and plural rows; the exact term
-    # alone would report one and make a stripped plural look artificially rare.
+    # "admission"* reaches both the singular and plural rows. The estimate sums
+    # both vocabulary posting lists rather than scoring the exact singular form.
     assert lookup("admission") == 2
     assert lookup("hyperspace") == 1
     assert lookup("absent") == 0
+
+
+def test_match_count_uses_real_match_rows_for_identifier_phrases() -> None:
+    conn = _fts_connection(
+        [
+            ("one", "PAT_ENC.html", "PAT_ENC", "metadata", "PAT_ENC", "patient encounter"),
+            ("two", "OTHER.html", "OTHER", "metadata", "OTHER", "patient only"),
+        ]
+    )
+
+    lookup = match_count_lookup(conn.cursor())
+    assert lookup is not None
+
+    assert lookup("pat_enc") == 1
 
 
 def test_ranked_search_keeps_the_identifier_when_the_query_overflows_the_cap() -> None:
@@ -153,9 +200,7 @@ def test_ranked_search_keeps_the_identifier_when_the_query_overflows_the_cap() -
         "specified range what does A0H_DELETE contain"
     )
 
-    assert "a0h_delete" in search_tokens(
-        query, document_frequency=document_frequency_lookup(conn.cursor())
-    )
+    assert "a0h_delete" in search_tokens(query, match_count=match_count_lookup(conn.cursor()))
 
     results = search_ranked_chunks(conn.cursor(), query=query, top_k=3)
     assert results[0]["chunk_id"] == "target"
