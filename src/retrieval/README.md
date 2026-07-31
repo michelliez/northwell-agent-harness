@@ -85,38 +85,50 @@ better. `a0h_delete` had been surviving at position eight by luck.
 
 38 of 50 queries still exceed the cap, so this selection runs on most of them.
 
-### 2. Build FTS queries
+### 2. Build the FTS query
 
-`fts5_queries()` emits up to two:
+`fts5_query()` emits one disjunction:
 
 ```python
-strict   = " AND ".join(terms)   # all tokens must appear in one chunk
-fallback = " OR ".join(terms)    # any token
+" OR ".join(terms)    # any token
 ```
 
 Tokens containing `_` or consisting of digits become exact terms (`"a0h_delete"`);
 everything else becomes a prefix term (`"access"*`).
 
-**The strict pass returned zero rows for 24 of 24 benchmark queries.** Not
-"rarely useful" — never useful, on any analyst-phrased question. Requiring eight
-tokens to co-occur in a 333-character chunk is close to impossible, so in
-practice retrieval is always the OR fallback. The strict pass is a latency cost
-that returns nothing.
+A conjunctive pass used to run first, and its rows were preferred on the theory
+that a chunk containing every term beats one containing any term. It does — it
+just never happens. **The strict pass returned zero rows for 50 of 50 benchmark
+queries.** Not "rarely useful": never useful, on any analyst-phrased question,
+because requiring eight tokens to co-occur inside a 333-character chunk is close
+to impossible. It was removed.
 
-That is also where the latency tail comes from, because a junk prefix term scans
-an enormous posting list in the fallback. Removing those terms in step 1 is what
-moved the whole distribution:
+Be precise about what removing it bought. Measured across the benchmark, the
+strict pass cost **13 ms per query** against the disjunction's **133 ms** — it
+was dead weight, not the latency tail. Deleting a branch that could never fire
+is the reason; the 9% is a side effect.
+
+Requiring a *subset* — the two or three rarest terms — is plausible, and cheap to
+build now that step 1 already ranks by frequency. That is a precision change with
+its own delta, and it has not been tried.
+
+The latency tail comes from step 1, not from here: a junk prefix term scans an
+enormous posting list, and dropping those terms moved the whole distribution.
 
 ```
-                        before    after
-median                  599 ms    228 ms
-p95                   2,334 ms  1,614 ms
-max                   7,007 ms  5,318 ms
+                    original   tokenizer   no AND pass
+median                599 ms      228 ms        199 ms
+p95                 2,334 ms    1,614 ms      1,507 ms
 ```
 
 The per-token frequency lookups added by step 1 did not cost this back — the
 terms expensive enough to matter are exactly the ones now dropped before any
 lookup happens.
+
+`max` is deliberately absent. It lands on whichever query runs first and pays the
+cold read on a 1.1 GB index, so it moves by seconds between runs that are
+otherwise identical. Read median and p95; treat a change in `max` as unattributed
+until a warm rerun reproduces it.
 
 ### 3. Extract a document hint
 
@@ -216,16 +228,14 @@ Expect hybrid, not replacement.
 
 ## Known defects, unfixed on purpose
 
-The two tokenizer defects listed here are fixed; see step 1. These three remain,
-deliberately, so that each is readable as its own delta against the benchmark:
+The two tokenizer defects and the strict AND pass are fixed; see steps 1 and 2.
+These two remain, deliberately, so each is readable as its own delta:
 
-1. **Reconsider the strict AND pass.** It returns nothing on 50 of 50 queries
-   while costing a full query round trip. Either require a subset of tokens or
-   remove it.
-2. **Validate the document hint.** Confirm the candidate matches a real
+1. **Validate the document hint.** Confirm the candidate matches a real
    `source_path` before letting it override ranking; `LINE` and `ABN` currently
-   do not.
-3. **Reconsider `MAX_CHUNKS_PER_DOCUMENT = 3` at `k=5`.** Three chunks of one
+   do not. This is the highest-value one left — step 4 sorts by the hint before
+   score, so a wrong hint outranks every correct result.
+2. **Reconsider `MAX_CHUNKS_PER_DOCUMENT = 3` at `k=5`.** Three chunks of one
    wrong document is most of a top-5 budget.
 
 Fixing the tokenizer moved document Hit@5 from 0.488 to 0.512 and recall@5 from
@@ -234,6 +244,10 @@ Fixing the tokenizer moved document Hit@5 from 0.488 to 0.512 and recall@5 from
 at the same rank. Hit and recall rising while MRR dips is the expected shape of
 a recall change, and it is the trade this system wants — a document that was
 absent is now retrievable.
+
+Removing the strict AND pass changed **no quality metric at any level**, to three
+decimals. That is the expected result for deleting a branch that returned zero
+rows on every query, and it is the evidence that it really did.
 
 Numbers here are comparable only within one `chunker_version`
 (`index_contract.py`). Re-measure with `agent-harness-eval --suite retrieval`

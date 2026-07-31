@@ -289,28 +289,35 @@ def search_tokens(
     return select_query_tokens(tokens, document_frequency=document_frequency)
 
 
-def fts5_queries(
+def fts5_query(
     query: str,
     *,
     document_frequency: Callable[[str], int] | None = None,
-) -> list[str]:
+) -> str:
+    """Build the FTS5 MATCH expression, or an empty string if nothing survives.
+
+    This is a disjunction. An earlier conjunctive pass ran first and its results
+    were preferred, on the theory that a chunk containing every term is a better
+    answer than one containing any term. It is: it just never happens. Requiring
+    up to eight terms to co-occur inside a 333-character chunk returned zero rows
+    for 50 of 50 benchmark queries, so the branch only ever cost a round trip.
+
+    Requiring a *subset* -- the two or three rarest terms -- is plausible and now
+    cheap to build, since `document_frequency_lookup` already ranks them. That is
+    a precision change with its own delta to measure, not part of this removal.
+    """
     terms = [
         f'"{token}"' if "_" in token or token.isdigit() else f'"{token}"*'
         for token in search_tokens(query, document_frequency=document_frequency)
     ]
-    if not terms:
-        return []
-    strict = " AND ".join(terms)
-    if len(terms) == 1:
-        return [strict]
-    return [strict, " OR ".join(terms)]
+    return " OR ".join(terms)
 
 
 def document_frequency_lookup(cur: sqlite3.Cursor) -> Callable[[str], int] | None:
     """Count documents a prefix term would reach, using the FTS index's vocabulary.
 
     The count is taken over the prefix range rather than the exact term because a
-    prefix term is what `fts5_queries` emits: `"admission"*` also reaches
+    prefix term is what `fts5_query` emits: `"admission"*` also reaches
     `admissions`, and scoring the exact form would make plural-stripped tokens
     look rarer than they are.
 
@@ -500,30 +507,19 @@ def search_ranked_chunks(
     top_k: int,
     max_per_document: int = MAX_CHUNKS_PER_DOCUMENT,
 ) -> list[dict]:
-    queries = fts5_queries(query, document_frequency=document_frequency_lookup(cur))
-    if not queries:
+    match_expression = fts5_query(query, document_frequency=document_frequency_lookup(cur))
+    if not match_expression:
         return []
 
     # Gather a wider pool than requested so the diversity pass has something to
     # choose between, then trim it back to top_k.
-    pool_target = top_k * CANDIDATE_POOL_MULTIPLIER
-    candidates: list[dict] = []
-    seen_chunk_ids: set[str] = set()
     hint = document_hint(query)
-    for fts_query in queries:
-        for result in keyword_search(
-            cur,
-            fts_query=fts_query,
-            top_k=pool_target,
-            document_name_hint=hint,
-        ):
-            chunk_id = str(result["chunk_id"])
-            if chunk_id in seen_chunk_ids:
-                continue
-            candidates.append(result)
-            seen_chunk_ids.add(chunk_id)
-        if len(candidates) >= pool_target:
-            break
+    candidates = keyword_search(
+        cur,
+        fts_query=match_expression,
+        top_k=top_k * CANDIDATE_POOL_MULTIPLIER,
+        document_name_hint=hint,
+    )
 
     return apply_document_diversity(
         candidates,

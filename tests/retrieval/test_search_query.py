@@ -6,7 +6,7 @@ from retrieval.search import (
     MAX_FTS_QUERY_TOKENS,
     document_frequency_lookup,
     document_hint,
-    fts5_queries,
+    fts5_query,
     search_ranked_chunks,
     search_tokens,
     select_query_tokens,
@@ -17,7 +17,7 @@ def test_conversational_admissions_query_keeps_only_content_term() -> None:
     query = "which documents can I look at for admissions info"
 
     assert search_tokens(query) == ["admission"]
-    assert fts5_queries(query) == ['"admission"*']
+    assert fts5_query(query) == '"admission"*'
 
 
 def test_search_tokens_preserve_clinical_identifiers_and_meaningful_suffixes() -> None:
@@ -28,16 +28,19 @@ def test_search_tokens_preserve_clinical_identifiers_and_meaningful_suffixes() -
     ]
 
 
-def test_multiple_terms_use_strict_query_then_or_fallback() -> None:
-    assert fts5_queries("appointment status code") == [
-        '"appointment"* AND "status"* AND "code"*',
-        '"appointment"* OR "status"* OR "code"*',
-    ]
+def test_multiple_terms_join_as_a_disjunction() -> None:
+    # Requiring every term to co-occur in one chunk returned nothing on 50 of 50
+    # benchmark queries, so there is no conjunctive pass to prefer.
+    assert fts5_query("appointment status code") == '"appointment"* OR "status"* OR "code"*'
 
 
 def test_identifiers_use_exact_terms_instead_of_prefix_matching() -> None:
-    assert fts5_queries("What does PAT_ID represent?") == ['"pat_id"']
-    assert fts5_queries("What does code 7020 mean?")[0] == '"code"* AND "7020"'
+    assert fts5_query("What does PAT_ID represent?") == '"pat_id"'
+    assert fts5_query("What does code 7020 mean?") == '"code"* OR "7020"'
+
+
+def test_query_with_no_surviving_tokens_matches_nothing() -> None:
+    assert fts5_query("what is it") == ""
 
 
 def test_contraction_fragments_and_filler_are_too_short_to_query() -> None:
@@ -204,7 +207,7 @@ def test_ranked_search_filters_conversational_noise_and_weights_title() -> None:
     assert [result["chunk_id"] for result in results] == ["admission"]
 
 
-def test_ranked_search_falls_back_when_no_chunk_contains_every_term() -> None:
+def test_ranked_search_returns_chunks_holding_any_term() -> None:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.execute(
