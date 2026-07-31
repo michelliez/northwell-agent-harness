@@ -113,7 +113,7 @@ def _route_from_plan_safety(state: AgentState) -> str:
 def _route_from_write_sql(state: AgentState) -> str:
     if state.get("answer"):
         return "result_safety"
-    if state.get("candidate_sql") or state.get("generated_sql"):
+    if state.get("candidate_sql"):
         return "validate_sql"
     return "result_safety"
 
@@ -148,10 +148,6 @@ def _route_from_validate_sql(state: AgentState) -> str:
 
     # Failed or exhausted — answer already set in validate_sql_node
     return "result_safety"
-
-
-# Compatibility alias for existing imports while the node name migrates.
-_route_from_generate_sql = _route_from_write_sql
 
 
 # ── graph construction ────────────────────────────────────────────────────────
@@ -416,7 +412,7 @@ def _result_to_response(result: dict, run_id: str, thread_id: str) -> AskRespons
         used_tools.append("compile_sql")
     elif raw_compiled.get("source") == "claude_repair":
         used_tools.append("fix_sql")
-    elif result.get("generated_sql"):
+    elif result.get("candidate_sql"):
         used_tools.append("generate_sql")
     if result.get("validation_result"):
         used_tools.append("validate_sql")

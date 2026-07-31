@@ -18,7 +18,7 @@ jobs:
           version: "latest"
 
       - name: Install dependencies
-        run: uv sync --group dev
+        run: uv sync --group dev --group bigquery
 
       - name: Format check
         run: uv run ruff format --check src tests
@@ -31,3 +31,8 @@ jobs:
 
       - name: Tests
         run: uv run pytest -q
+
+      # Advisory only: annotates the pull request, never fails the build.
+      - name: Documentation layout
+        if: always()
+        run: uv run python tests/test_documentation_layout.py

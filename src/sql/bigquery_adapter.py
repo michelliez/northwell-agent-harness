@@ -11,9 +11,6 @@ from __future__ import annotations
 
 import os
 
-from google.cloud import bigquery
-from google.cloud.exceptions import GoogleCloudError
-
 from sql.models import DryRunResult
 
 
@@ -37,8 +34,19 @@ def dry_run(
         DryRunResult with total_bytes_processed if valid, error if invalid.
 
     Raises:
-        BigQueryNotConfigured: if credentials cannot be found.
+        BigQueryNotConfigured: if the optional SDK is absent or credentials
+            cannot be found.
     """
+    # Imported here, not at module scope, so the BigQuery SDK stays an optional
+    # dependency. No graph node reaches this function; execution is disabled.
+    try:
+        from google.cloud import bigquery
+        from google.cloud.exceptions import GoogleCloudError
+    except ImportError as exc:
+        raise BigQueryNotConfigured(
+            "BigQuery support is not installed. Run `uv sync --group bigquery`."
+        ) from exc
+
     if project is None:
         project = os.getenv("GOOGLE_CLOUD_PROJECT")
         if not project:

@@ -9,7 +9,7 @@ import pytest
 
 import retrieval.genq.query_generation as query_generation
 from retrieval.genq.query_generation import (
-    DEFAULT_MODEL,
+    DEFAULT_CLAUDE_MODEL,
     GenerationConfig,
     generate_queries,
 )
@@ -18,7 +18,7 @@ HASH = hashlib.sha256(b"value").hexdigest()
 
 
 class FakeGenerator:
-    model_name = DEFAULT_MODEL
+    model_name = DEFAULT_CLAUDE_MODEL
     device_name = "fake-cpu"
 
     def __init__(self, *, duplicate: bool = False, wrong_count: bool = False) -> None:
@@ -241,7 +241,7 @@ def test_generator_returning_wrong_query_count_fails_before_output(tmp_path: Pat
     assert not settings.output_path.exists()
 
 
-def test_claude_provider_selects_separate_generator(
+def test_pipeline_builds_the_claude_generator_from_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     input_path = tmp_path / "split_chunks.jsonl"
@@ -266,12 +266,7 @@ def test_claude_provider_selects_separate_generator(
         return fake
 
     monkeypatch.setattr(query_generation, "ClaudeHaikuQueryGenerator", make_generator)
-    settings = config(
-        tmp_path,
-        input_path,
-        provider="claude",
-        claude_model_name="test-claude-haiku",
-    )
+    settings = config(tmp_path, input_path, model_name="test-claude-haiku")
 
     report = generate_queries(settings)
 
@@ -288,8 +283,7 @@ def test_claude_provider_selects_separate_generator(
         {"top_p": 1.1},
         {"seed": -1},
         {"limit": 0},
-        {"device": "quantum"},
-        {"provider": "unknown"},
+        {"model_name": "  "},
     ],
 )
 def test_invalid_generation_configuration_is_rejected(

@@ -18,7 +18,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from retrieval.genq.chunk_models import (
+from retrieval.chunk_models import (
     FilterDecision,
     FilteredQueryRecord,
     FilterReport,

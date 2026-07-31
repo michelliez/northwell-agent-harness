@@ -38,3 +38,32 @@
 {"target_id":"Q19-D01","query_id":"Q19","document_key":"epic_clarity:table:ZC_XPR_INJ_MECHANISM","relevance":3,"relevance_rationale":"Defines the integer mechanism category key."}
 {"target_id":"Q19-D02","query_id":"Q19","document_key":"epic_clarity:table:ZC_XPR_INJURY_SITE","relevance":3,"relevance_rationale":"Defines the integer injury-site category key."}
 {"target_id":"Q20-D01","query_id":"Q20","document_key":"epic_clarity:table:ABN_DOCUMENT_ID","relevance":3,"relevance_rationale":"Contains both the table-level EHI flag and PAT_ID field-level export status."}
+{"target_id": "Q25-D01", "query_id": "Q25", "document_key": "epic_clarity:table:PAT_ENC", "relevance": 3, "relevance_rationale": "Documents the encounter grain and primary key."}
+{"target_id": "Q26-D01", "query_id": "Q26", "document_key": "epic_clarity:table:CLARITY_ADT", "relevance": 3, "relevance_rationale": "Documents the ADT event master table and EVENT_ID key."}
+{"target_id": "Q27-D01", "query_id": "Q27", "document_key": "epic_clarity:table:CLARITY_DEP", "relevance": 3, "relevance_rationale": "Documents department information and DEPARTMENT_ID key."}
+{"target_id": "Q28-D01", "query_id": "Q28", "document_key": "epic_clarity:table:HSP_ACCOUNT", "relevance": 3, "relevance_rationale": "Documents hospital account scope and HSP_ACCOUNT_ID key."}
+{"target_id": "Q29-D01", "query_id": "Q29", "document_key": "epic_clarity:table:PROBLEM_LIST", "relevance": 3, "relevance_rationale": "Documents current-status problem list semantics and key."}
+{"target_id": "Q30-D01", "query_id": "Q30", "document_key": "epic_clarity:table:PAT_ENC", "relevance": 3, "relevance_rationale": "Defines CONTACT_DATE and DEPARTMENT_ID with types."}
+{"target_id": "Q31-D01", "query_id": "Q31", "document_key": "epic_clarity:table:PAT_ENC_HSP", "relevance": 3, "relevance_rationale": "Defines both admission and discharge timestamps."}
+{"target_id": "Q32-D01", "query_id": "Q32", "document_key": "epic_clarity:table:CLARITY_ADT", "relevance": 3, "relevance_rationale": "Defines EVENT_TYPE_C and its integer category type."}
+{"target_id": "Q33-D01", "query_id": "Q33", "document_key": "epic_clarity:table:CLARITY_SER", "relevance": 3, "relevance_rationale": "Names PROV_ID as the provider key."}
+{"target_id": "Q33-D02", "query_id": "Q33", "document_key": "epic_clarity:table:ORDER_MED", "relevance": 3, "relevance_rationale": "Names ORDER_MED_ID as the medication-order key."}
+{"target_id": "Q34-D01", "query_id": "Q34", "document_key": "epic_clarity:table:PAT_ENC_DX", "relevance": 3, "relevance_rationale": "Lists the composite key and the per-diagnosis grain."}
+{"target_id": "Q35-D01", "query_id": "Q35", "document_key": "epic_clarity:table:PAT_ENC_HSP", "relevance": 3, "relevance_rationale": "Holds both hospital admission and discharge timestamps."}
+{"target_id": "Q36-D01", "query_id": "Q36", "document_key": "epic_clarity:table:PAT_ENC", "relevance": 3, "relevance_rationale": "Carries DEPARTMENT_ID per encounter."}
+{"target_id": "Q36-D02", "query_id": "Q36", "document_key": "epic_clarity:table:CLARITY_DEP", "relevance": 2, "relevance_rationale": "Resolves the department reference to descriptive attributes."}
+{"target_id": "Q37-D01", "query_id": "Q37", "document_key": "epic_clarity:table:ORDER_MED", "relevance": 3, "relevance_rationale": "One record per medication ordered; the countable grain."}
+{"target_id": "Q38-D01", "query_id": "Q38", "document_key": "epic_clarity:table:PAT_ENC_DX", "relevance": 3, "relevance_rationale": "Encounter-level diagnoses."}
+{"target_id": "Q38-D02", "query_id": "Q38", "document_key": "epic_clarity:table:PROBLEM_LIST", "relevance": 2, "relevance_rationale": "Contrasting current ongoing problems."}
+{"target_id": "Q39-D01", "query_id": "Q39", "document_key": "epic_clarity:table:CLARITY_SER", "relevance": 3, "relevance_rationale": "The provider record table."}
+{"target_id": "Q40-D01", "query_id": "Q40", "document_key": "epic_clarity:table:HSP_ACCOUNT", "relevance": 3, "relevance_rationale": "The hospital account table charges post to."}
+{"target_id": "Q41-D01", "query_id": "Q41", "document_key": "epic_clarity:table:PAT_ENC", "relevance": 3, "relevance_rationale": "Carries PAT_ID for the join."}
+{"target_id": "Q41-D02", "query_id": "Q41", "document_key": "epic_clarity:table:PATIENT", "relevance": 3, "relevance_rationale": "Carries PAT_ID as the patient record."}
+{"target_id": "Q42-D01", "query_id": "Q42", "document_key": "epic_clarity:table:CLARITY_ADT", "relevance": 3, "relevance_rationale": "Carries both PAT_ENC_CSN_ID and DEPARTMENT_ID."}
+{"target_id": "Q43-D01", "query_id": "Q43", "document_key": "epic_clarity:table:PAT_ENC", "relevance": 3, "relevance_rationale": "Shared key and general encounter scope."}
+{"target_id": "Q43-D02", "query_id": "Q43", "document_key": "epic_clarity:table:PAT_ENC_HSP", "relevance": 3, "relevance_rationale": "Shared key and hospital encounter scope."}
+{"target_id": "Q44-D01", "query_id": "Q44", "document_key": "epic_clarity:table:CLARITY_EAP", "relevance": 3, "relevance_rationale": "Holds the procedure definition records."}
+{"target_id": "Q44-D02", "query_id": "Q44", "document_key": "epic_clarity:table:ORDER_PROC", "relevance": 2, "relevance_rationale": "The ordered-procedure side of the join."}
+{"target_id": "Q45-D01", "query_id": "Q45", "document_key": "epic_clarity:table:PAT_ENC_DX", "relevance": 3, "relevance_rationale": "Composite key leads with PAT_ENC_CSN_ID."}
+{"target_id": "Q45-D02", "query_id": "Q45", "document_key": "epic_clarity:table:PAT_ENC_HSP", "relevance": 2, "relevance_rationale": "Keyed by the same encounter identifier."}
+{"target_id": "Q45-D03", "query_id": "Q45", "document_key": "epic_clarity:table:PAT_ENC", "relevance": 2, "relevance_rationale": "Keyed by the same encounter identifier."}

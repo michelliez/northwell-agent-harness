@@ -23,7 +23,6 @@ class EvaluationCase:
     expected_intent: str | None = None
     required_claims: tuple[str, ...] = ()
     forbidden_claims: tuple[str, ...] = ()
-    expected_outcome: str | None = None
     expected_sql_validation: str | None = None
 
     @classmethod
@@ -46,9 +45,6 @@ class EvaluationCase:
             ),
             required_claims=tuple(str(item) for item in data.get("required_claims", [])),
             forbidden_claims=tuple(str(item) for item in data.get("forbidden_claims", [])),
-            expected_outcome=(
-                str(data["expected_outcome"]) if data.get("expected_outcome") is not None else None
-            ),
             expected_sql_validation=(
                 str(expected_sql_validation) if expected_sql_validation is not None else None
             ),

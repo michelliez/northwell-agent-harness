@@ -7,18 +7,24 @@ are tested by monkeypatching the Anthropic client.
 
 from __future__ import annotations
 
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
+from unittest.mock import patch
+
 import pytest
 
 from agent_host.graph import (
     _route_from_classify_intent,
     _route_from_context_gate,
     _route_from_fix_sql,
-    _route_from_generate_sql,
     _route_from_plan_safety,
     _route_from_policy,
     _route_from_query_plan,
     _route_from_retrieval_permission,
     _route_from_validate_sql,
+    _route_from_write_sql,
     build_graph,
 )
 from agent_host.nodes.intent_nodes import REFUSAL_INTENTS
@@ -48,7 +54,6 @@ def _state(**kwargs) -> dict:
         "compiled_query": None,
         "candidate_sql": None,
         "query_parameters": [],
-        "generated_sql": None,
         "validation_result": None,
         "execution_status": None,
         "repair_count": 0,
@@ -220,14 +225,14 @@ def test_plan_safety_without_answer_routes_to_write_sql() -> None:
     assert _route_from_plan_safety(state) == "write_sql"
 
 
-def test_generate_sql_with_answer_routes_to_result_safety() -> None:
+def test_write_sql_with_answer_routes_to_result_safety() -> None:
     state = _state(answer="generation failed")
-    assert _route_from_generate_sql(state) == "result_safety"
+    assert _route_from_write_sql(state) == "result_safety"
 
 
-def test_generate_sql_with_sql_routes_to_validate_sql() -> None:
-    state = _state(generated_sql="SELECT COUNT(*) FROM appointments")
-    assert _route_from_generate_sql(state) == "validate_sql"
+def test_write_sql_with_sql_routes_to_validate_sql() -> None:
+    state = _state(candidate_sql="SELECT COUNT(*) FROM appointments")
+    assert _route_from_write_sql(state) == "validate_sql"
 
 
 def test_successful_fix_routes_back_through_validation() -> None:
@@ -307,7 +312,7 @@ def test_execution_not_configured_node_does_not_execute_sql(tmp_path, monkeypatc
     monkeypatch.setattr(sql_nodes, "get_config", lambda: _FakeCfg(tmp_path))
 
     state = _state(
-        generated_sql="SELECT COUNT(*) FROM appointments",
+        candidate_sql="SELECT COUNT(*) FROM appointments",
         validation_result=SqlValidationResult(
             allowed=True,
             normalized_sql="SELECT COUNT(*) FROM appointments",
@@ -401,24 +406,59 @@ def test_bigquery_adapter_raises_on_all_entry_points() -> None:
             fn("SELECT COUNT(*) FROM t")  # type: ignore[call-arg]
 
 
-def test_inactive_retrieval_strategies_fail_closed() -> None:
-    from retrieval.search import (
-        RetrievalStrategyNotConfigured,
-        graph_search,
-        semantic_lookup,
-        vector_search,
+def test_request_path_does_not_import_the_bigquery_sdk() -> None:
+    """BigQuery is an optional group, so no graph import may pull the SDK in.
+
+    Execution is disabled, and `pyarrow` alone is a ~100 MB install. If this
+    fails, something on the request path imported the SDK at module scope.
+
+    Runs in a subprocess: `sys.modules` is process-global, and the dry-run tests
+    import the SDK legitimately, so an in-process check would depend on order.
+    """
+    probe = textwrap.dedent("""
+        import sys
+        import agent_host.graph
+        import sql.bigquery_adapter
+        print(",".join(sorted(
+            name for name in sys.modules if name.startswith(("google.", "pyarrow"))
+        )))
+    """)
+    completed = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=Path(__file__).parent.parent,
     )
-
-    for strategy in (vector_search, graph_search, semantic_lookup):
-        with pytest.raises(RetrievalStrategyNotConfigured):
-            strategy("appointments")
+    imported = [name for name in completed.stdout.strip().split(",") if name]
+    assert imported == [], f"request path imported the optional BigQuery SDK: {imported}"
 
 
-def test_python_generation_fails_closed() -> None:
-    from sql.python_generation import PythonGenerationNotConfigured, generate_python
+def test_dry_run_fails_closed_when_the_sdk_is_absent() -> None:
+    """Without the optional group, dry-run must fail closed and say how to fix it."""
+    from sql.bigquery_adapter import BigQueryNotConfigured, dry_run
 
-    with pytest.raises(PythonGenerationNotConfigured):
-        generate_python("analyze appointments")
+    # Setting a module to None makes `import` raise ImportError.
+    with (
+        patch.dict(sys.modules, {"google.cloud": None}),
+        pytest.raises(BigQueryNotConfigured, match="uv sync --group bigquery"),
+    ):
+        dry_run("SELECT COUNT(*) FROM t", project="test-project")
+
+
+def test_keyword_is_the_only_retrieval_strategy() -> None:
+    """RAG.md: vector, semantic, and graph retrieval must not be implied by the API.
+
+    Placeholder functions that only raise are worse than absence -- they read as
+    partial support and invite callers to reference something that will never
+    work. Deleting them is what makes the documented contract true.
+    """
+    import retrieval.search as search
+
+    absent = [name for name in ("vector_search", "graph_search", "semantic_lookup")]
+    for name in absent:
+        assert not hasattr(search, name), f"{name} implies a strategy that does not exist"
+    assert search.retrieve_documentation_context.__doc__ is not None
 
 
 class _FakeCfg:

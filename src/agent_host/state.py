@@ -44,9 +44,8 @@ class AgentState(TypedDict, total=False):
     plan_validation: dict | None  # serialized PlanValidationResult
     approved_plan: dict | None  # serialized ApprovedQueryPlan
     compiled_query: dict | None  # serialized CompiledQuery
-    candidate_sql: str | None
+    candidate_sql: str | None  # the draft under validation, and the final draft
     query_parameters: list[dict]
-    generated_sql: str | None
     validation_result: dict | None  # serialized SqlValidationResult
     dry_run_result: dict | None  # serialized trusted DryRunResult
     cost_gate_result: dict | None  # serialized CostGateResult
@@ -91,7 +90,6 @@ def make_initial_state(question: str, run_id: str, started_at: float) -> AgentSt
         compiled_query=None,
         candidate_sql=None,
         query_parameters=[],
-        generated_sql=None,
         validation_result=None,
         dry_run_result=None,
         cost_gate_result=None,

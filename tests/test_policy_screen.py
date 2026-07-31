@@ -23,7 +23,6 @@ def _make_state(question: str) -> dict:
         "retrieved_chunks": [],
         "schema_snapshot": None,
         "query_plan": None,
-        "generated_sql": None,
         "validation_result": None,
         "execution_status": None,
         "repair_count": 0,

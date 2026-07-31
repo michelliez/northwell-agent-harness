@@ -32,9 +32,3 @@ def event_status(event_name: str) -> str:
     """Report whether an event is a normal step, a deliberate stop, or a failure."""
     spec = EVENT_SPEC.get(event_name)  # type: ignore[arg-type]
     return spec.status if spec is not None else "unknown"
-
-
-def event_label(event_name: str) -> str:
-    """Human-readable label for an event."""
-    spec = EVENT_SPEC.get(event_name)  # type: ignore[arg-type]
-    return spec.label if spec is not None else event_name

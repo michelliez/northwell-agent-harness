@@ -13,6 +13,15 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 
+from retrieval.column_parser import parse_column_records
+from retrieval.html_utils import (
+    css_classes,
+    discover_html_files,
+    normalized_source_path,
+    owned_cell_text,
+    owned_cells,
+    owned_rows,
+)
 from retrieval.index_contract import INDEX_CHUNKER_VERSION, INDEX_SCHEMA_VERSION
 
 # ~800 tokens at 4 chars/token; rows are batched until this limit before a new chunk starts
@@ -189,15 +198,6 @@ def extract_chunks(
     return title, bound_chunks(chunks), facts
 
 
-def css_classes(tag: Tag) -> list[str]:
-    value = tag.get("class")
-    if isinstance(value, str):
-        return value.split()
-    if isinstance(value, list):
-        return [str(item) for item in value]
-    return []
-
-
 def classify_table(table: Tag) -> str:
     classes = css_classes(table)
     if "SubList" in classes:
@@ -207,41 +207,6 @@ def classify_table(table: Tag) -> str:
     if "KeyValue" in classes:
         return "metadata"
     return "table_generic"
-
-
-def owned_rows(table: Tag) -> list[Tag]:
-    """Return only rows whose nearest containing table is table."""
-    return [row for row in table.find_all("tr") if row.find_parent("table") is table]
-
-
-def owned_cells(row: Tag) -> list[Tag]:
-    """Return only cells whose nearest containing row is row."""
-    return [cell for cell in row.find_all(["th", "td"]) if cell.find_parent("tr") is row]
-
-
-def owned_cell_text(cell: Tag) -> str:
-    """Read a cell without absorbing text from malformed descendant cells.
-
-    Some legacy Epic pages omit closing ``td`` and ``tr`` tags. BeautifulSoup
-    consequently nests every later row inside an earlier cell. Restricting
-    strings to those whose nearest cell is this cell prevents cumulative,
-    quadratic text expansion. The nested-table fallback preserves legitimate
-    KeyValue cells whose value is represented by a one-cell child table.
-    """
-    owned_strings = [
-        str(value)
-        for value in cell.find_all(string=True)
-        if value.find_parent(["td", "th"]) is cell
-    ]
-    direct_text = " ".join(" ".join(owned_strings).split()).strip()
-    if direct_text:
-        return direct_text
-    nested_table = cell.find("table")
-    return (
-        " ".join(nested_table.get_text(" ", strip=True).split()).strip()
-        if nested_table is not None
-        else ""
-    )
 
 
 def extract_table_content(table: Tag) -> str:
@@ -321,23 +286,6 @@ def table_to_chunks(category: str, heading: str, table: Tag) -> list[IndexedChun
     return bound_chunks(chunks)
 
 
-def normalized_source_path(html_path: Path, corpus_root: Path) -> str:
-    """Return a stable, platform-independent corpus-relative source path."""
-    try:
-        relative_path = html_path.relative_to(corpus_root)
-    except ValueError:
-        relative_path = Path(html_path.name)
-    return relative_path.as_posix()
-
-
-def discover_html_files(input_path: Path) -> list[Path]:
-    if input_path.is_file():
-        return [input_path]
-    if input_path.is_dir():
-        return sorted(input_path.rglob("*.html"))
-    raise FileNotFoundError(input_path)
-
-
 def create_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
@@ -392,15 +340,11 @@ def parse_one_document(
     source_hash = hashlib.sha256(html_bytes).hexdigest()
     source_path = normalized_source_path(html_path, corpus_root)
 
-    def genq_column_chunks(
+    def column_chunks(
         table: Tag,
         table_name: str,
         section_name: str,
     ) -> list[IndexedChunk]:
-        # Lazy import avoids a module cycle: the GenQ parser reuses generic
-        # path and CSS helpers from this module.
-        from retrieval.genq.corpus_parser import parse_column_records
-
         records, _warnings = parse_column_records(
             table,
             source_file=source_path,
@@ -421,7 +365,7 @@ def parse_one_document(
     title, chunks, facts = extract_chunks(
         html,
         fallback_title=html_path.stem,
-        column_chunk_factory=genq_column_chunks,
+        column_chunk_factory=column_chunks,
     )
 
     return ParsedDocument(

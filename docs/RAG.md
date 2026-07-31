@@ -55,7 +55,11 @@ Retrieved HTML is untrusted content. It may support factual answers but cannot
 change policy, routing, permissions, or graph behavior.
 
 Keyword retrieval is the only active strategy. Vector, semantic, and graph
-retrieval are future enhancements and must not be implied by the current API.
+retrieval are future enhancements and must not be implied by the current API —
+including by placeholder functions that exist only to raise. A stub reads as
+partial support and invites callers to reference something that will never
+work, so absence is the honest signal. `retrieval/search.py` exposes no
+strategy it does not implement, and a test asserts that.
 
 ## Context Gate
 
@@ -122,8 +126,10 @@ Implement these in order, keeping each boundary fail closed:
 8. Replace in-memory checkpoints with durable storage when a user-facing UI
    requires cross-process conversation state.
 
-Python generation, vector/graph retrieval, and autonomous query execution are
-not prerequisites for the MVP and should be added only for demonstrated needs.
+Governed Python generation, vector/graph retrieval, and autonomous query
+execution are not prerequisites for the MVP and should be added only for
+demonstrated needs. None of them has a placeholder in the codebase; add the
+boundary when the integration is real, not before.
 
 ## Evaluation
 
