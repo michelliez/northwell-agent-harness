@@ -31,7 +31,7 @@ from agent_host.trace_contract import (
 )
 from agent_host.trace_logger import _TRACE_ADAPTER
 
-SRC = Path(__file__).resolve().parents[1] / "src"
+SRC = Path(__file__).resolve().parents[2] / "src"
 _RECORD_CALL = re.compile(r"\.record\(\s*\"([a-z_][a-z_.]*)\"", re.MULTILINE)
 
 

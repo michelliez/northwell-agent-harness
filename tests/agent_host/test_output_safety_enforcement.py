@@ -97,7 +97,7 @@ def test_unavailable_is_distinct_from_allow(tmp_path) -> None:
 def test_every_failure_path_reports_unavailable(flag: str) -> None:
     """The four failure paths must not claim the answer was assessed and clean."""
     source = (
-        pathlib.Path(__file__).resolve().parents[1] / "src/agent_host/nodes/output_safety_nodes.py"
+        pathlib.Path(__file__).resolve().parents[2] / "src/agent_host/nodes/output_safety_nodes.py"
     ).read_text(encoding="utf-8")
     block = source[source.index(f'"{flag}"') :]
     action = block[: block.index("}")]

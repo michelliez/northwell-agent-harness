@@ -58,7 +58,7 @@ def dry_run(
 
 ## Testing
 
-**Test file:** `tests/test_bigquery_dry_run.py`  
+**Test file:** `tests/sql/test_bigquery_dry_run.py`  
 **Test count:** 25 tests, all passing
 
 Coverage:

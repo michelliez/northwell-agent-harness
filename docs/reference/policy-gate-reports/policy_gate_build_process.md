@@ -18,7 +18,7 @@ The initial policy gate used deterministic exact-term checks for sensitive words
 ## Test Command
 
 ```bash
-uv run --no-editable pytest tests/policy_gate_test.py -q
+uv run --no-editable pytest tests/policy/test_policy_gate_corpus.py -q
 ```
 
 ## Results Timeline

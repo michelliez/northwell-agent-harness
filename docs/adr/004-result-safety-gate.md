@@ -79,7 +79,7 @@ def redact_result(result_rows: list[dict], approved: ApprovedQueryPlan) -> list[
 
 ## Testing
 
-**Test file:** `tests/test_result_safety.py`  
+**Test file:** `tests/sql/test_result_safety.py`  
 **Test count:** 19 tests, all passing
 
 Coverage:

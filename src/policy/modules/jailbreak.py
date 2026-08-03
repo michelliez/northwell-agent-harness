@@ -16,6 +16,12 @@ JAILBREAK_TERMS: dict[str, str] = {
     "ignore all previous": "Attempts to override all prior instructions",
     "act as if you": "Attempts restriction bypass via hypothetical framing",
     "as if you were": "Attempts persona-based restriction bypass",
+    "dan mode": "Attempts capability unlock via jailbreak persona",
+    "unrestricted mode": "Attempts capability unlock via mode framing",
+    "no restrictions mode": "Attempts capability unlock via mode framing",
+    "break character": "Attempts to escape the assigned assistant role",
+    "unfiltered assistant": "Attempts to remove safety restrictions",
+    "without any restrictions": "Attempts to remove safety restrictions",
 }
 
 

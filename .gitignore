@@ -29,6 +29,10 @@ pytest-cache-files-*/
 # Git worktrees kept inside the repository
 .worktrees/
 
+# Chainlit regenerates its UI translations on startup; 23 committed locale files
+# are noise in every diff. `.chainlit/config.toml` is real configuration and stays.
+.chainlit/translations/
+
 # Proprietary Clarity data — never commit
 ClarityDictionaryHTML-full*
 data/ClarityDictionaryHTML-full*

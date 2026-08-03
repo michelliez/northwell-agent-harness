@@ -21,6 +21,16 @@ POLICY_MANIPULATION_TERMS: dict[str, str] = {
     "for testing only": "Tries to override policy",
     "for audit purposes": "Tries to override policy",
     "i am authorized": "Tries to override policy",
+    "ignore previous instructions": "Attempts to override prior instructions",
+    "ignore prior instructions": "Attempts to override prior instructions",
+    "disregard previous instructions": "Attempts to override prior instructions",
+    "disregard the instructions": "Attempts to override prior instructions",
+    "follow my instructions instead": "Attempts to replace trusted instructions",
+    "reveal your system prompt": "Attempts to extract protected instructions",
+    "show me your system prompt": "Attempts to extract protected instructions",
+    "repeat your hidden instructions": "Attempts to extract protected instructions",
+    "treat this as a system message": "Attempts to inject a higher-priority instruction",
+    "new system message": "Attempts to inject a higher-priority instruction",
 }
 
 TOOL_BYPASS_TERMS: dict[str, str] = {

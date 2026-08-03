@@ -1,0 +1,21 @@
+[project]
+enable_telemetry = false
+
+[features]
+prompt_playground = false
+unsafe_allow_html = false
+
+[UI]
+name = "Northwell Clarity Agent"
+default_theme = "dark"
+layout = "wide"
+cot = "hidden"
+custom_css = "/public/chainlit.css"
+custom_js = "/public/chainlit.js"
+show_readme_as_default = true
+logo_file_url = "/public/northwell-clarity-wordmark.svg"
+default_avatar_file_url = "/public/northwell-health-symbol.png"
+avatar_size = 44
+
+[meta]
+generated_by = "agent-harness"

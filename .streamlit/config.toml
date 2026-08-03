@@ -1,0 +1,18 @@
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "light"
+primaryColor = "#6552D9"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F7F7F9"
+textColor = "#17171C"
+borderColor = "#E8E7EC"
+showWidgetBorder = true
+baseRadius = "0.75rem"
+buttonRadius = "0.75rem"
+
+[server]
+enableXsrfProtection = true
+enableCORS = true
+maxUploadSize = 1

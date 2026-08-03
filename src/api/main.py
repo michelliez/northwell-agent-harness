@@ -1,0 +1,86 @@
+"""FastAPI application exposing the supported LangGraph public boundary."""
+
+from __future__ import annotations
+
+import os
+from collections.abc import Callable
+from pathlib import Path
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+
+from agent_host.graph import ask as graph_ask
+from agent_host.graph import clear_thread as graph_clear_thread
+from agent_host.graph import resume as graph_resume
+from agent_host.schemas import AskResponse
+from sql.audit_log import AuditLog
+
+from .models import HealthResponse
+from .routes import ask, audit
+
+AskHandler = Callable[..., AskResponse]
+ResumeHandler = Callable[..., AskResponse]
+ClearThreadHandler = Callable[[str], None]
+
+
+def create_app(
+    *,
+    ask_handler: AskHandler = graph_ask,
+    resume_handler: ResumeHandler = graph_resume,
+    clear_thread_handler: ClearThreadHandler = graph_clear_thread,
+    audit_log: AuditLog | None = None,
+) -> FastAPI:
+    """Build an app with injectable workflow boundaries for contract tests."""
+    application = FastAPI(
+        title="SQL Agent API",
+        description="Policy-gated documentation and SQL-draft assistant",
+        version="0.1.0",
+    )
+    origins = [
+        value.strip()
+        for value in os.getenv("ALLOWED_ORIGINS", "http://localhost:8501").split(",")
+        if value.strip()
+    ]
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "DELETE"],
+        allow_headers=["Content-Type", "Authorization"],
+    )
+    application.state.ask_handler = ask_handler
+    application.state.resume_handler = resume_handler
+    application.state.clear_thread_handler = clear_thread_handler
+    application.state.audit_log = audit_log or AuditLog(Path(".local/audit_logs"))
+
+    @application.middleware("http")
+    async def prevent_client_caching(request: Request, call_next):
+        """Prevent browsers and intermediaries from retaining agent responses."""
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
+
+    @application.get("/health", response_model=HealthResponse)
+    async def health_check() -> HealthResponse:
+        return HealthResponse(status="ok")
+
+    application.include_router(ask.router, prefix="/api/v1", tags=["queries"])
+    application.include_router(audit.router, prefix="/api/v1", tags=["audit"])
+    return application
+
+
+app = create_app()
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(
+        "api.main:app",
+        host="127.0.0.1",
+        port=int(os.getenv("API_PORT", "8000")),
+        log_level="info",
+    )
