@@ -38,6 +38,26 @@ the description status, document ID, metadata chunk ID, source and text hashes,
 index version, and extractor version. Missing or duplicate metadata chunks fail
 the run. This stage performs no model loading and creates no vector index.
 
+### Collapsing shared descriptions
+
+Epic reuses boilerplate across families of tables: 200 tables carry one identical
+deprecation notice, 127 carry another, and 33 `*_DELETE_CT` tables share a single
+sentence. Because the description is the only text that distinguishes one table
+passage from another, those tables are not separable by any encoder — the
+generator would pay for 200 requests to learn one fact, and contrastive training
+would be asked to push apart passages that differ only in the table name.
+
+`agent-harness-genq-metadata-convert --dedup-descriptions` keeps the first record
+for each distinct description and drops the rest. Tables with no description are
+never collapsed, because the `Table: <name>` fallback shares no text. The
+extractor emits rows ordered by source path, so the surviving representative is
+deterministic. Deduplication runs before `--limit`, so `--limit N` yields N
+distinct passages rather than N raw rows.
+
+Over the full 40,551-table corpus this drops 1,159 records across 425 duplicate
+groups, leaving 25,394 chunks eligible for generation instead of 26,337. The
+conversion report records `dedup_description_count` and `dedup_group_count`.
+
 The first dense retrieval run consumes that artifact directly and evaluates it
 against the same reviewed 50-query document benchmark as FTS:
 
@@ -140,6 +160,27 @@ the *generator* is not.
 
 `QueryGenerator` is a Protocol, so a local generator can be added later as a
 drop-in without touching the pipeline.
+
+### Throughput and credentials
+
+Generation is sequential: the provider loops passages inside a single
+`generate` call, so `--batch-size` controls log granularity and nothing else.
+At the observed ~1.6 s per request the 25,394-chunk deduplicated corpus takes
+roughly eleven hours, and nothing is written until the final atomic write — an
+interrupted run has to start over.
+
+The Message Batches API would halve both cost and wall-clock, but the AI-hub
+gateway in `ANTHROPIC_BASE_URL` does not proxy `/v1/messages/batches` (it
+returns 404 while `/v1/messages` and `/v1/models` succeed). Until that endpoint
+is proxied, or a direct Anthropic key is used, the sequential path is the only
+one available.
+
+`main` loads `.env` through `python-dotenv`, the same way `agent_host.config`
+does, so credentials can live in one place; already-exported environment
+variables still win. The gateway advertises `@`-versioned model IDs
+(`claude-haiku-4-5@20251001`), so pass no `--model` flag and let
+`DEFAULT_CLAUDE_MODEL` (`claude-haiku-4-5-20251001`) apply — that is the string
+the completed 500-table run used.
 
 ## Stage 4: Filter and review
 

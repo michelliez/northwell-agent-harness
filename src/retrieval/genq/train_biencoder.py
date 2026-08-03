@@ -164,7 +164,9 @@ def train_biencoder(config: BiEncoderTrainingConfig) -> TrainingReport:
 
     train_examples = [InputExample(texts=[q, p]) for q, p in train_pairs]
     train_dataloader = DataLoader(
-        train_examples, shuffle=True, batch_size=config.batch_size  # pyright: ignore[reportArgumentType]
+        train_examples,  # pyright: ignore[reportArgumentType]
+        shuffle=True,
+        batch_size=config.batch_size,
     )
     train_loss = losses.MultipleNegativesRankingLoss(model)
 

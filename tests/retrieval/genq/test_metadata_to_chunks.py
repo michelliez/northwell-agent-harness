@@ -49,9 +49,7 @@ def _record(table_name: str, description: str | None = None) -> MetadataEmbeddin
 
 def _write_records(path: Path, records: list[MetadataEmbeddingRecord]) -> None:
     path.write_text(
-        "\n".join(
-            json.dumps(r.model_dump(), sort_keys=True, ensure_ascii=False) for r in records
-        )
+        "\n".join(json.dumps(r.model_dump(), sort_keys=True, ensure_ascii=False) for r in records)
         + "\n",
         encoding="utf-8",
     )
@@ -144,3 +142,109 @@ def test_stored_report_round_trips(tmp_path: Path) -> None:
     stored = ConversionReport.model_validate_json(report_path.read_text(encoding="utf-8"))
 
     assert stored == report
+
+
+def _convert(tmp_path: Path, records: list[MetadataEmbeddingRecord], **kwargs: object):
+    input_path = tmp_path / "metadata.jsonl"
+    _write_records(input_path, records)
+    report = convert_metadata_to_split_chunks(
+        MetadataConversionConfig(
+            input_path=input_path,
+            output_path=tmp_path / "chunks.jsonl",
+            report_path=tmp_path / "report.json",
+            **kwargs,  # type: ignore[arg-type]
+        )
+    )
+    chunks = [
+        SplitChunkRecord.model_validate_json(line)
+        for line in (tmp_path / "chunks.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    return report, chunks
+
+
+def test_dedup_keeps_the_first_table_for_each_distinct_description(tmp_path: Path) -> None:
+    report, chunks = _convert(
+        tmp_path,
+        [
+            _record("TABLE_A", "Deprecated table."),
+            _record("TABLE_B", "Deprecated table."),
+            _record("TABLE_C", "Deprecated table."),
+            _record("TABLE_D", "Unique description."),
+        ],
+        dedup_descriptions=True,
+    )
+
+    assert report.output_record_count == 2
+    assert report.dedup_description_count == 2
+    assert report.dedup_group_count == 1
+    # The extractor emits rows ordered by source path, so the representative is
+    # reproducible rather than whichever row happened to arrive first.
+    assert [chunk.table_name for chunk in chunks] == ["TABLE_A", "TABLE_D"]
+
+
+def test_dedup_never_collapses_tables_without_a_description(tmp_path: Path) -> None:
+    report, chunks = _convert(
+        tmp_path,
+        [_record("TABLE_A"), _record("TABLE_B"), _record("TABLE_C")],
+        dedup_descriptions=True,
+    )
+
+    assert report.output_record_count == 3
+    assert report.dedup_description_count == 0
+    assert report.dedup_group_count == 0
+    assert {chunk.table_name for chunk in chunks} == {"TABLE_A", "TABLE_B", "TABLE_C"}
+
+
+def test_dedup_ignores_leading_whitespace(tmp_path: Path) -> None:
+    # MetadataEmbeddingRecord rejects surrounding whitespace on embedding_text,
+    # so only leading whitespace inside the description survives extraction.
+    report, _ = _convert(
+        tmp_path,
+        [_record("TABLE_A", "Same text."), _record("TABLE_B", "  Same text.")],
+        dedup_descriptions=True,
+    )
+
+    assert report.output_record_count == 1
+    assert report.dedup_description_count == 1
+
+
+def test_limit_yields_distinct_descriptions_when_dedup_is_on(tmp_path: Path) -> None:
+    records = [
+        _record("TABLE_A", "Shared."),
+        _record("TABLE_B", "Shared."),
+        _record("TABLE_C", "Shared."),
+        _record("TABLE_D", "Second."),
+        _record("TABLE_E", "Third."),
+    ]
+
+    report, chunks = _convert(tmp_path, records, dedup_descriptions=True, limit=2)
+
+    # Without dedup-before-limit this would return TABLE_A and TABLE_B, which
+    # are the same passage twice.
+    assert [chunk.table_name for chunk in chunks] == ["TABLE_A", "TABLE_D"]
+    assert report.output_record_count == 2
+
+
+def test_dedup_off_by_default_keeps_every_record(tmp_path: Path) -> None:
+    report, chunks = _convert(tmp_path, [_record("X", "Same."), _record("Y", "Same.")])
+
+    assert report.output_record_count == 2
+    assert report.dedup_description_count == 0
+    assert report.dedup_group_count == 0
+    assert len(chunks) == 2
+
+
+def test_dedup_report_round_trips(tmp_path: Path) -> None:
+    report, _ = _convert(
+        tmp_path,
+        [_record("A", "Shared."), _record("B", "Shared."), _record("C", "Other.")],
+        dedup_descriptions=True,
+    )
+
+    stored = ConversionReport.model_validate_json(
+        (tmp_path / "report.json").read_text(encoding="utf-8")
+    )
+
+    assert stored == report
+    assert stored.dedup_description_count == 1
+    assert stored.dedup_group_count == 1

@@ -12,6 +12,7 @@ import argparse
 import hashlib
 import json
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -40,6 +41,8 @@ class ConversionReport(BaseModel):
     input_record_count: int = Field(ge=0)
     output_record_count: int = Field(ge=0)
     skipped_short_count: int = Field(ge=0)
+    dedup_description_count: int = Field(default=0, ge=0)
+    dedup_group_count: int = Field(default=0, ge=0)
     source_counts_by_split: dict[str, int]
     description_status_counts: dict[str, int]
     input_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -55,6 +58,7 @@ class MetadataConversionConfig:
     report_path: Path
     seed: str = DEFAULT_SEED
     limit: int | None = None
+    dedup_descriptions: bool = False
 
     def validate(self) -> None:
         resolved = {
@@ -72,6 +76,48 @@ class MetadataConversionConfig:
 
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _description_key(record: MetadataEmbeddingRecord) -> str:
+    """Return the duplicate key for one record, or empty when it has no description.
+
+    Records without a description are never collapsed.  Their passage is the
+    ``Table: <name>`` fallback, which shares no text with any other table, so two
+    such records are not interchangeable answers to the same question.
+    """
+    if record.description_status != "present" or record.description is None:
+        return ""
+    return record.description.strip()
+
+
+def _deduplicate_by_description(
+    records: Sequence[MetadataEmbeddingRecord],
+) -> tuple[list[MetadataEmbeddingRecord], int]:
+    """Keep the first record for each distinct description.
+
+    Epic reuses boilerplate across families of tables — 200 tables share one
+    deprecation notice — so a description can identify hundreds of tables
+    equally well.  Generating queries from every member costs API calls for
+    passages that carry no new information, and trains the encoder to separate
+    passages that no encoder can separate.
+
+    The extractor emits rows ordered by source path, so the surviving
+    representative is deterministic across runs.  Returns the kept records and
+    the number of descriptions that had more than one member.
+    """
+    member_counts: dict[str, int] = {}
+    kept: list[MetadataEmbeddingRecord] = []
+    for record in records:
+        key = _description_key(record)
+        if not key:
+            kept.append(record)
+            continue
+        if key in member_counts:
+            member_counts[key] += 1
+            continue
+        member_counts[key] = 1
+        kept.append(record)
+    return kept, sum(1 for count in member_counts.values() if count > 1)
 
 
 def _to_split_chunk(
@@ -105,6 +151,15 @@ def convert_metadata_to_split_chunks(
     lines = input_bytes.decode("utf-8").splitlines()
     records = [MetadataEmbeddingRecord.model_validate_json(line) for line in lines if line.strip()]
 
+    dedup_count = 0
+    dedup_group_count = 0
+    if config.dedup_descriptions:
+        deduplicated, dedup_group_count = _deduplicate_by_description(records)
+        dedup_count = len(records) - len(deduplicated)
+        records = deduplicated
+
+    # Deduplication runs across the whole input before the cap, so --limit N
+    # yields N chunks with distinct descriptions rather than N raw rows.
     if config.limit is not None:
         records = records[: config.limit]
 
@@ -122,9 +177,7 @@ def convert_metadata_to_split_chunks(
         chunk = _to_split_chunk(record, split_config)
         split_counts[chunk.split] += 1
         description_counts[record.description_status] += 1
-        output_lines.append(
-            json.dumps(chunk.model_dump(), sort_keys=True, ensure_ascii=False)
-        )
+        output_lines.append(json.dumps(chunk.model_dump(), sort_keys=True, ensure_ascii=False))
 
     output_hash = _sha256_text("\n".join(output_lines) + "\n") if output_lines else _sha256_text("")
 
@@ -138,6 +191,8 @@ def convert_metadata_to_split_chunks(
         input_record_count=len(lines),
         output_record_count=len(output_lines),
         skipped_short_count=0,
+        dedup_description_count=dedup_count,
+        dedup_group_count=dedup_group_count,
         source_counts_by_split=dict(split_counts),
         description_status_counts=dict(description_counts),
         input_hash=input_hash,
@@ -162,6 +217,15 @@ def main() -> None:
     parser.add_argument("--report", type=Path, required=True, help="Output JSON audit report")
     parser.add_argument("--seed", default=DEFAULT_SEED, help="Split assignment seed")
     parser.add_argument("--limit", type=int, default=None, help="Optional record cap")
+    parser.add_argument(
+        "--dedup-descriptions",
+        action="store_true",
+        default=False,
+        help=(
+            "Keep one representative per distinct description. Tables with no "
+            "description are always kept."
+        ),
+    )
     args = parser.parse_args()
     try:
         report = convert_metadata_to_split_chunks(
@@ -171,6 +235,7 @@ def main() -> None:
                 report_path=args.report,
                 seed=args.seed,
                 limit=args.limit,
+                dedup_descriptions=args.dedup_descriptions,
             )
         )
     except (OSError, RuntimeError, ValueError) as exc:
@@ -181,6 +246,11 @@ def main() -> None:
         f"validation={report.source_counts_by_split.get('validation', 0):,}, "
         f"test={report.source_counts_by_split.get('test', 0):,})."
     )
+    if report.dedup_description_count:
+        print(
+            f"Dropped {report.dedup_description_count:,} records sharing a description "
+            f"with an earlier table, across {report.dedup_group_count:,} duplicate groups."
+        )
 
 
 if __name__ == "__main__":

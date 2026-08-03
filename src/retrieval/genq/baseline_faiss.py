@@ -185,9 +185,7 @@ class SentenceTransformerEncoder:
     weights plus the standard attention-mask mean pooling used by the model.
     """
 
-    def __init__(
-        self, model_name: str, device: str, *, trust_remote_code: bool = False
-    ) -> None:
+    def __init__(self, model_name: str, device: str, *, trust_remote_code: bool = False) -> None:
         try:
             import torch  # pyright: ignore[reportMissingImports]
             from transformers import (  # pyright: ignore[reportMissingImports]
@@ -206,9 +204,7 @@ class SentenceTransformerEncoder:
         self._tokenizer = AutoTokenizer.from_pretrained(
             model_name, trust_remote_code=trust_remote_code
         )
-        self._model = AutoModel.from_pretrained(
-            model_name, trust_remote_code=trust_remote_code
-        )
+        self._model = AutoModel.from_pretrained(model_name, trust_remote_code=trust_remote_code)
         self._model.eval()
         self._model.to(self.device_name)
 

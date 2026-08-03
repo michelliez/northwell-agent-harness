@@ -67,16 +67,22 @@ def test_loads_train_and_validation_pairs(tmp_path: Path) -> None:
     passage = "Table: FOO\nDescription: A foo table."
     chunks_path = tmp_path / "chunks.jsonl"
     chunks_path.write_text(
-        _chunk_line("c1", passage, "train") + "\n"
-        + _chunk_line("c2", "Table: BAR", "validation") + "\n"
-        + _chunk_line("c3", "Table: BAZ", "test") + "\n",
+        _chunk_line("c1", passage, "train")
+        + "\n"
+        + _chunk_line("c2", "Table: BAR", "validation")
+        + "\n"
+        + _chunk_line("c3", "Table: BAZ", "test")
+        + "\n",
         encoding="utf-8",
     )
     queries_path = tmp_path / "queries.jsonl"
     queries_path.write_text(
-        _query_line("q1", "What is FOO?", "c1", _hash(passage), "train") + "\n"
-        + _query_line("q2", "What is BAR?", "c2", _hash("Table: BAR"), "validation") + "\n"
-        + _query_line("q3", "What is BAZ?", "c3", _hash("Table: BAZ"), "test") + "\n",
+        _query_line("q1", "What is FOO?", "c1", _hash(passage), "train")
+        + "\n"
+        + _query_line("q2", "What is BAR?", "c2", _hash("Table: BAR"), "validation")
+        + "\n"
+        + _query_line("q3", "What is BAZ?", "c3", _hash("Table: BAZ"), "test")
+        + "\n",
         encoding="utf-8",
     )
 
