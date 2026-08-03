@@ -1,0 +1,222 @@
+:root {
+    --clarity-brand: #6552d9;
+    --clarity-brand-soft: #f0edff;
+    --clarity-ink: #17171c;
+    --clarity-muted: #6e6d78;
+    --clarity-line: #e8e7ec;
+    --clarity-surface: #ffffff;
+    --clarity-surface-soft: #f7f7f9;
+    --clarity-sidebar: #fafafa;
+    --clarity-user-bubble: #eef2ff;
+    --clarity-user-border: #dbe4ff;
+    --clarity-user-text: #1f2a44;
+    --clarity-info-border: #17171c;
+    --clarity-shadow: 0 16px 44px rgba(24, 20, 48, 0.08);
+    --loading-cursor-color: var(--clarity-brand);
+    --loading-cursor-size: 0.9rem;
+    --loading-cursor-animation: clarity-pulse 1.25s ease-in-out infinite;
+}
+
+.dark,
+[data-theme="dark"] {
+    color-scheme: dark;
+    --clarity-brand: #9b8cff;
+    --clarity-brand-soft: #242039;
+    --clarity-ink: #f5f3f8;
+    --clarity-muted: #a29eaa;
+    --clarity-line: #292731;
+    --clarity-surface: #09090c;
+    --clarity-surface-soft: #15141a;
+    --clarity-sidebar: #101014;
+    --clarity-user-bubble: #1d2944;
+    --clarity-user-border: #304369;
+    --clarity-user-text: #edf2ff;
+    --clarity-info-border: #f5f3f8;
+    --clarity-shadow: 0 18px 50px rgba(0, 0, 0, 0.32);
+}
+
+html {
+    scroll-behavior: smooth;
+}
+
+body,
+#root,
+main {
+    background: var(--clarity-surface) !important;
+    color: var(--clarity-ink) !important;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    letter-spacing: -0.008em;
+}
+
+header {
+    background: color-mix(in srgb, var(--clarity-surface) 96%, transparent) !important;
+    border-bottom: 1px solid var(--clarity-line) !important;
+    backdrop-filter: blur(12px);
+}
+
+aside,
+[data-testid="sidebar"] {
+    background: var(--clarity-sidebar) !important;
+    border-right-color: var(--clarity-line) !important;
+}
+
+main {
+    animation: clarity-enter 320ms ease-out both;
+}
+
+/* Empty-chat welcome and sample prompts. */
+.watermark,
+a[href*="chainlit.io"] {
+    display: none !important;
+}
+
+img[src*="northwell-clarity-wordmark"] {
+    width: min(680px, 72vw) !important;
+    max-width: min(680px, 72vw) !important;
+    height: auto !important;
+    max-height: none !important;
+    object-fit: contain;
+}
+
+img[src*="northwell-health-symbol"] {
+    width: 36px !important;
+    height: 36px !important;
+    aspect-ratio: 1 / 1;
+    object-fit: contain !important;
+    object-position: center;
+    border-radius: 0 !important;
+}
+
+/* The custom script adds this class only to Chainlit's README/Info dialog. */
+.northwell-info-dialog[class] {
+    width: min(720px, calc(100vw - 2rem)) !important;
+    height: min(620px, calc(100vh - 3rem)) !important;
+    max-width: 720px !important;
+    max-height: calc(100vh - 3rem) !important;
+    padding: clamp(1.25rem, 3vw, 2rem) !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    background: var(--clarity-surface) !important;
+    color: var(--clarity-ink) !important;
+    border: 1px solid var(--clarity-info-border) !important;
+    border-radius: 24px !important;
+    background-clip: padding-box !important;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.32) !important;
+}
+
+.northwell-info-dialog > div:first-of-type {
+    animation: clarity-info-content-in 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+button {
+    transition: transform 160ms ease, border-color 160ms ease, background-color 160ms ease;
+}
+
+button:hover:not(:disabled) {
+    transform: translateY(-1px);
+}
+
+button:focus-visible,
+a:focus-visible {
+    outline: 2px solid var(--clarity-brand) !important;
+    outline-offset: 2px;
+}
+
+textarea:focus,
+textarea:focus-visible {
+    outline: none !important;
+    box-shadow: none !important;
+}
+
+form:focus-within,
+[data-testid="chat-input"]:focus-within {
+    outline: none !important;
+    border-color: var(--clarity-line) !important;
+    box-shadow: 0 0 0 1px var(--clarity-line) !important;
+}
+
+/* Composer and starter cards use the same surfaces as the Streamlit UI. */
+form,
+[data-testid="chat-input"],
+[class*="starter" i] button {
+    background: var(--clarity-surface-soft) !important;
+    border-color: var(--clarity-line) !important;
+    box-shadow: none !important;
+}
+
+[class*="starter" i] button:hover {
+    border-color: var(--clarity-brand) !important;
+    background: var(--clarity-brand-soft) !important;
+}
+
+/* Keep the user-message row open instead of turning its full width into a bubble. */
+[data-step-type="user_message"] {
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+}
+
+pre {
+    background: var(--clarity-surface-soft) !important;
+    border: 1px solid var(--clarity-line) !important;
+    border-radius: 14px !important;
+    box-shadow: var(--clarity-shadow);
+}
+
+@keyframes clarity-enter {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes clarity-pulse {
+    0%, 100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+    50% {
+        opacity: 0.42;
+        transform: scale(0.84);
+    }
+}
+
+@keyframes clarity-info-content-in {
+    from {
+        opacity: 0;
+        transform: translateY(8px) scale(0.985);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+@media (max-width: 768px) {
+    main {
+        padding-inline: 0.25rem;
+    }
+
+    .northwell-info-dialog[class] {
+        width: calc(100vw - 1rem) !important;
+        height: min(680px, calc(100vh - 1rem)) !important;
+        max-height: calc(100vh - 1rem) !important;
+        border-radius: 18px !important;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    html {
+        scroll-behavior: auto;
+    }
+
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}

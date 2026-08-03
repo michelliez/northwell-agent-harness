@@ -36,6 +36,7 @@ POLICY_CHECKS: tuple[PolicyCheckEntry, ...] = (
     ("pii.identifiers", pii.check_identifiers),
     ("pii.individual_request", pii.check_individual_request),
     ("pii.indirect_identity", pii.check_indirect_identity),
+    ("pii.contextual_identity_request", pii.check_contextual_identity_request),
     ("pii.patient_ranking", pii.check_patient_ranking),
     ("pii.fuzzy_terms", lambda _text, q: pii.check_fuzzy_terms(q)),
     ("pii.row_level_request", lambda _text, q: pii.check_row_level_request(q)),

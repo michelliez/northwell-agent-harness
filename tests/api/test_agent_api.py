@@ -1,0 +1,284 @@
+from __future__ import annotations
+
+from fastapi.testclient import TestClient
+
+from agent_host.graph import _result_to_response
+from agent_host.nodes.lifecycle_nodes import interpretation_and_citations_node
+from agent_host.schemas import AskResponse, Citation
+from api.main import create_app
+from sql.audit_log import AuditLog
+
+
+def _response(**updates: object) -> AskResponse:
+    payload: dict[str, object] = {
+        "answer": "Here is the documentation answer.",
+        "used_tools": ["retrieve_documentation_context"],
+        "run_id": "run-123",
+        "trace_file": ".local/traces/run-123.jsonl",
+        "thread_id": "thread-123",
+        "allowed": True,
+        "intent": "documentation_lookup",
+        "intent_confidence": 0.97,
+        "generated_sql": None,
+        "query_parameters": [],
+        "citations": ["chunk-123"],
+        "citation_details": [
+            Citation(
+                chunk_id="chunk-123",
+                label="A0H_MAP — Column Information",
+                source_file="A0H_MAP.html",
+                heading_path="Column Information",
+                category="column_info",
+            )
+        ],
+    }
+    payload.update(updates)
+    return AskResponse.model_validate(payload)
+
+
+def test_ask_uses_public_graph_boundary_and_returns_v1_contract(tmp_path) -> None:
+    calls: list[tuple[str, str | None]] = []
+
+    def fake_ask(question: str, *, thread_id: str | None = None) -> AskResponse:
+        calls.append((question, thread_id))
+        return _response(
+            answer="Validated SQL draft.",
+            generated_sql="SELECT COUNT(*) AS row_count FROM A0H_MAP",
+            query_parameters=[{"name": "status", "type": "STRING", "value": "A"}],
+            execution_status="not_configured",
+        )
+
+    app = create_app(
+        ask_handler=fake_ask,
+        audit_log=AuditLog(tmp_path / "audit"),
+    )
+    response = TestClient(app).post(
+        "/api/v1/ask",
+        json={"question": "Count A0H_MAP rows", "thread_id": "thread-123"},
+    )
+
+    assert response.status_code == 200
+    assert calls == [("Count A0H_MAP rows", "thread-123")]
+    assert response.json() == {
+        "api_version": "v1",
+        "status": "complete",
+        "answer": "Validated SQL draft.",
+        "run_id": "run-123",
+        "thread_id": "thread-123",
+        "allowed": True,
+        "policy_reason": None,
+        "matched_term": None,
+        "intent": "documentation_lookup",
+        "intent_confidence": 0.97,
+        "disclosure_status": None,
+        "interrupted": False,
+        "clarification_prompt": None,
+        "used_tools": ["retrieve_documentation_context"],
+        "generated_sql": "SELECT COUNT(*) AS row_count FROM A0H_MAP",
+        "query_parameters": [{"name": "status", "type": "STRING", "value": "A"}],
+        "citation_details": [
+            {
+                "reference_number": 1,
+                "label": "A0H_MAP — Column Information",
+                "source_file": "A0H_MAP.html",
+                "heading_path": "Column Information",
+                "category": "column_info",
+            }
+        ],
+        "execution_status": "not_configured",
+    }
+
+
+def test_interrupted_response_can_be_resumed_with_reply_and_thread_id(tmp_path) -> None:
+    resume_calls: list[tuple[str, str]] = []
+
+    def fake_ask(_question: str, *, thread_id: str | None = None) -> AskResponse:
+        return _response(
+            answer="",
+            thread_id=thread_id or "generated-thread",
+            interrupted=True,
+            clarification_prompt="Which table do you mean?",
+        )
+
+    def fake_resume(reply: str, *, thread_id: str) -> AskResponse:
+        resume_calls.append((reply, thread_id))
+        return _response(answer="A0H_MAP documentation.", thread_id=thread_id)
+
+    app = create_app(
+        ask_handler=fake_ask,
+        resume_handler=fake_resume,
+        audit_log=AuditLog(tmp_path / "audit"),
+    )
+    client = TestClient(app)
+
+    interrupted = client.post("/api/v1/ask", json={"question": "Tell me about the map"})
+    assert interrupted.status_code == 200
+    assert interrupted.json()["status"] == "interrupted"
+    assert interrupted.json()["thread_id"] == "generated-thread"
+    assert interrupted.json()["clarification_prompt"] == "Which table do you mean?"
+
+    completed = client.post(
+        "/api/v1/resume",
+        json={"reply": "A0H_MAP", "thread_id": "generated-thread"},
+    )
+    assert completed.status_code == 200
+    assert completed.json()["status"] == "complete"
+    assert completed.json()["answer"] == "A0H_MAP documentation."
+    assert resume_calls == [("A0H_MAP", "generated-thread")]
+
+
+def test_policy_rejection_has_explicit_status(tmp_path) -> None:
+    def rejected(_question: str, *, thread_id: str | None = None) -> AskResponse:
+        return _response(
+            thread_id=thread_id or "rejected-thread",
+            allowed=False,
+            policy_reason="Unsupported request.",
+        )
+
+    app = create_app(
+        ask_handler=rejected,
+        audit_log=AuditLog(tmp_path / "audit"),
+    )
+    response = TestClient(app).post("/api/v1/ask", json={"question": "Run an update"})
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "rejected"
+    assert response.json()["allowed"] is False
+    assert response.json()["policy_reason"] == "Unsupported request."
+
+
+def test_request_contract_rejects_forged_user_identity_and_extra_fields(tmp_path) -> None:
+    app = create_app(audit_log=AuditLog(tmp_path / "audit"))
+    response = TestClient(app).post(
+        "/api/v1/ask",
+        json={"question": "What is A0H_MAP?", "user_id": "admin"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_internal_error_does_not_expose_exception_text(tmp_path) -> None:
+    def broken(_question: str, *, thread_id: str | None = None) -> AskResponse:
+        raise RuntimeError("secret connection detail")
+
+    app = create_app(
+        ask_handler=broken,
+        audit_log=AuditLog(tmp_path / "audit"),
+    )
+    response = TestClient(app).post("/api/v1/ask", json={"question": "Hello"})
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Agent workflow failed."}
+
+
+def test_static_audit_summary_route_is_not_captured_as_run_id(tmp_path) -> None:
+    app = create_app(audit_log=AuditLog(tmp_path / "audit"))
+    response = TestClient(app).get("/api/v1/audit/summary")
+
+    assert response.status_code == 200
+    assert response.json()["total_runs"] == 0
+
+
+def test_health_contract(tmp_path) -> None:
+    app = create_app(audit_log=AuditLog(tmp_path / "audit"))
+    response = TestClient(app).get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "version": "0.1.0"}
+    assert response.headers["cache-control"] == "no-store, max-age=0"
+    assert response.headers["pragma"] == "no-cache"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["referrer-policy"] == "no-referrer"
+
+
+def test_clear_thread_calls_host_cleanup_and_is_idempotent(tmp_path) -> None:
+    cleared: list[str] = []
+    app = create_app(
+        clear_thread_handler=cleared.append,
+        audit_log=AuditLog(tmp_path / "audit"),
+    )
+
+    response = TestClient(app).delete("/api/v1/threads/thread-123")
+
+    assert response.status_code == 200
+    assert response.json() == {"api_version": "v1", "cleared": True}
+    assert cleared == ["thread-123"]
+    assert response.headers["cache-control"] == "no-store, max-age=0"
+
+
+def test_graph_response_resolves_readable_citation_metadata() -> None:
+    chunk_id = "A0H_MAP__COLUMN_DEFINITION__LINE"
+    response = _result_to_response(
+        {
+            "answer": f"The LINE column is documented. [{chunk_id}]",
+            "citations": [chunk_id, chunk_id],
+            "retrieved_chunks": [
+                {
+                    "chunk_id": chunk_id,
+                    "title": "A0H_MAP",
+                    "source_path": "dictionary/A0H_MAP.html",
+                    "heading_path": "Column Information > LINE",
+                    "category": "column_info",
+                }
+            ],
+        },
+        "run-readable",
+        "thread-readable",
+    )
+
+    assert response.citations == [chunk_id]
+    assert response.citation_details[0].label == "A0H_MAP — Column Information > LINE"
+    assert response.citation_details[0].source_file == "A0H_MAP.html"
+
+
+def test_public_api_replaces_internal_chunk_ids_with_numbered_references(tmp_path) -> None:
+    chunk_id = "A0H_MAP__COLUMN_DEFINITION__LINE"
+
+    def cited(_question: str, *, thread_id: str | None = None) -> AskResponse:
+        return _response(
+            answer=f"The LINE field is documented. [{chunk_id}]",
+            thread_id=thread_id or "citation-thread",
+            citations=[chunk_id],
+            citation_details=[
+                Citation(
+                    chunk_id=chunk_id,
+                    label="A0H_MAP — Column Information > LINE",
+                    source_file="A0H_MAP.html",
+                    heading_path="Column Information > LINE",
+                    category="column_info",
+                )
+            ],
+        )
+
+    app = create_app(
+        ask_handler=cited,
+        audit_log=AuditLog(tmp_path / "audit"),
+    )
+    response = TestClient(app).post("/api/v1/ask", json={"question": "What is LINE?"})
+    body = response.json()
+
+    assert response.status_code == 200
+    assert body["answer"] == "The LINE field is documented. [1]"
+    assert chunk_id not in response.text
+    assert body["citation_details"] == [
+        {
+            "reference_number": 1,
+            "label": "A0H_MAP — Column Information > LINE",
+            "source_file": "A0H_MAP.html",
+            "heading_path": "Column Information > LINE",
+            "category": "column_info",
+        }
+    ]
+
+
+def test_citation_extraction_accepts_canonical_ids_but_not_invented_ids() -> None:
+    chunk_id = "A0H_MAP__COLUMN_DEFINITION__LINE"
+    update = interpretation_and_citations_node(
+        {
+            "answer": f"Supported [{chunk_id}], not [INVENTED].",
+            "retrieved_chunks": [{"chunk_id": chunk_id}],
+            "citations": [],
+        }
+    )
+
+    assert update == {"citations": [chunk_id]}

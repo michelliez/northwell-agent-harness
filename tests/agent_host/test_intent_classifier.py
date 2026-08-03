@@ -38,6 +38,24 @@ def test_refusal_intent_maps_to_refuse_action() -> None:
         assert result["needs_clarification"] is False
 
 
+@pytest.mark.parametrize(
+    "intent",
+    [
+        "prohibited_phi_request",
+        "prompt_injection_attempt",
+        "jailbreak_attempt",
+        "destructive_sql_request",
+    ],
+)
+def test_explicit_prohibited_intents_are_closed_vocabulary_refusals(intent: str) -> None:
+    parsed = _RawIntentDecision.model_validate(_decision(intent=intent))
+    result = enforce_intent_contract(parsed)
+
+    assert intent in REFUSAL_INTENTS
+    assert result["intent"] == intent
+    assert result["recommended_action"] == "refuse"
+
+
 def test_low_confidence_becomes_clarify() -> None:
     result = _enforce("documentation_lookup", confidence=0.50, min_conf=0.70)
     assert result["intent"] == "unknown"

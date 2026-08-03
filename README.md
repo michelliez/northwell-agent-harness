@@ -133,6 +133,154 @@ Reports default to `.local/evals/`. The retrieval suite needs a built index and
 is described in [evals/retrieval/README.md](evals/retrieval/README.md); its
 results are only comparable within one `chunker_version`.
 
+
+# Running the FastAPI Backend
+
+## Quick Start
+
+**Development mode** (with auto-reload):
+
+```bash
+uv run uvicorn api.main:app --app-dir src --reload --reload-dir src --port 8000
+```
+
+Then visit: `http://localhost:8000/docs` (Swagger UI)
+
+**Production mode**:
+
+```bash
+uv run uvicorn api.main:app --app-dir src --port 8000 --workers 1
+```
+
+## Environment Setup
+
+Create a `.env` file:
+
+```bash
+ANTHROPIC_API_KEY=<your-key>
+GOOGLE_CLOUD_PROJECT=<your-project>
+BIGQUERY_LOCATION=us-west1
+ALLOWED_ORIGINS=http://localhost:8501,http://localhost:3000
+```
+
+Or set environment variables:
+
+```bash
+export ANTHROPIC_API_KEY=<your-key>
+export GOOGLE_CLOUD_PROJECT=<your-project>
+```
+
+## API Endpoints
+
+### Health Check
+```bash
+curl http://localhost:8000/health
+```
+
+### Ask a Question
+```bash
+curl -X POST http://localhost:8000/api/v1/ask \
+  -H "Content-Type: application/json" \
+  -d '{
+    "question": "Count appointments by department",
+    "user_id": "jane.smith"
+  }'
+```
+
+### Resume with Approval Token
+```bash
+curl -X POST http://localhost:8000/api/v1/resume \
+  -H "Content-Type: application/json" \
+  -d '{
+    "run_id": "uuid-from-previous-ask",
+    "approval_token": "token-from-cost-gate"
+  }'
+```
+
+### Get Audit Trail for a Run
+```bash
+curl http://localhost:8000/api/v1/audit/{run_id}
+```
+
+### Get Audit Summary
+```bash
+curl 'http://localhost:8000/api/v1/audit/summary?start_date=2026-07-30T00:00:00Z&user_id=jane.smith'
+```
+
+## API Documentation
+
+Visit `http://localhost:8000/docs` for interactive Swagger UI with all endpoints, request/response schemas, and try-it-out functionality.
+
+## Files Structure
+
+```
+src/api/
+├── __init__.py
+├── main.py              # FastAPI app entry point
+├── models.py            # Request/response Pydantic models
+├── README.md            # API documentation
+└── routes/
+    ├── __init__.py
+    ├── ask.py           # /ask and /resume endpoints
+    └── audit.py         # /audit endpoints
+```
+
+## What the API Does
+
+1. **Receives questions** via `/api/v1/ask`
+2. **Calls the LangGraph workflow** directly (no separate process)
+3. **Records all events** in JSONL audit logs
+4. **Returns workflow trace + results** to caller
+5. **Allows resumption** with approval tokens for expensive queries
+6. **Provides audit log access** via `/api/v1/audit`
+
+## Chat frontends
+
+Chainlit is the primary chat interface. It calls the versioned FastAPI API and
+keeps only the opaque conversation thread ID in its in-memory browser session.
+Start FastAPI, then start Chainlit in a second terminal:
+
+```bash
+uv run uvicorn api.main:app --app-dir src --reload --reload-dir src --port 8000
+uv run agent-harness-ui -w --port 8501
+```
+
+The existing Streamlit prototype remains available and unchanged:
+
+```bash
+uv run streamlit run src/ui/app.py --server.port 8502
+```
+
+See `src/ui/README.md` for frontend configuration and privacy behavior.
+
+## Troubleshooting
+
+**"ModuleNotFoundError: No module named 'anthropic'"**
+- Run: `uv sync` to install dependencies
+
+**"ANTHROPIC_API_KEY not set"**
+- Set the environment variable or add to `.env`
+
+**"Connection refused on port 8000"**
+- API is not running. Start it with: `uv run uvicorn api.main:app --app-dir src --reload --reload-dir src --port 8000`
+
+**Swagger UI not available**
+- Visit `http://localhost:8000/docs` (lowercase)
+- Alternative: `http://localhost:8000/redoc`
+
+## Testing the API
+
+```bash
+# Run all tests
+uv run pytest tests/ -v
+
+# Run API-specific tests
+uv run pytest tests/api/ -v
+
+# Run with coverage
+uv run pytest tests/ --cov=src/api
+```
+
 ## Verification
 
 ```powershell

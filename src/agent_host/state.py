@@ -22,8 +22,11 @@ class AgentContext:
 
 class AgentState(TypedDict, total=False):
     # Input
+    original_question: str
     question: str
     history: list[dict]
+    conversation_turns: list[dict]
+    question_was_contextualized: bool
 
     # Intent classification
     intent: str | None
@@ -71,11 +74,20 @@ class AgentState(TypedDict, total=False):
     started_at: float
 
 
-def make_initial_state(question: str, run_id: str, started_at: float) -> AgentState:
+def make_initial_state(
+    question: str,
+    run_id: str,
+    started_at: float,
+    *,
+    conversation_turns: list[dict] | None = None,
+) -> AgentState:
     """Build a fully-initialized state for the start of a new turn."""
     return AgentState(
+        original_question=question,
         question=question,
         history=[],
+        conversation_turns=list(conversation_turns or []),
+        question_was_contextualized=False,
         intent=None,
         intent_confidence=None,
         recommended_action=None,

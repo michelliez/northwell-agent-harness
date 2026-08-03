@@ -34,7 +34,7 @@
 
 ### Test Coverage
 
-**File:** `tests/test_bigquery_dry_run.py`
+**File:** `tests/sql/test_bigquery_dry_run.py`
 
 **25 tests, all passing:**
 
@@ -164,7 +164,7 @@ This adapter is used by:
 
 ### Test Coverage
 
-**File:** `tests/test_bigquery_read_only_executor.py`
+**File:** `tests/sql/test_bigquery_read_only_executor.py`
 
 **29 tests, all passing:**
 
@@ -239,7 +239,7 @@ This executor is used by:
 
 ### Test Coverage
 
-**File:** `tests/test_result_safety.py`
+**File:** `tests/sql/test_result_safety.py`
 
 **19 tests, all passing:**
 
@@ -322,7 +322,7 @@ This executor is used by:
 
 ### Test Coverage
 
-**File:** `tests/test_audit_log.py`
+**File:** `tests/sql/test_audit_log.py`
 
 **25 tests, all passing:**
 
@@ -491,7 +491,7 @@ BigQuery [READY]
 
 Once FastAPI + Streamlit are built:
 
-1. Start FastAPI server: `uvicorn api.main:app --port 8000`
+1. Start FastAPI server: `uv run uvicorn api.main:app --app-dir src --port 8000`
 2. Start Streamlit UI: `streamlit run src/ui/app.py --server.port 8501`
 3. Open browser: `http://localhost:8501`
 4. User submits question → Streamlit calls FastAPI → FastAPI runs LangGraph workflow → Results returned to UI
@@ -586,7 +586,7 @@ result = dry_run(
 ## Files Modified/Created
 
 ### New Files
-- ✅ `tests/test_bigquery_dry_run.py` (25 tests, 500+ lines)
+- ✅ `tests/sql/test_bigquery_dry_run.py` (25 tests, 500+ lines)
 
 ### Modified Files
 - ✅ `src/sql/bigquery_adapter.py` (complete rewrite, 120 lines)

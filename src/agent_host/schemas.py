@@ -1,6 +1,16 @@
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class Citation(BaseModel):
+    """Readable source metadata paired with a stable internal chunk ID."""
+
+    chunk_id: str
+    label: str
+    source_file: str
+    heading_path: str | None = None
+    category: str | None = None
 
 
 class AskResponse(BaseModel):
@@ -17,3 +27,8 @@ class AskResponse(BaseModel):
     disclosure_status: str | None = None
     interrupted: bool = False
     clarification_prompt: str | None = None
+    generated_sql: str | None = None
+    query_parameters: list[dict] = Field(default_factory=list)
+    citations: list[str] = Field(default_factory=list)
+    citation_details: list[Citation] = Field(default_factory=list)
+    execution_status: str | None = None

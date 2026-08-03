@@ -378,6 +378,12 @@ def run_baseline(
             + ", ".join(missing_positives[:5])
         )
 
+    # Load FAISS before PyTorch initializes MPS. On macOS, loading FAISS's
+    # native runtime after MPS inference can terminate the process outside
+    # Python's exception machinery even though each library works separately.
+    LOGGER.info("Loading FAISS before initializing the embedding device")
+    import faiss  # pyright: ignore[reportMissingImports]
+
     active_encoder = encoder or SentenceTransformerEncoder(
         config.model_name, config.device, trust_remote_code=config.trust_remote_code
     )
@@ -389,8 +395,6 @@ def run_baseline(
         active_encoder.encode([query.query for query in queries], batch_size=config.batch_size),
         expected_rows=len(queries),
     )
-
-    import faiss  # pyright: ignore[reportMissingImports]
 
     dimension = int(chunk_vectors.shape[1])
     if query_vectors.shape[1] != dimension:

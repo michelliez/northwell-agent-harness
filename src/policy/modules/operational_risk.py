@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import re
+
 from policy.normalize import (
     is_schema_metadata_request,
     matches_blocked_term,
+    normalize_prompt,
 )
 from policy.result import PolicyGateResult, blocked
 
@@ -48,7 +51,17 @@ DESTRUCTIVE_DB_TERMS: dict[str, str] = {
     "grant": "Requests a destructive database action",
     "revoke": "Requests a destructive database action",
     "insert": "Requests a destructive database action",
+    "create table": "Requests an unauthorized database write",
+    "create or replace": "Requests an unauthorized database write",
+    "execute immediate": "Requests unauthorized dynamic SQL execution",
 }
+
+_SCHEMA_IDENTIFIER = re.compile(r"\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b")
+_SPACED_SCHEMA_IDENTIFIER = re.compile(
+    r"\b[A-Za-z]+\d+[A-Za-z0-9]*\s+"
+    r"(?:delete|drop|update|truncate|alter|merge|insert)\b",
+    re.IGNORECASE,
+)
 
 BROAD_DATA_EXPOSURE_TERMS: dict[str, str] = {
     "every field": "Requests broad row-level data exposure",
@@ -81,7 +94,24 @@ def check_scope_expansion(text: str, q: str) -> PolicyGateResult | None:
 
 
 def check_destructive_db(text: str, q: str) -> PolicyGateResult | None:
-    return match_terms(text, q, DESTRUCTIVE_DB_TERMS)
+    # Underscore-delimited catalog identifiers are data, not SQL operations.
+    # Normalization changes ``A0H_UPDATE`` into ``a0h update``, which would
+    # otherwise look like a destructive verb. Mask only identifiers containing
+    # a destructive segment; real commands around the identifier remain visible.
+    screened_text = _SCHEMA_IDENTIFIER.sub(_mask_destructive_identifier, text)
+    # Users often omit the underscore when naming catalog objects in natural
+    # language ("A0H update" for A0H_UPDATE). A code-like prefix followed by a
+    # destructive-looking suffix is still an identifier, not an instruction.
+    screened_text = _SPACED_SCHEMA_IDENTIFIER.sub(" ", screened_text)
+    return match_terms(screened_text, normalize_prompt(screened_text), DESTRUCTIVE_DB_TERMS)
+
+
+def _mask_destructive_identifier(match: re.Match[str]) -> str:
+    identifier = match.group(0)
+    segments = {segment.lower() for segment in identifier.split("_")}
+    if segments.isdisjoint(DESTRUCTIVE_DB_TERMS):
+        return identifier
+    return " "
 
 
 def check_broad_data_exposure(text: str, q: str) -> PolicyGateResult | None:
