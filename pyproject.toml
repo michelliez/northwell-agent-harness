@@ -27,7 +27,10 @@ agent-harness-genq-parse = "retrieval.column_parser:main"
 agent-harness-genq-split = "evals.dataset_split:main"
 agent-harness-genq-generate = "retrieval.genq.query_generation:main"
 agent-harness-genq-filter = "evals.query_filter:main"
+agent-harness-genq-metadata-convert = "retrieval.genq.metadata_to_chunks:main"
 agent-harness-genq-baseline = "retrieval.genq.baseline_faiss:main"
+agent-harness-genq-train = "retrieval.genq.train_biencoder:main"
+agent-harness-metadata-extract = "retrieval.metadata_extractor:main"
 agent-harness-ui = "ui.chainlit_runner:main"
 
 [build-system]
@@ -74,13 +77,14 @@ bigquery = [
     "google-cloud-bigquery>=3.26.0",
     "pyarrow>=16.0.0",
 ]
-# Only the MiniLM/FAISS baseline needs these; query generation now runs through
-# the Anthropic SDK, which is already a core dependency. `datasets`, `tqdm`, and
-# `sentence-transformers` were carried here with no import site and are dropped;
-# re-add `sentence-transformers` when bi-encoder fine-tuning actually starts.
+# Baseline inference and bi-encoder fine-tuning. Query generation runs through
+# the Anthropic SDK (a core dependency) and needs nothing from this group.
 genq = [
+    "accelerate>=0.26.0",
+    "datasets>=5.0.0",
     "faiss-cpu>=1.14.3",
     "numpy>=2.1.0",
+    "sentence-transformers>=4.1.0",
     "torch>=2.13.0",
     "transformers>=4.41.0,<5",
 ]

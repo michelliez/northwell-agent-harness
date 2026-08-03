@@ -8,16 +8,21 @@ import json
 import logging
 import os
 import tempfile
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 import numpy as np  # pyright: ignore[reportMissingImports]
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from evals.retrieval_evaluator import ranked_metrics
+from evals.retrieval_evaluator import (
+    JudgmentScope,
+    RetrievalTarget,
+    load_retrieval_dataset,
+    ranked_metrics,
+)
 from retrieval.chunk_models import (
     BaselineEvaluationReport,
     BaselineIndexMetadata,
@@ -27,15 +32,78 @@ from retrieval.chunk_models import (
     FilteredQueryRecord,
     RankedChunkHit,
 )
+from retrieval.metadata_extractor import DescriptionStatus, MetadataEmbeddingRecord
 
 LOGGER = logging.getLogger(__name__)
 INDEX_VERSION = "pretrained-flatip-v1"
 EVALUATION_VERSION = "known-positive-exact-rank-v1"
+TABLE_INDEX_VERSION = "pretrained-table-flatip-v1"
+TABLE_EVALUATION_VERSION = "gold-document-exact-rank-v1"
 DEFAULT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 DEFAULT_LIMIT = 200
 DEFAULT_BATCH_SIZE = 32
 DEFAULT_TOP_K = 10
 DEVICE_CHOICES = ("auto", "cpu", "cuda", "mps")
+GOLD_K_VALUES = (1, 5, 10)
+
+
+class TableFaissMappingRecord(BaseModel):
+    """Stable mapping from a FAISS position to one extracted table record."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    vector_position: int = Field(ge=0)
+    embedding_id: str
+    document_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_path: str
+    table_name: str
+    metadata_chunk_id: str
+    embedding_text_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    description_status: DescriptionStatus
+
+
+class TableBaselineIndexMetadata(BaseModel):
+    """Reproducibility contract for the table-level exact FAISS index."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    artifact_version: str
+    source_index_version: str
+    extractor_version: str
+    model_name: str
+    device: str
+    index_type: Literal["IndexFlatIP"]
+    normalized_embeddings: Literal[True]
+    embedding_dimension: int = Field(ge=1)
+    source_record_count: int = Field(ge=1)
+    indexed_record_count: int = Field(ge=1)
+    requested_limit: int | None
+    source_records_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    mapping_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class TableBaselineEvaluationReport(BaseModel):
+    """Document-level dense results over the reviewed gold benchmark."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    suite: Literal["retrieval"]
+    evaluation_version: str
+    retriever: Literal["dense_table_metadata"]
+    model_name: str
+    device: str
+    artifact_version: str
+    source_index_version: str
+    extractor_version: str
+    source_records_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    benchmark_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    candidate_document_count: int = Field(ge=1)
+    query_count: int = Field(ge=1)
+    answerable_query_count: int = Field(ge=0)
+    unanswerable_query_count: int = Field(ge=0)
+    k_values: list[int]
+    metrics: dict[str, Any]
+    results: list[dict[str, Any]]
 
 
 class TextEncoder(Protocol):
@@ -61,11 +129,42 @@ class BaselineConfig:
     limit: int | None = DEFAULT_LIMIT
     batch_size: int = DEFAULT_BATCH_SIZE
     top_k: int = DEFAULT_TOP_K
+    trust_remote_code: bool = False
 
     def validate(self) -> None:
         """Reject unsafe output placement and nonsensical runtime settings."""
         if self.output_dir in {self.chunks_path, self.queries_path}:
             raise ValueError("output_dir must differ from both input paths")
+        if not self.model_name.strip():
+            raise ValueError("model_name must not be blank")
+        if self.device not in DEVICE_CHOICES:
+            raise ValueError(f"device must be one of {DEVICE_CHOICES}")
+        if self.limit is not None and self.limit < 1:
+            raise ValueError("limit must be at least 1 or None")
+        if self.batch_size < 1:
+            raise ValueError("batch_size must be at least 1")
+        if self.top_k < 1:
+            raise ValueError("top_k must be at least 1")
+
+
+@dataclass(frozen=True)
+class TableBaselineConfig:
+    """Configuration for gold evaluation over extracted table metadata."""
+
+    records_path: Path
+    benchmark_dir: Path
+    output_dir: Path
+    model_name: str = DEFAULT_MODEL
+    device: str = "auto"
+    limit: int | None = None
+    batch_size: int = DEFAULT_BATCH_SIZE
+    top_k: int = DEFAULT_TOP_K
+    trust_remote_code: bool = False
+
+    def validate(self) -> None:
+        resolved_output = self.output_dir.resolve()
+        if resolved_output in {self.records_path.resolve(), self.benchmark_dir.resolve()}:
+            raise ValueError("output_dir must differ from records_path and benchmark_dir")
         if not self.model_name.strip():
             raise ValueError("model_name must not be blank")
         if self.device not in DEVICE_CHOICES:
@@ -86,7 +185,7 @@ class SentenceTransformerEncoder:
     weights plus the standard attention-mask mean pooling used by the model.
     """
 
-    def __init__(self, model_name: str, device: str) -> None:
+    def __init__(self, model_name: str, device: str, *, trust_remote_code: bool = False) -> None:
         try:
             import torch  # pyright: ignore[reportMissingImports]
             from transformers import (  # pyright: ignore[reportMissingImports]
@@ -102,8 +201,10 @@ class SentenceTransformerEncoder:
         self.model_name = model_name
         self.device_name = self._resolve_device(torch, device)
         LOGGER.info("Loading %s on %s", model_name, self.device_name)
-        self._tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self._model = AutoModel.from_pretrained(model_name)
+        self._tokenizer = AutoTokenizer.from_pretrained(
+            model_name, trust_remote_code=trust_remote_code
+        )
+        self._model = AutoModel.from_pretrained(model_name, trust_remote_code=trust_remote_code)
         self._model.eval()
         self._model.to(self.device_name)
 
@@ -283,7 +384,9 @@ def run_baseline(
     LOGGER.info("Loading FAISS before initializing the embedding device")
     import faiss  # pyright: ignore[reportMissingImports]
 
-    active_encoder = encoder or SentenceTransformerEncoder(config.model_name, config.device)
+    active_encoder = encoder or SentenceTransformerEncoder(
+        config.model_name, config.device, trust_remote_code=config.trust_remote_code
+    )
     chunk_vectors = _normalize_embeddings(
         active_encoder.encode([chunk.text for chunk in selected], batch_size=config.batch_size),
         expected_rows=len(selected),
@@ -421,19 +524,347 @@ def run_baseline(
     return report
 
 
-def main() -> None:
-    """Run the bounded pretrained baseline index and evaluation."""
-    parser = argparse.ArgumentParser(
-        description="Build exact pretrained FAISS and evaluate retained queries."
+def _canonical_source_path(value: str) -> str:
+    return value.replace("\\", "/").strip("/").casefold()
+
+
+def _benchmark_paths(benchmark_dir: Path) -> tuple[Path, Path, Path, Path]:
+    return (
+        benchmark_dir / "retrieval_queries.jsonl",
+        benchmark_dir / "retrieval_qrels.jsonl",
+        benchmark_dir / "retrieval_chunk_qrels.jsonl",
+        benchmark_dir / "retrieval_catalog.jsonl",
     )
-    parser.add_argument("chunks_path", type=Path)
-    parser.add_argument("--queries", type=Path, required=True)
+
+
+def _benchmark_hash(paths: Sequence[Path]) -> str:
+    digest = hashlib.sha256()
+    for path in paths:
+        try:
+            content = path.read_bytes()
+        except FileNotFoundError as exc:
+            raise ValueError(f"Benchmark file does not exist: {path}") from exc
+        digest.update(path.name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(content)
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _validate_table_records(
+    records: list[MetadataEmbeddingRecord],
+) -> tuple[str, str, dict[str, MetadataEmbeddingRecord]]:
+    checks = {
+        "embedding IDs": [record.embedding_id for record in records],
+        "document IDs": [record.document_id for record in records],
+        "source paths": [_canonical_source_path(record.source_path) for record in records],
+        "table names": [record.table_name.casefold() for record in records],
+    }
+    for label, values in checks.items():
+        duplicates = [value for value, count in Counter(values).items() if count > 1]
+        if duplicates:
+            raise ValueError(f"Duplicate table metadata {label}: {', '.join(duplicates[:5])}")
+    for record in records:
+        if _sha256_text(record.embedding_text) != record.embedding_text_hash:
+            raise ValueError(f"Embedding text hash disagrees for {record.embedding_id}")
+
+    index_versions = {record.index_version for record in records}
+    extractor_versions = {record.extractor_version for record in records}
+    if len(index_versions) != 1:
+        raise ValueError("Table metadata records contain multiple source index versions")
+    if len(extractor_versions) != 1:
+        raise ValueError("Table metadata records contain multiple extractor versions")
+    by_path = {_canonical_source_path(record.source_path): record for record in records}
+    return next(iter(index_versions)), next(iter(extractor_versions)), by_path
+
+
+def _macro_document_metrics(
+    results: Sequence[dict[str, Any]],
+    *,
+    failure_bucket: str | None = None,
+) -> dict[str, float | None]:
+    names = ["mrr"] + [
+        f"{metric}@{k}" for k in GOLD_K_VALUES for metric in ("precision", "recall", "ndcg", "hit")
+    ]
+    selected = [
+        result
+        for result in results
+        if result["answerable"]
+        and result["metrics"] is not None
+        and (failure_bucket is None or result["failure_bucket"] == failure_bucket)
+    ]
+    summary: dict[str, float | None] = {}
+    for name in names:
+        values = [
+            float(result["metrics"][name])
+            for result in selected
+            if result["metrics"][name] is not None
+        ]
+        summary[name] = sum(values) / len(values) if values else None
+    return summary
+
+
+def run_table_baseline(
+    config: TableBaselineConfig,
+    *,
+    encoder: TextEncoder | None = None,
+) -> TableBaselineEvaluationReport:
+    """Embed extracted table metadata and evaluate the reviewed document qrels."""
+    config.validate()
+    all_records, records_hash = _load_jsonl(
+        config.records_path,
+        MetadataEmbeddingRecord,
+        "table metadata",
+    )
+    source_index_version, extractor_version, _all_records_by_path = _validate_table_records(
+        all_records
+    )
+    selected = all_records[: config.limit] if config.limit is not None else all_records
+    selected_paths = {_canonical_source_path(record.source_path): record for record in selected}
+
+    queries_path, qrels_path, chunk_qrels_path, catalog_path = _benchmark_paths(
+        config.benchmark_dir
+    )
+    queries, targets, _chunk_targets, documents_by_key = load_retrieval_dataset(
+        queries_path,
+        qrels_path,
+        chunk_qrels_path,
+        catalog_path,
+    )
+    benchmark_hash = _benchmark_hash((queries_path, qrels_path, chunk_qrels_path, catalog_path))
+    targets_by_query: dict[str, list[RetrievalTarget]] = defaultdict(list)
+    for target in targets:
+        targets_by_query[target.query_id].append(target)
+
+    missing_positive_paths: set[str] = set()
+    for target in targets:
+        if target.relevance <= 0:
+            continue
+        document = documents_by_key[target.document_key.casefold()]
+        if _canonical_source_path(document.source_path) not in selected_paths:
+            missing_positive_paths.add(document.source_path)
+    if missing_positive_paths:
+        raise ValueError(
+            "The bounded table index excludes positive gold documents: "
+            + ", ".join(sorted(missing_positive_paths)[:5])
+        )
+
+    active_encoder = encoder or SentenceTransformerEncoder(
+        config.model_name, config.device, trust_remote_code=config.trust_remote_code
+    )
+    table_vectors = _normalize_embeddings(
+        active_encoder.encode(
+            [record.embedding_text for record in selected],
+            batch_size=config.batch_size,
+        ),
+        expected_rows=len(selected),
+    )
+    query_vectors = _normalize_embeddings(
+        active_encoder.encode([query.query for query in queries], batch_size=config.batch_size),
+        expected_rows=len(queries),
+    )
+    if query_vectors.shape[1] != table_vectors.shape[1]:
+        raise ValueError("Query and table embedding dimensions do not match")
+
+    import faiss  # pyright: ignore[reportMissingImports]
+
+    dimension = int(table_vectors.shape[1])
+    index = faiss.IndexFlatIP(dimension)
+    index.add(table_vectors)
+    if index.ntotal != len(selected):
+        raise RuntimeError("FAISS index size does not match selected table count")
+
+    mappings = [
+        TableFaissMappingRecord(
+            vector_position=position,
+            embedding_id=record.embedding_id,
+            document_id=record.document_id,
+            source_path=record.source_path,
+            table_name=record.table_name,
+            metadata_chunk_id=record.metadata_chunk_id,
+            embedding_text_hash=record.embedding_text_hash,
+            description_status=record.description_status,
+        )
+        for position, record in enumerate(selected)
+    ]
+    mapping_lines = [
+        json.dumps(mapping.model_dump(), sort_keys=True, ensure_ascii=False) for mapping in mappings
+    ]
+    mapping_hash = _sha256_text("\n".join(mapping_lines) + "\n")
+    index_metadata = TableBaselineIndexMetadata(
+        artifact_version=TABLE_INDEX_VERSION,
+        source_index_version=source_index_version,
+        extractor_version=extractor_version,
+        model_name=active_encoder.model_name,
+        device=active_encoder.device_name,
+        index_type="IndexFlatIP",
+        normalized_embeddings=True,
+        embedding_dimension=dimension,
+        source_record_count=len(all_records),
+        indexed_record_count=len(selected),
+        requested_limit=config.limit,
+        source_records_hash=records_hash,
+        mapping_hash=mapping_hash,
+    )
+
+    scores, positions = index.search(query_vectors, len(selected))
+    mapping_by_position = {mapping.vector_position: mapping for mapping in mappings}
+    inspection_k = min(config.top_k, len(selected))
+    results: list[dict[str, Any]] = []
+    for query_index, query in enumerate(queries):
+        ranked_positions = [int(value) for value in positions[query_index]]
+        ranked_document_ids = [
+            mapping_by_position[position].document_id for position in ranked_positions
+        ]
+        relevance_by_document_id: dict[str, int] = {}
+        positive_source_paths: list[str] = []
+        for target in targets_by_query[query.query_id]:
+            document = documents_by_key[target.document_key.casefold()]
+            record = selected_paths.get(_canonical_source_path(document.source_path))
+            if record is not None:
+                relevance_by_document_id[record.document_id] = target.relevance
+                if target.relevance > 0:
+                    positive_source_paths.append(record.source_path)
+
+        metrics: dict[str, float | bool | None] | None = None
+        metrics_status: str | None = None
+        if query.answerable:
+            positives_only = query.judgment_scope == JudgmentScope.positive_only
+            metrics = ranked_metrics(
+                ranked_document_ids,
+                relevance_by_document_id,
+                GOLD_K_VALUES,
+                positives_only=positives_only,
+            )
+            metrics_status = "recall_only" if positives_only else "complete"
+
+        top_hits = []
+        for rank, vector_position in enumerate(ranked_positions[:inspection_k], start=1):
+            mapping = mapping_by_position[vector_position]
+            top_hits.append(
+                {
+                    "rank": rank,
+                    "score": float(scores[query_index, rank - 1]),
+                    "embedding_id": mapping.embedding_id,
+                    "document_id": mapping.document_id,
+                    "source_path": mapping.source_path,
+                    "table_name": mapping.table_name,
+                    "description_status": mapping.description_status,
+                    "relevance": relevance_by_document_id.get(mapping.document_id),
+                }
+            )
+        positive_ranks = [
+            rank
+            for rank, document_id in enumerate(ranked_document_ids, start=1)
+            if relevance_by_document_id.get(document_id, 0) > 0
+        ]
+        results.append(
+            {
+                "query_id": query.query_id,
+                "query": query.query,
+                "intent": query.intent,
+                "failure_bucket": query.failure_bucket,
+                "answerable": query.answerable,
+                "judgment_scope": query.judgment_scope.value,
+                "metrics_status": metrics_status,
+                "metrics": metrics,
+                "positive_source_paths": sorted(positive_source_paths),
+                "positive_ranks": positive_ranks,
+                "top_hits": top_hits,
+                "no_answer_diagnostic": (
+                    {
+                        "top_score": top_hits[0]["score"] if top_hits else None,
+                        "note": "Dense retrieval has no abstention threshold.",
+                    }
+                    if not query.answerable
+                    else None
+                ),
+            }
+        )
+
+    failure_buckets = sorted({query.failure_bucket for query in queries})
+    report = TableBaselineEvaluationReport(
+        suite="retrieval",
+        evaluation_version=TABLE_EVALUATION_VERSION,
+        retriever="dense_table_metadata",
+        model_name=active_encoder.model_name,
+        device=active_encoder.device_name,
+        artifact_version=TABLE_INDEX_VERSION,
+        source_index_version=source_index_version,
+        extractor_version=extractor_version,
+        source_records_hash=records_hash,
+        benchmark_hash=benchmark_hash,
+        candidate_document_count=len(selected),
+        query_count=len(queries),
+        answerable_query_count=sum(query.answerable for query in queries),
+        unanswerable_query_count=sum(not query.answerable for query in queries),
+        k_values=list(GOLD_K_VALUES),
+        metrics={
+            "document": _macro_document_metrics(results),
+            "by_failure_bucket": {
+                bucket: {
+                    "query_count": sum(result["failure_bucket"] == bucket for result in results),
+                    "scored_query_count": sum(
+                        result["failure_bucket"] == bucket
+                        and result["answerable"]
+                        and result["metrics"] is not None
+                        for result in results
+                    ),
+                    "document": _macro_document_metrics(results, failure_bucket=bucket),
+                }
+                for bucket in failure_buckets
+            },
+        },
+        results=results,
+    )
+
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    _write_faiss_atomic(config.output_dir / "tables.faiss", index)
+    _write_atomic(config.output_dir / "table_mapping.jsonl", mapping_lines)
+    _write_atomic(
+        config.output_dir / "index_metadata.json",
+        [json.dumps(index_metadata.model_dump(), indent=2, sort_keys=True)],
+    )
+    _write_atomic(
+        config.output_dir / "gold_evaluation.json",
+        [json.dumps(report.model_dump(), indent=2, sort_keys=True)],
+    )
+    return report
+
+
+def main() -> None:
+    """Build either the synthetic-chunk or reviewed table-metadata baseline."""
+    parser = argparse.ArgumentParser(
+        description="Build exact pretrained FAISS and evaluate synthetic or gold queries."
+    )
+    parser.add_argument(
+        "corpus_path",
+        type=Path,
+        help="Synthetic chunk JSONL or metadata-extractor table record JSONL.",
+    )
+    evaluation = parser.add_mutually_exclusive_group(required=True)
+    evaluation.add_argument(
+        "--queries",
+        type=Path,
+        help="Reviewed synthetic-query JSONL (synthetic chunk mode).",
+    )
+    evaluation.add_argument(
+        "--benchmark-dir",
+        type=Path,
+        help="Directory containing the reviewed retrieval gold JSONL files.",
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--device", choices=DEVICE_CHOICES, default="auto")
-    parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Optional corpus bound (synthetic mode defaults to 200; gold mode to all tables).",
+    )
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
+    parser.add_argument("--trust-remote-code", action="store_true", default=False)
     parser.add_argument(
         "--log-level",
         choices=("DEBUG", "INFO", "WARNING", "ERROR"),
@@ -445,26 +876,54 @@ def main() -> None:
         format="%(levelname)s %(name)s: %(message)s",
     )
     try:
-        report = run_baseline(
-            BaselineConfig(
-                chunks_path=args.chunks_path,
-                queries_path=args.queries,
-                output_dir=args.output_dir,
-                model_name=args.model,
-                device=args.device,
-                limit=args.limit,
-                batch_size=args.batch_size,
-                top_k=args.top_k,
+        if args.benchmark_dir is not None:
+            table_report = run_table_baseline(
+                TableBaselineConfig(
+                    records_path=args.corpus_path,
+                    benchmark_dir=args.benchmark_dir,
+                    output_dir=args.output_dir,
+                    model_name=args.model,
+                    device=args.device,
+                    limit=args.limit,
+                    batch_size=args.batch_size,
+                    top_k=args.top_k,
+                    trust_remote_code=args.trust_remote_code,
+                )
             )
-        )
+        else:
+            report = run_baseline(
+                BaselineConfig(
+                    chunks_path=args.corpus_path,
+                    queries_path=args.queries,
+                    output_dir=args.output_dir,
+                    model_name=args.model,
+                    device=args.device,
+                    limit=args.limit if args.limit is not None else DEFAULT_LIMIT,
+                    batch_size=args.batch_size,
+                    top_k=args.top_k,
+                    trust_remote_code=args.trust_remote_code,
+                )
+            )
     except (OSError, RuntimeError, ValueError) as exc:
         parser.error(str(exc))
-    print(
-        f"Evaluated {report.evaluated_query_count} query against "
-        f"{report.candidate_chunk_count} exact FAISS candidates: "
-        f"Hit@1={report.hit_at_1:.3f} Hit@5={report.hit_at_5:.3f} "
-        f"Hit@10={report.hit_at_10:.3f} MRR={report.mrr:.3f}"
-    )
+
+    if args.benchmark_dir is not None:
+        document_metrics = table_report.metrics["document"]
+        print(
+            f"Evaluated {table_report.query_count} gold queries against "
+            f"{table_report.candidate_document_count} exact FAISS table candidates: "
+            f"Hit@1={document_metrics['hit@1']:.3f} "
+            f"Hit@5={document_metrics['hit@5']:.3f} "
+            f"Hit@10={document_metrics['hit@10']:.3f} "
+            f"MRR={document_metrics['mrr']:.3f}"
+        )
+    else:
+        print(
+            f"Evaluated {report.evaluated_query_count} query against "
+            f"{report.candidate_chunk_count} exact FAISS candidates: "
+            f"Hit@1={report.hit_at_1:.3f} Hit@5={report.hit_at_5:.3f} "
+            f"Hit@10={report.hit_at_10:.3f} MRR={report.mrr:.3f}"
+        )
 
 
 if __name__ == "__main__":

@@ -8,6 +8,8 @@
 {"target_id":"Q07-D02","query_id":"Q07","document_key":"epic_clarity:table:ABF_MAP","relevance":3,"relevance_rationale":"Defines local form identifiers and their corresponding CIDs."}
 {"target_id":"Q08-D01","query_id":"Q08","document_key":"epic_clarity:table:A0H_MAP","relevance":3,"relevance_rationale":"Defines LINE and shows it in a mapping-table composite key."}
 {"target_id":"Q08-D02","query_id":"Q08","document_key":"epic_clarity:table:ABN_DOCUMENT_ID","relevance":3,"relevance_rationale":"Defines LINE at contact grain and shows it in the ABN composite key."}
+{"target_id":"Q08-D03","query_id":"Q08","document_key":"epic_clarity:table:AAG_MAP","relevance":2,"relevance_rationale":"Has the same LINE column in an identical composite key as A0H_MAP."}
+{"target_id":"Q08-D04","query_id":"Q08","document_key":"epic_clarity:table:ABF_MAP","relevance":2,"relevance_rationale":"Has the same LINE column in an identical composite key as A0H_MAP."}
 {"target_id":"Q09-D01","query_id":"Q09","document_key":"epic_clarity:table:A0H_UPDATE","relevance":3,"relevance_rationale":"Defines JOB as an integer job bucket in A0H updates."}
 {"target_id":"Q09-D02","query_id":"Q09","document_key":"epic_clarity:table:AAG_UPDATE","relevance":3,"relevance_rationale":"Defines JOB as an integer job bucket in AAG updates."}
 {"target_id":"Q09-D03","query_id":"Q09","document_key":"epic_clarity:table:ABF_UPDATE","relevance":3,"relevance_rationale":"Defines JOB as an integer job number in ABF updates."}
@@ -35,6 +37,7 @@
 {"target_id":"Q17-D03","query_id":"Q17","document_key":"epic_clarity:table:ABF_MAP","relevance":3,"relevance_rationale":"Supplies the form mapping table's composite key."}
 {"target_id":"Q18-D01","query_id":"Q18","document_key":"epic_clarity:table:A0H_MAP","relevance":3,"relevance_rationale":"Lists instance-table destinations for the access mapping's physical-owner identifier."}
 {"target_id":"Q18-D02","query_id":"Q18","document_key":"epic_clarity:table:AAG_MAP","relevance":3,"relevance_rationale":"Lists the same instance-table destinations for the action-group mapping."}
+{"target_id":"Q18-D03","query_id":"Q18","document_key":"epic_clarity:table:ABF_MAP","relevance":2,"relevance_rationale":"Has the same CM_PHY_OWNER_ID foreign-key destinations as A0H_MAP and AAG_MAP."}
 {"target_id":"Q19-D01","query_id":"Q19","document_key":"epic_clarity:table:ZC_XPR_INJ_MECHANISM","relevance":3,"relevance_rationale":"Defines the integer mechanism category key."}
 {"target_id":"Q19-D02","query_id":"Q19","document_key":"epic_clarity:table:ZC_XPR_INJURY_SITE","relevance":3,"relevance_rationale":"Defines the integer injury-site category key."}
 {"target_id":"Q20-D01","query_id":"Q20","document_key":"epic_clarity:table:ABN_DOCUMENT_ID","relevance":3,"relevance_rationale":"Contains both the table-level EHI flag and PAT_ID field-level export status."}
