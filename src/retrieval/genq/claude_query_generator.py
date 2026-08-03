@@ -120,12 +120,12 @@ def _extract_queries(response: Any, expected_count: int) -> list[str]:
         payload = getattr(block, "input", None)
         if not isinstance(payload, dict) or not isinstance(payload.get("queries"), list):
             break
-        queries = payload["queries"]
-        if len(queries) != expected_count or not all(isinstance(query, str) for query in queries):
+        queries = [q for q in payload["queries"] if isinstance(q, str)]
+        if len(queries) < expected_count:
             raise RuntimeError(
                 f"Claude returned {len(queries)} valid query values; expected {expected_count}"
             )
-        return queries
+        return queries[:expected_count]
     raise RuntimeError("Claude did not return the required return_queries tool result")
 
 

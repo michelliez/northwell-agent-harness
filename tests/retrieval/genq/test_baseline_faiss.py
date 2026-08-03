@@ -4,6 +4,7 @@ import hashlib
 import json
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -15,8 +16,10 @@ np = pytest.importorskip("numpy")
 
 from retrieval.genq.baseline_faiss import (  # noqa: E402
     BaselineConfig,
+    TableBaselineConfig,
     _normalize_embeddings,
     run_baseline,
+    run_table_baseline,
 )
 
 HASH = hashlib.sha256(b"value").hexdigest()
@@ -29,7 +32,7 @@ class FakeEncoder:
     def __init__(self, vectors: dict[str, list[float]]) -> None:
         self.vectors = vectors
 
-    def encode(self, texts: Sequence[str], *, batch_size: int) -> np.ndarray:
+    def encode(self, texts: Sequence[str], *, batch_size: int) -> Any:
         assert batch_size > 0
         return np.asarray([self.vectors[text] for text in texts], dtype=np.float32)
 
@@ -102,6 +105,141 @@ def config(
     return BaselineConfig(**values)  # type: ignore[arg-type]
 
 
+def table_record(table_name: str, embedding_text: str) -> dict[str, object]:
+    document_id = hashlib.sha256(f"document:{table_name}".encode()).hexdigest()
+    return {
+        "embedding_id": f"table:{document_id}",
+        "document_id": document_id,
+        "source_path": f"{table_name}.html",
+        "source_hash": hashlib.sha256(f"source:{table_name}".encode()).hexdigest(),
+        "table_name": table_name,
+        "title": table_name,
+        "metadata_chunk_id": f"{table_name}__METADATA",
+        "metadata_text_hash": hashlib.sha256(f"metadata:{table_name}".encode()).hexdigest(),
+        "description_status": "present" if "Description:" in embedding_text else "empty",
+        "description": "Test description" if "Description:" in embedding_text else None,
+        "embedding_text": embedding_text,
+        "embedding_text_hash": hashlib.sha256(embedding_text.encode()).hexdigest(),
+        "index_version": "test-index-v1",
+        "extractor_version": "table-metadata-v1",
+    }
+
+
+def gold_query(
+    query_id: str,
+    query_text: str,
+    *,
+    failure_bucket: str,
+    answerable: bool = True,
+    judgment_scope: str = "corpus_complete",
+) -> dict[str, object]:
+    return {
+        "query_id": query_id,
+        "query": query_text,
+        "intent": "test",
+        "failure_bucket": failure_bucket,
+        "answerable": answerable,
+        "expected_answer": {
+            "type": "string" if answerable else "abstain",
+            "value": "answer" if answerable else None,
+        },
+        "answerability_rationale": "test rationale",
+        "difficulty": "easy",
+        "tags": ["test"],
+        "split": "test",
+        "judgment_scope": judgment_scope,
+    }
+
+
+def gold_document(table_name: str) -> dict[str, object]:
+    return {
+        "document_key": f"epic_clarity:table:{table_name}",
+        "source_system": "epic_clarity",
+        "object_type": "table",
+        "object_name": table_name,
+        "source_path": f"{table_name}.html",
+    }
+
+
+def gold_target(query_id: str, table_name: str) -> dict[str, object]:
+    return {
+        "target_id": f"{query_id}-D01",
+        "query_id": query_id,
+        "document_key": f"epic_clarity:table:{table_name}",
+        "relevance": 3,
+        "relevance_rationale": "test rationale",
+    }
+
+
+def gold_chunk_target(query_id: str, table_name: str) -> dict[str, object]:
+    return {
+        "target_id": f"{query_id}-C01",
+        "query_id": query_id,
+        "document_key": f"epic_clarity:table:{table_name}",
+        "heading_path": f"{table_name} > Table Metadata",
+        "chunk_category": "table_metadata",
+        "required_terms": [table_name],
+        "match_policy": "exactly_one",
+        "relevance": 3,
+        "relevance_rationale": "test rationale",
+    }
+
+
+def table_config(tmp_path: Path, *, limit: int | None = None) -> TableBaselineConfig:
+    records_path = tmp_path / "table_records.jsonl"
+    write_jsonl(
+        records_path,
+        [
+            table_record("TABLE_A", "Table: TABLE_A\nDescription: Test description"),
+            table_record("TABLE_B", "Table: TABLE_B\nDescription: Test description"),
+            table_record("TABLE_C", "Table: TABLE_C"),
+        ],
+    )
+    benchmark_dir = tmp_path / "benchmark"
+    benchmark_dir.mkdir()
+    write_jsonl(
+        benchmark_dir / "retrieval_queries.jsonl",
+        [
+            gold_query("Q_A", "query a", failure_bucket="named_table_lookup"),
+            gold_query(
+                "Q_B",
+                "query b",
+                failure_bucket="business_concept_discovery",
+                judgment_scope="positive_only",
+            ),
+            gold_query(
+                "Q_NO",
+                "query no answer",
+                failure_bucket="negative_unsupported",
+                answerable=False,
+            ),
+        ],
+    )
+    write_jsonl(
+        benchmark_dir / "retrieval_qrels.jsonl",
+        [gold_target("Q_A", "TABLE_A"), gold_target("Q_B", "TABLE_B")],
+    )
+    write_jsonl(
+        benchmark_dir / "retrieval_chunk_qrels.jsonl",
+        [
+            gold_chunk_target("Q_A", "TABLE_A"),
+            gold_chunk_target("Q_B", "TABLE_B"),
+        ],
+    )
+    write_jsonl(
+        benchmark_dir / "retrieval_catalog.jsonl",
+        [gold_document(name) for name in ("TABLE_A", "TABLE_B", "TABLE_C")],
+    )
+    return TableBaselineConfig(
+        records_path=records_path,
+        benchmark_dir=benchmark_dir,
+        output_dir=tmp_path / "table-baseline",
+        limit=limit,
+        batch_size=2,
+        top_k=2,
+    )
+
+
 def test_exact_faiss_mapping_and_metrics(tmp_path: Path) -> None:
     chunks = [
         chunk("TABLE_A__METADATA", "passage a"),
@@ -167,6 +305,72 @@ def test_embeddings_are_normalized_before_inner_product_search(tmp_path: Path) -
     assert report.query_results[0].top_hits[0].score == pytest.approx(1.0)
 
 
+def test_table_metadata_baseline_uses_gold_document_qrels(tmp_path: Path) -> None:
+    settings = table_config(tmp_path)
+    encoder = FakeEncoder(
+        {
+            "Table: TABLE_A\nDescription: Test description": [1.0, 0.0],
+            "Table: TABLE_B\nDescription: Test description": [0.8, 0.6],
+            "Table: TABLE_C": [0.0, 1.0],
+            "query a": [1.0, 0.0],
+            "query b": [1.0, 0.0],
+            "query no answer": [0.0, 1.0],
+        }
+    )
+
+    report = run_table_baseline(settings, encoder=encoder)
+
+    assert report.query_count == 3
+    assert report.answerable_query_count == 2
+    assert report.unanswerable_query_count == 1
+    assert report.candidate_document_count == 3
+    assert report.metrics["document"]["hit@1"] == pytest.approx(0.5)
+    assert report.metrics["document"]["hit@5"] == pytest.approx(1.0)
+    assert report.metrics["document"]["mrr"] == pytest.approx(0.75)
+    assert (
+        report.metrics["by_failure_bucket"]["business_concept_discovery"]["document"]["precision@1"]
+        is None
+    )
+    assert [result["positive_ranks"] for result in report.results[:2]] == [[1], [2]]
+    assert report.results[2]["metrics"] is None
+    assert report.results[2]["no_answer_diagnostic"]["top_score"] == pytest.approx(1.0)
+
+    mapping = [
+        json.loads(line)
+        for line in (settings.output_dir / "table_mapping.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert [(row["vector_position"], row["table_name"]) for row in mapping] == [
+        (0, "TABLE_A"),
+        (1, "TABLE_B"),
+        (2, "TABLE_C"),
+    ]
+    assert mapping[2]["description_status"] == "empty"
+    assert (settings.output_dir / "gold_evaluation.json").is_file()
+    index = faiss.read_index(str(settings.output_dir / "tables.faiss"))
+    assert index.ntotal == 3
+    assert index.d == 2
+
+
+def test_bounded_table_index_must_include_every_gold_positive(tmp_path: Path) -> None:
+    settings = table_config(tmp_path, limit=1)
+
+    with pytest.raises(ValueError, match="excludes positive gold documents"):
+        run_table_baseline(settings, encoder=FakeEncoder({}))
+    assert not settings.output_dir.exists()
+
+
+def test_table_embedding_text_hash_mismatch_is_rejected(tmp_path: Path) -> None:
+    settings = table_config(tmp_path)
+    rows = [json.loads(line) for line in settings.records_path.read_text().splitlines()]
+    rows[0]["embedding_text_hash"] = HASH
+    write_jsonl(settings.records_path, rows)
+
+    with pytest.raises(ValueError, match="Embedding text hash disagrees"):
+        run_table_baseline(settings, encoder=FakeEncoder({}))
+
+
 def test_bounded_index_must_include_every_evaluation_positive(tmp_path: Path) -> None:
     settings = config(
         tmp_path,
@@ -210,7 +414,7 @@ def test_query_provenance_mismatch_is_rejected(tmp_path: Path) -> None:
         np.asarray([1.0, 2.0], dtype=np.float32),
     ],
 )
-def test_invalid_embeddings_are_rejected(vectors: np.ndarray) -> None:
+def test_invalid_embeddings_are_rejected(vectors: Any) -> None:
     with pytest.raises(ValueError):
         _normalize_embeddings(vectors, expected_rows=1)
 

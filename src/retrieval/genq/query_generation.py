@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from dotenv import load_dotenv
 from pydantic import ValidationError
 
 from retrieval.chunk_models import (
@@ -291,6 +292,9 @@ def main() -> None:
         level=getattr(logging, args.log_level),
         format="%(levelname)s %(name)s: %(message)s",
     )
+    # Read .env the same way agent_host.config does, so credentials live in one
+    # place. Already-exported variables win, so this only adds resolution.
+    load_dotenv()
     try:
         report = generate_queries(
             GenerationConfig(
