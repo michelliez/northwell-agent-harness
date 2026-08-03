@@ -15,10 +15,48 @@ for, not by when it was written:
 | 5. MiniLM/FAISS baseline | `retrieval/genq/baseline_faiss.py` | `agent-harness-genq-baseline` |
 
 Stage 1 is **also production code**: `retrieval/indexer.py` calls
-`parse_column_records` to build the column chunks in the live SQLite index, so
-the same passage text and `chunk_id` serve lexical retrieval and any future
-semantic retrieval. Changing it changes the production index — bump
-`CHUNKER_VERSION` in `retrieval/index_contract.py` and rebuild.
+`parse_column_records` to build the column chunks in the live SQLite index.
+Changing it changes the production index — bump `CHUNKER_VERSION` in
+`retrieval/index_contract.py` and rebuild.
+
+## Table-level embedding input
+
+Before embedding individual columns, the first dense baseline operates at table
+level. `retrieval/metadata_extractor.py` reads the production SQLite index in
+read-only mode and writes one deterministic record for every table with a
+metadata chunk:
+
+```bash
+uv run agent-harness-metadata-extract var/rag/index-genq-columns-v5.sqlite \
+  --output .local/embeddings/table-metadata/records.jsonl \
+  --report .local/embeddings/table-metadata/extraction-report.json
+```
+
+Each encoder input is `Table: <name>\nDescription: <description>` when a
+description exists, or `Table: <name>` as an explicit fallback. Records retain
+the description status, document ID, metadata chunk ID, source and text hashes,
+index version, and extractor version. Missing or duplicate metadata chunks fail
+the run. This stage performs no model loading and creates no vector index.
+
+The first dense retrieval run consumes that artifact directly and evaluates it
+against the same reviewed 50-query document benchmark as FTS:
+
+```bash
+uv run --group genq agent-harness-genq-baseline \
+  .local/embeddings/table-metadata/records.jsonl \
+  --benchmark-dir evals/retrieval/benchmark \
+  --output-dir .local/embeddings/table-metadata/minilm-gold \
+  --model sentence-transformers/all-MiniLM-L6-v2 \
+  --batch-size 128 --top-k 10
+```
+
+This mode indexes all records by default and writes `tables.faiss`,
+`table_mapping.jsonl`, `index_metadata.json`, and `gold_evaluation.json`. The
+evaluation resolves portable catalog paths to extracted document IDs, reports
+document MRR/Hit/Recall/nDCG at 1, 5, and 10 plus failure-bucket breakdowns, and
+retains the ranked hits for inspection. Positive-only qrels do not produce
+precision or nDCG; unsupported queries are diagnostic because this baseline has
+no abstention threshold.
 
 Stages 2 and 4 live in `evals/` because leakage-safe splits and query quality
 gates are evaluation concerns whether or not a model is ever trained.
@@ -141,8 +179,12 @@ product equals cosine similarity, and `IndexFlatIP` is exact, so
 approximate-nearest-neighbor error cannot distort the baseline.
 
 FAISS returns integer positions rather than application metadata, so the stage
-writes a separate JSONL mapping each vector position to its stable `chunk_id`.
-That mapping is required for correct retrieval.
+writes a separate JSONL mapping each vector position to its stable table or
+chunk identity. That mapping is required for correct retrieval.
+
+The command supports two explicit evaluation modes: `--benchmark-dir` for the
+table-level metadata artifact and reviewed gold queries shown above, or
+`--queries` for the older synthetic chunk/query smoke evaluation below.
 
 ```bash
 uv run --group genq agent-harness-genq-baseline .local/genq/corpus/chunks.jsonl \
@@ -162,19 +204,24 @@ Precision@K can penalize semantically useful but unlabeled sibling chunks.
 
 ## Status
 
-Stages 1–5 are implemented. The only baseline result so far is a one-query,
-200-chunk smoke test: positive at rank 3, Hit@5 1.000, MRR 0.333. The top three
-hits were the metadata chunks for `A0H_MAP`, `A0H_UPDATE`, and the known
-positive `A0H_DELETE` — closely related documents, so a single-positive
-synthetic label likely understates semantic relevance. That validates the
-machinery and establishes nothing about quality.
+Stages 1–5 are implemented. The table-level MiniLM baseline over all 40,551
+metadata records and the 50 reviewed queries produced document Hit@1 0.220,
+Hit@5 0.268, Hit@10 0.366, and MRR 0.261 across the 41 answerable queries. This
+is an honest pretrained dense floor, not a production retrieval target. Its
+Hit@5 by answerable failure bucket was 0.500 for named table lookup, 0.300 for
+named column schema, 0.300 for cross-table synthesis, and 0.000 for business
+concept discovery. The nine unsupported queries remain diagnostics until an
+abstention threshold is designed.
 
-Before this pipeline can inform a real decision it needs a representative
-generation run across all chunk types, a manual review pass, and a baseline over
-a materially larger query set. Synthetic-query evaluation also does not replace
-the hand-authored analyst benchmark in `evals/retrieval/benchmark/` — the two
-measure different things at different granularity and their numbers are not
-comparable.
+The earlier one-query, 200-chunk synthetic smoke test placed its positive at
+rank 3 (Hit@5 1.000, MRR 0.333). That run validated the synthetic machinery but
+established nothing about retrieval quality.
+
+Synthetic-query evaluation does not replace the hand-authored analyst benchmark
+in `evals/retrieval/benchmark/` — the two measure different things at different
+granularity and their numbers are not comparable. A future training experiment
+still needs a representative generation run across all chunk types and a manual
+review pass.
 
 ## Tests
 

@@ -235,8 +235,8 @@ def test_reviewed_benchmark_covers_analyst_failure_buckets() -> None:
         "cross_table_synthesis": 10,
         "negative_unsupported": 9,
     }
-    assert len(targets) == 69
-    assert len(chunk_targets) == 110
+    assert len(targets) == 72
+    assert len(chunk_targets) == 115
     assert all("analyst_phrased" in query.tags for query in queries)
 
     # The original 17 documents were the head and tail of a directory listing.
