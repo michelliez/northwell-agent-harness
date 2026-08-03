@@ -38,6 +38,7 @@ EventStatus = Literal["ok", "blocked", "error"]
 TraceEventName = Literal[
     "policy_gate.checked",
     "policy_gate.allowed",
+    "followup.contextualized",
     "request.blocked",
     "content.screened",
     "answer.blocked",
@@ -135,6 +136,7 @@ def _s(domain: TraceDomain, status: EventStatus, label: str, downstream: bool = 
 EVENT_SPEC: dict[TraceEventName, EventSpec] = {
     "policy_gate.checked": _s("policy", "ok", "Input screened"),
     "policy_gate.allowed": _s("policy", "ok", "Input allowed"),
+    "followup.contextualized": _s("policy", "ok", "Follow-up contextualized"),
     "request.blocked": _s("policy", "blocked", "Request blocked"),
     "content.screened": _s("policy", "ok", "Content screened"),
     "answer.blocked": _s("policy", "blocked", "Answer blocked"),

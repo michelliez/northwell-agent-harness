@@ -74,7 +74,7 @@ class BigQueryReadOnlyExecutor:
 
 ## Testing
 
-**Test file:** `tests/test_bigquery_read_only_executor.py`  
+**Test file:** `tests/sql/test_bigquery_read_only_executor.py`  
 **Test count:** 29 tests, all passing
 
 Coverage:

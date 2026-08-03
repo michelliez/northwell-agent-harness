@@ -15,7 +15,7 @@ The goal is to find prompts that should be blocked but reach the agent, and prom
 Command:
 
 ```bash
-uv run --no-editable pytest tests/policy_gate_test.py -q
+uv run --no-editable pytest tests/policy/test_policy_gate_corpus.py -q
 ```
 
 Timeline:

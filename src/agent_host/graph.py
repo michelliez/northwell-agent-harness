@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import time
 import uuid
+from dataclasses import asdict
+from pathlib import Path
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
@@ -24,16 +26,25 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
 from agent_host.budget import budget_from_env
+from agent_host.conversation import ConversationStore, turn_from_result
 from agent_host.nodes.answer_nodes import documentation_answer_node, general_answer_node
 from agent_host.nodes.exploration_nodes import exploration_node
-from agent_host.nodes.intent_nodes import REFUSAL_INTENTS, classify_intent_node
+from agent_host.nodes.intent_nodes import (
+    REFUSAL_INTENTS,
+    classify_intent_node,
+    intent_refusal_node,
+)
 from agent_host.nodes.lifecycle_nodes import (
     bounded_followup_node,
     final_answer_node,
     interpretation_and_citations_node,
 )
 from agent_host.nodes.output_safety_nodes import classify_output_safety_node
-from agent_host.nodes.policy_nodes import input_policy_node, result_safety_node
+from agent_host.nodes.policy_nodes import (
+    contextualize_followup_node,
+    input_policy_node,
+    result_safety_node,
+)
 from agent_host.nodes.retrieval_nodes import (
     context_gate_node,
     retrieval_permission_node,
@@ -47,13 +58,19 @@ from agent_host.nodes.sql_nodes import (
     validate_sql_node,
     write_sql_node,
 )
-from agent_host.schemas import AskResponse
+from agent_host.schemas import AskResponse, Citation
 from agent_host.state import AgentContext, AgentState, make_initial_state
 
 # ── routing functions ─────────────────────────────────────────────────────────
 
 
 def _route_from_policy(state: AgentState) -> str:
+    if state.get("policy_blocked"):
+        return "final_answer"
+    return "contextualize_followup"
+
+
+def _route_from_contextualize(state: AgentState) -> str:
     if state.get("policy_blocked"):
         return "final_answer"
     return "classify_intent"
@@ -65,7 +82,7 @@ def _route_from_classify_intent(state: AgentState) -> str:
         # Returned from clarification interrupt — restart from policy check
         return "input_policy"
     if intent in REFUSAL_INTENTS:
-        return "result_safety"
+        return "intent_refusal"
     if intent == "general_question":
         return "general_answer"
     if intent == "unknown":
@@ -173,7 +190,9 @@ def build_graph(checkpointer=None):
 
     # Register nodes
     builder.add_node("input_policy", input_policy_node)
+    builder.add_node("contextualize_followup", contextualize_followup_node)
     builder.add_node("classify_intent", classify_intent_node)
+    builder.add_node("intent_refusal", intent_refusal_node)
     builder.add_node("general_answer", general_answer_node)
     builder.add_node("retrieval_permission", retrieval_permission_node)
     builder.add_node("exploration", exploration_node)
@@ -204,11 +223,23 @@ def build_graph(checkpointer=None):
     builder.add_edge("interpretation_and_citations", "final_answer")
     builder.add_edge("final_answer", "bounded_followup")
     builder.add_edge("bounded_followup", END)
+    # Refusal text is a fixed host-owned template, not model output. Send it
+    # directly to finalization so the content screen cannot mistake a safe
+    # explanation containing words such as "patient" for disclosed PHI.
+    builder.add_edge("intent_refusal", "final_answer")
 
     # Conditional edges
     builder.add_conditional_edges(
         "input_policy",
         _route_from_policy,
+        {
+            "final_answer": "final_answer",
+            "contextualize_followup": "contextualize_followup",
+        },
+    )
+    builder.add_conditional_edges(
+        "contextualize_followup",
+        _route_from_contextualize,
         {"final_answer": "final_answer", "classify_intent": "classify_intent"},
     )
     builder.add_conditional_edges(
@@ -216,6 +247,7 @@ def build_graph(checkpointer=None):
         _route_from_classify_intent,
         {
             "input_policy": "input_policy",
+            "intent_refusal": "intent_refusal",
             "result_safety": "result_safety",
             "general_answer": "general_answer",
             "retrieval_permission": "retrieval_permission",
@@ -279,6 +311,7 @@ def build_graph(checkpointer=None):
 
 _graph = None
 _thread_contexts: dict[str, AgentContext] = {}
+_conversation_store = ConversationStore()
 
 
 def _get_graph():
@@ -315,7 +348,13 @@ def ask(
     budget.check_input(question)
     graph = _get_graph()
 
-    initial_state = make_initial_state(question, run_id=run_id, started_at=started_at)
+    conversation_turns = [asdict(turn) for turn in _conversation_store.get(tid)]
+    initial_state = make_initial_state(
+        question,
+        run_id=run_id,
+        started_at=started_at,
+        conversation_turns=conversation_turns,
+    )
     config: RunnableConfig = {"configurable": {"thread_id": tid}}
     context = AgentContext(budget=budget)
     _thread_contexts[tid] = context
@@ -339,7 +378,7 @@ def ask(
 
     response = _result_to_response(result, run_id, tid)
     if not response.interrupted:
-        _thread_contexts.pop(tid, None)
+        _finish_thread(tid, result, response)
     return response
 
 
@@ -388,8 +427,31 @@ def resume(
 
     response = _result_to_response(result, run_id, thread_id)
     if not response.interrupted:
-        _thread_contexts.pop(thread_id, None)
+        _finish_thread(thread_id, result, response)
     return response
+
+
+def clear_thread(thread_id: str) -> None:
+    """Idempotently clear follow-up metadata and any clarification checkpoint."""
+    _conversation_store.delete(thread_id)
+    _thread_contexts.pop(thread_id, None)
+    graph = _get_graph()
+    checkpointer = getattr(graph, "checkpointer", None)
+    if checkpointer is not None and hasattr(checkpointer, "delete_thread"):
+        checkpointer.delete_thread(thread_id)
+
+
+def _finish_thread(thread_id: str, result: dict, response: AskResponse) -> None:
+    """Retain bounded anchors, then remove the answer-bearing checkpoint."""
+    if response.allowed and response.answer:
+        question = str(result.get("question") or result.get("original_question") or "")
+        if question:
+            _conversation_store.record(thread_id, turn_from_result(question, result))
+    _thread_contexts.pop(thread_id, None)
+    graph = _get_graph()
+    checkpointer = getattr(graph, "checkpointer", None)
+    if checkpointer is not None and hasattr(checkpointer, "delete_thread"):
+        checkpointer.delete_thread(thread_id)
 
 
 def _result_to_response(result: dict, run_id: str, thread_id: str) -> AskResponse:
@@ -421,6 +483,18 @@ def _result_to_response(result: dict, run_id: str, thread_id: str) -> AskRespons
     if result.get("validation_result"):
         used_tools.append("validate_sql")
 
+    citation_ids = list(dict.fromkeys(result.get("citations") or []))
+    chunks_by_id = {
+        str(chunk.get("chunk_id")): chunk
+        for chunk in result.get("retrieved_chunks", [])
+        if chunk.get("chunk_id")
+    }
+    citation_details = [
+        _citation_from_chunk(chunk_id, chunks_by_id[chunk_id])
+        for chunk_id in citation_ids
+        if chunk_id in chunks_by_id
+    ]
+
     return AskResponse(
         answer=answer,
         used_tools=used_tools,
@@ -432,4 +506,23 @@ def _result_to_response(result: dict, run_id: str, thread_id: str) -> AskRespons
         intent=result.get("intent"),
         intent_confidence=result.get("intent_confidence"),
         disclosure_status=result.get("execution_status"),
+        generated_sql=result.get("generated_sql"),
+        query_parameters=list(result.get("query_parameters") or []),
+        citations=citation_ids,
+        citation_details=citation_details,
+        execution_status=result.get("execution_status"),
+    )
+
+
+def _citation_from_chunk(chunk_id: str, chunk: dict) -> Citation:
+    source_file = Path(str(chunk.get("source_path") or "documentation")).name
+    title = str(chunk.get("title") or Path(source_file).stem)
+    heading = chunk.get("heading_path")
+    label = f"{title} — {heading}" if heading else title
+    return Citation(
+        chunk_id=chunk_id,
+        label=label,
+        source_file=source_file,
+        heading_path=str(heading) if heading else None,
+        category=str(chunk["category"]) if chunk.get("category") else None,
     )

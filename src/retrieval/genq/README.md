@@ -185,7 +185,8 @@ uv run --all-groups agent-harness-genq-generate \
 
 ### Bounded Claude Haiku smoke-test command
 
-Claude uses `ANTHROPIC_API_KEY` or `AI_HUB_API_KEY` and honors the optional
+The CLI loads the project `.env` file. Claude uses `ANTHROPIC_API_KEY` or
+`AI_HUB_API_KEY` and honors the optional
 `ANTHROPIC_BASE_URL` and `ANTHROPIC_CUSTOM_HEADERS` settings already used by
 the agent host.
 

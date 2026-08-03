@@ -51,7 +51,14 @@ def retrieve_context_node(
         )
     except Exception as exc:
         trace.record("retrieval.error", error=str(exc))
-        return {"retrieved_chunks": []}
+        return {
+            "retrieved_chunks": [],
+            "answer": (
+                "Documentation retrieval is temporarily unavailable because the "
+                "configured index could not be opened. Please contact the system "
+                "administrator or try again after the index configuration is fixed."
+            ),
+        }
 
     chunks = [chunk.model_dump() for chunk in result.chunks]
     screen = screen_content(chunks, ContentSurface.TOOL_RESULT)
@@ -79,6 +86,11 @@ def context_gate_node(state: AgentState) -> dict:
     intent = state.get("intent", "unknown")
     cfg = get_config()
     trace = _open_trace(state, cfg)
+
+    # Operational retrieval failures already carry a safe answer. They are not
+    # missing user context and must never enter the clarification loop.
+    if state.get("answer"):
+        return {}
 
     if not chunks:
         clarification_count = state.get("clarification_count", 0)
@@ -116,6 +128,7 @@ def context_gate_node(state: AgentState) -> dict:
                         chunk_id=c["chunk_id"],
                         document_id=c["document_id"],
                         source_path=c["source_path"],
+                        title=c.get("title"),
                         heading_path=c.get("heading_path"),
                         category=c.get("category"),
                         text=c["text"],

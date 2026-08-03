@@ -11,7 +11,7 @@ from trace_viewer.classifier import NODE_TYPE_LABELS, classify_event
 from trace_viewer.parser import load_traces, parse_file
 from trace_viewer.redaction import redact
 
-FIXTURES = Path(__file__).parent / "fixtures" / "synthetic_traces"
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "synthetic_traces"
 
 
 def test_linear_success():

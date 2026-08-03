@@ -153,10 +153,17 @@ def documentation_answer_node(
     ).strip()
     trace.record("documentation_answer.completed")
 
-    # Extract chunk IDs referenced in the answer as citations
+    # Accept only bracketed IDs that came from this retrieval result. This
+    # supports both hash IDs and readable canonical IDs without allowing the
+    # model to invent a citation.
     import re
 
-    cited_ids = re.findall(r"\[([a-f0-9]{10,})\]", answer)
+    available_ids = {str(chunk.get("chunk_id")) for chunk in chunks}
+    cited_ids = [
+        candidate
+        for candidate in re.findall(r"\[([^\[\]]+)\]", answer)
+        if candidate in available_ids
+    ]
 
     return {"answer": answer, "citations": cited_ids}
 

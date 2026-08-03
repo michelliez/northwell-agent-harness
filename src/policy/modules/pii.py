@@ -101,6 +101,42 @@ INDIRECT_IDENTITY_TERMS: dict[str, str] = {
     "reverse lookup": "Attempts identity resolution through an internal identifier",
 }
 
+IDENTITY_QUESTION_TERMS = {
+    "who",
+    "which person",
+    "which people",
+}
+
+CARE_EVENT_TERMS = {
+    "entered",
+    "arrived",
+    "visited",
+    "went to",
+    "came to",
+    "checked into",
+    "was admitted",
+    "were admitted",
+    "was discharged",
+    "were discharged",
+    "was seen",
+    "were seen",
+    "was treated",
+    "were treated",
+    "presented to",
+}
+
+CARE_CONTEXT_TERMS = {
+    "er",
+    "ed",
+    "emergency room",
+    "emergency department",
+    "hospital",
+    "clinic",
+    "encounter",
+    "admission",
+    "cardiology",
+}
+
 PATIENT_RANKING_TERMS: dict[str, str] = {
     "frequent visitors": "Requests ranked patient-level information",
     "frequent flyers": "Requests ranked patient-level information",
@@ -214,6 +250,25 @@ def check_individual_request(text: str, q: str) -> PolicyGateResult | None:
 
 def check_indirect_identity(text: str, q: str) -> PolicyGateResult | None:
     return match_terms(text, q, INDIRECT_IDENTITY_TERMS)
+
+
+def check_contextual_identity_request(_text: str, q: str) -> PolicyGateResult | None:
+    """Block identity questions expressed as care-event language.
+
+    A finite list such as ``who came in`` misses ordinary variants like
+    ``who entered the ER``. Requiring an identity marker, a care event, and a
+    care context keeps this broader rule from blocking unrelated questions
+    such as "who entered this value into the table?".
+    """
+    has_identity_question = any(contains_phrase(q, term) for term in IDENTITY_QUESTION_TERMS)
+    has_care_event = any(contains_phrase(q, term) for term in CARE_EVENT_TERMS)
+    has_care_context = any(contains_phrase(q, term) for term in CARE_CONTEXT_TERMS)
+    if has_identity_question and has_care_event and has_care_context:
+        return blocked(
+            "Requests the identity of people associated with a healthcare encounter",
+            "identity-linked care event",
+        )
+    return None
 
 
 def check_patient_ranking(text: str, q: str) -> PolicyGateResult | None:

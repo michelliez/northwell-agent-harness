@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from dotenv import load_dotenv
 from pydantic import ValidationError
 
 from retrieval.genq.chunk_models import (
@@ -361,6 +362,7 @@ def generate_queries(
 
 def main() -> None:
     """Run raw T5 or Claude query generation from the command line."""
+    load_dotenv()
     parser = argparse.ArgumentParser(
         description="Generate raw synthetic queries from Stage 2 Epic chunks."
     )

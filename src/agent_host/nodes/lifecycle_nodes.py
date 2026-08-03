@@ -12,8 +12,17 @@ from agent_host.trace_logger import TraceLogger
 def interpretation_and_citations_node(state: AgentState) -> dict:
     """Extract citations from the answer and append to accumulated citations."""
     answer = state.get("answer") or ""
-    # Look for [chunk_id] references already in the answer
-    cited_ids = re.findall(r"\[([a-f0-9]{10,})\]", answer)
+    available_ids = {
+        str(chunk.get("chunk_id"))
+        for chunk in state.get("retrieved_chunks", [])
+        if chunk.get("chunk_id")
+    }
+    existing = set(state.get("citations") or [])
+    cited_ids = [
+        candidate
+        for candidate in re.findall(r"\[([^\[\]]+)\]", answer)
+        if candidate in available_ids and candidate not in existing
+    ]
     return {"citations": cited_ids}
 
 
@@ -39,19 +48,8 @@ def final_answer_node(state: AgentState) -> dict:
 
 
 def bounded_followup_node(state: AgentState) -> dict:
-    """Prepare state for the next turn in a thread.
-
-    Appends the current turn to history so the next turn can access it.
-    Does not start a new answer or intent classification.
-    """
-    history = list(state.get("history") or [])
-    question = state.get("question") or ""
-    answer = state.get("answer") or ""
-
-    history.append({"role": "user", "content": question})
-    history.append({"role": "assistant", "content": answer})
-
-    return {"history": history}
+    """End the turn without copying answer content into conversation history."""
+    return {}
 
 
 def _infer_used_tools(state: AgentState) -> list[str]:

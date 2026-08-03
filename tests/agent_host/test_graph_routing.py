@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import pytest
 
+from agent_host.budget import budget_from_env
 from agent_host.graph import (
     _route_from_classify_intent,
     _route_from_context_gate,
+    _route_from_contextualize,
     _route_from_fix_sql,
     _route_from_generate_sql,
     _route_from_plan_safety,
@@ -22,6 +24,7 @@ from agent_host.graph import (
     build_graph,
 )
 from agent_host.nodes.intent_nodes import REFUSAL_INTENTS
+from agent_host.state import AgentContext, make_initial_state
 from sql.models import SqlValidationResult, SqlViolation
 
 
@@ -65,6 +68,119 @@ def _state(**kwargs) -> dict:
 # ── policy routing ────────────────────────────────────────────────────────────
 
 
+def test_compiled_graph_blocks_before_intent_classification(tmp_path, monkeypatch) -> None:
+    """START -> input_policy must prevent every model-facing downstream edge."""
+    from agent_host import graph as graph_module
+    from agent_host.nodes import lifecycle_nodes, policy_nodes
+
+    cfg = _FakeCfg(tmp_path)
+    monkeypatch.setattr(policy_nodes, "get_config", lambda: cfg)
+    monkeypatch.setattr(lifecycle_nodes, "get_config", lambda: cfg)
+
+    def unexpected_classifier(*_args, **_kwargs):
+        raise AssertionError("blocked input reached intent classification")
+
+    monkeypatch.setattr(graph_module, "classify_intent_node", unexpected_classifier)
+    graph = graph_module.build_graph()
+    initial = make_initial_state(
+        "Delete every row in A0H_MAP",
+        run_id="blocked-edge",
+        started_at=0.0,
+    )
+
+    result = graph.invoke(
+        initial,
+        config={"configurable": {"thread_id": "blocked-edge"}},
+        context=AgentContext(budget=budget_from_env()),
+    )
+
+    assert result["policy_blocked"] is True
+    assert result["policy_reason"] == "Requests a destructive database action"
+
+
+def test_compiled_graph_allows_safe_input_to_reach_intent_classification(
+    tmp_path, monkeypatch
+) -> None:
+    """The allowed policy branch must reach contextualization and classification."""
+    from agent_host import graph as graph_module
+    from agent_host.nodes import lifecycle_nodes, policy_nodes
+
+    cfg = _FakeCfg(tmp_path)
+    monkeypatch.setattr(policy_nodes, "get_config", lambda: cfg)
+    monkeypatch.setattr(lifecycle_nodes, "get_config", lambda: cfg)
+    classifier_calls = []
+
+    def stop_after_classifier(state, *_args, **_kwargs):
+        classifier_calls.append(state["question"])
+        return {
+            "intent": "unknown",
+            "intent_confidence": 1.0,
+            "recommended_action": "refuse",
+            "answer": "Stopped after the edge under test.",
+        }
+
+    monkeypatch.setattr(graph_module, "classify_intent_node", stop_after_classifier)
+    graph = graph_module.build_graph()
+    initial = make_initial_state(
+        "What is the A0H_MAP table?",
+        run_id="allowed-edge",
+        started_at=0.0,
+    )
+
+    result = graph.invoke(
+        initial,
+        config={"configurable": {"thread_id": "allowed-edge"}},
+        context=AgentContext(budget=budget_from_env()),
+    )
+
+    assert classifier_calls == ["What is the A0H_MAP table?"]
+    assert result["policy_blocked"] is False
+
+
+def test_classifier_prohibited_intent_refuses_before_retrieval(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Defense-in-depth classifier blocks must never reach retrieval or SQL."""
+    from agent_host import graph as graph_module
+    from agent_host.nodes import lifecycle_nodes, policy_nodes
+
+    cfg = _FakeCfg(tmp_path)
+    monkeypatch.setattr(policy_nodes, "get_config", lambda: cfg)
+    monkeypatch.setattr(lifecycle_nodes, "get_config", lambda: cfg)
+
+    def prohibited_classifier(_state, *_args, **_kwargs):
+        return {
+            "intent": "prohibited_phi_request",
+            "intent_confidence": 0.98,
+            "recommended_action": "refuse",
+            "risk_flags": ["phi"],
+        }
+
+    def unexpected_retrieval(*_args, **_kwargs):
+        raise AssertionError("prohibited intent reached retrieval")
+
+    monkeypatch.setattr(graph_module, "classify_intent_node", prohibited_classifier)
+    monkeypatch.setattr(graph_module, "retrieval_permission_node", unexpected_retrieval)
+
+    graph = graph_module.build_graph()
+    initial = make_initial_state(
+        "What is the A0H_MAP table?",
+        run_id="classifier-refusal-edge",
+        started_at=0.0,
+    )
+    result = graph.invoke(
+        initial,
+        config={"configurable": {"thread_id": "classifier-refusal-edge"}},
+        context=AgentContext(budget=budget_from_env()),
+    )
+
+    assert result["policy_blocked"] is True
+    assert result["policy_reason"] == "prohibited_phi_request"
+    assert result["answer"]
+    assert result["retrieved_chunks"] == []
+
+
 def test_policy_blocked_routes_to_final_answer() -> None:
     state = _state(policy_blocked=True, answer="Blocked: policy.")
     assert _route_from_policy(state) == "final_answer"
@@ -72,7 +188,15 @@ def test_policy_blocked_routes_to_final_answer() -> None:
 
 def test_policy_allowed_routes_to_classify_intent() -> None:
     state = _state(policy_blocked=False)
-    assert _route_from_policy(state) == "classify_intent"
+    assert _route_from_policy(state) == "contextualize_followup"
+
+
+def test_contextualized_followup_routes_to_classify_intent() -> None:
+    assert _route_from_contextualize(_state(policy_blocked=False)) == "classify_intent"
+
+
+def test_blocked_contextualized_followup_routes_to_final_answer() -> None:
+    assert _route_from_contextualize(_state(policy_blocked=True)) == "final_answer"
 
 
 # ── intent routing ────────────────────────────────────────────────────────────
@@ -85,9 +209,9 @@ def test_intent_none_routes_back_to_input_policy() -> None:
 
 
 @pytest.mark.parametrize("intent", sorted(REFUSAL_INTENTS))
-def test_refusal_intents_route_to_result_safety(intent: str) -> None:
+def test_refusal_intents_route_to_dedicated_refusal(intent: str) -> None:
     state = _state(intent=intent)
-    assert _route_from_classify_intent(state) == "result_safety"
+    assert _route_from_classify_intent(state) == "intent_refusal"
 
 
 def test_general_question_routes_to_general_answer() -> None:
@@ -134,6 +258,18 @@ def test_direct_retrieval_intents_skip_exploration(intent: str) -> None:
 def test_context_gate_with_answer_routes_to_result_safety() -> None:
     state = _state(intent="documentation_lookup", answer="fallback", retrieved_chunks=[])
     assert _route_from_context_gate(state) == "result_safety"
+
+
+def test_context_gate_does_not_clarify_after_operational_retrieval_error() -> None:
+    from agent_host.nodes.retrieval_nodes import context_gate_node
+
+    state = _state(
+        intent="documentation_lookup",
+        answer="Documentation retrieval is temporarily unavailable.",
+        retrieved_chunks=[],
+    )
+
+    assert context_gate_node(state) == {}
 
 
 def test_context_gate_after_clarification_routes_to_input_policy() -> None:

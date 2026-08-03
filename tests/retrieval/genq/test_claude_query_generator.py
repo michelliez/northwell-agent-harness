@@ -5,7 +5,10 @@ from typing import Any
 
 import pytest
 
-from retrieval.genq.claude_query_generator import ClaudeHaikuQueryGenerator
+from retrieval.genq.claude_query_generator import (
+    ClaudeHaikuQueryGenerator,
+    _messages_url,
+)
 
 
 class FakeMessages:
@@ -94,3 +97,43 @@ def test_claude_requires_tool_result() -> None:
             top_p=0.95,
             seed=42,
         )
+
+
+def test_claude_accepts_raw_http_response_mapping() -> None:
+    class DictMessages:
+        def create(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "return_queries",
+                        "input": {"queries": ["question a", "question b"]},
+                    }
+                ]
+            }
+
+    client = SimpleNamespace(messages=DictMessages())
+    generator = ClaudeHaikuQueryGenerator(client=client)
+
+    result = generator.generate(
+        ["passage"],
+        queries_per_passage=2,
+        max_input_tokens=300,
+        max_query_tokens=64,
+        top_p=0.95,
+        seed=42,
+    )
+
+    assert result == [["question a", "question b"]]
+
+
+@pytest.mark.parametrize(
+    ("base_url", "expected"),
+    [
+        ("https://api.anthropic.com", "https://api.anthropic.com/v1/messages"),
+        ("https://example.test/v1", "https://example.test/v1/messages"),
+        ("https://example.test/v1/messages", "https://example.test/v1/messages"),
+    ],
+)
+def test_messages_url_normalizes_supported_base_urls(base_url: str, expected: str) -> None:
+    assert _messages_url(base_url) == expected

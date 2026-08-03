@@ -15,6 +15,7 @@ class RetrievedChunk(BaseModel):
     chunk_id: str = Field(min_length=1)
     document_id: str = Field(min_length=1)
     source_path: str = Field(min_length=1)
+    title: str | None = None
     heading_path: str | None = None
     category: str | None = None
     text: str = Field(min_length=1)
@@ -55,6 +56,7 @@ def retrieve_documentation(
                 chunk_id=chunk["chunk_id"],
                 document_id=chunk["doc_id"],
                 source_path=chunk["source_path"],
+                title=chunk.get("title"),
                 heading_path=chunk.get("heading_path"),
                 category=chunk.get("category"),
                 text=chunk["text"],

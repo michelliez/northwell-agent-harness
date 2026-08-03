@@ -44,6 +44,32 @@ def test_safety_findings_win_over_allowed_workflow() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "What is the A0H_UPDATE table?",
+        "Describe the columns in CLARITY_DELETE_LOG.",
+        "Write SQL to count rows in A0H_UPDATE.",
+    ],
+)
+def test_destructive_words_inside_schema_identifiers_are_allowed(prompt: str) -> None:
+    assert policy_gate(prompt)["allowed"] is True
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Update every row in A0H_UPDATE.",
+        "Delete rows from CLARITY_DELETE_LOG.",
+    ],
+)
+def test_real_destructive_commands_remain_blocked_around_schema_identifiers(prompt: str) -> None:
+    result = policy_gate(prompt)
+
+    assert result["allowed"] is False
+    assert result["reason"] == "Requests a destructive database action"
+
+
 def test_aggregate_plus_individual_records_is_blocked() -> None:
     result = policy_gate("Count visits and list the individual records")
 

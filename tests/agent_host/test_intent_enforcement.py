@@ -6,7 +6,9 @@ import pytest
 
 from agent_host.nodes.intent_nodes import (
     REFUSAL_INTENTS,
+    _merge_clarification,
     classify_intent_node,
+    intent_refusal_node,
 )
 
 
@@ -101,6 +103,26 @@ def test_refuse_intent_sets_refuse_action(intent: str, tmp_path, monkeypatch) ->
     assert result.get("recommended_action") == "refuse"
 
 
+@pytest.mark.parametrize(
+    ("intent", "reason"),
+    [
+        ("prohibited_phi_request", "prohibited_phi_request"),
+        ("prompt_injection_attempt", "prompt_injection_attempt"),
+        ("jailbreak_attempt", "jailbreak_attempt"),
+        ("destructive_sql_request", "destructive_sql_request"),
+    ],
+)
+def test_intent_refusal_node_returns_a_displayable_block(
+    intent: str,
+    reason: str,
+) -> None:
+    result = intent_refusal_node(_make_state("prohibited request") | {"intent": intent})
+
+    assert result["policy_blocked"] is True
+    assert result["policy_reason"] == reason
+    assert result["answer"]
+
+
 def test_low_confidence_intent_routes_to_clarify(tmp_path, monkeypatch) -> None:
     """Low-confidence classification must set intent=unknown, action=clarify."""
     from agent_host.nodes import intent_nodes
@@ -153,3 +175,13 @@ def test_classify_intent_node_fails_closed_on_model_error(tmp_path, monkeypatch)
 
     assert result.get("intent") in {"unknown", None}
     assert result.get("recommended_action") in {"clarify", None}
+
+
+def test_clarification_reply_preserves_the_original_sql_request() -> None:
+    merged = _merge_clarification(
+        "Write SQL to find the average of the VISITS column",
+        "mean",
+    )
+
+    assert "average of the VISITS column" in merged
+    assert "User clarification: mean" in merged

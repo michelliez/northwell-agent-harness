@@ -6,6 +6,7 @@ import time
 import uuid
 
 from agent_host.config import get_config
+from agent_host.conversation import ConversationTurn, resolve_followup
 from agent_host.state import AgentState
 from agent_host.trace_logger import TraceLogger
 from policy.screen import ContentSurface, screen_content
@@ -68,6 +69,42 @@ def input_policy_node(state: AgentState) -> dict:
         "run_id": run_id,
         "trace_file": trace_file,
         "started_at": started_at,
+        "policy_blocked": False,
+        "policy_reason": None,
+    }
+
+
+def contextualize_followup_node(state: AgentState) -> dict:
+    """Resolve bounded references, then deterministically screen the new text."""
+    question = state.get("question", "")
+    turns = [ConversationTurn(**item) for item in state.get("conversation_turns") or []]
+    resolved, changed = resolve_followup(question, turns)
+    if not changed:
+        return {"question_was_contextualized": False}
+
+    screen_result = screen_content(resolved, ContentSurface.USER_INPUT)
+    gate_result = screen_result.as_policy_result()
+    cfg = get_config()
+    trace = _open_trace(state, cfg)
+    trace.record(
+        "followup.contextualized",
+        changed=True,
+        allowed=screen_result.allowed,
+    )
+    if not screen_result.allowed:
+        return {
+            "question": resolved,
+            "question_was_contextualized": True,
+            "policy_blocked": True,
+            "policy_reason": gate_result["reason"],
+            "answer": (
+                "I can't help with that follow-up because its resolved request "
+                f"is blocked by the policy screen: {gate_result['reason']}."
+            ),
+        }
+    return {
+        "question": resolved,
+        "question_was_contextualized": True,
         "policy_blocked": False,
         "policy_reason": None,
     }

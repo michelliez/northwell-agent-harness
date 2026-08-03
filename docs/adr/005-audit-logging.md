@@ -95,7 +95,7 @@ class AuditLog:
 
 ## Testing
 
-**Test file:** `tests/test_audit_log.py`  
+**Test file:** `tests/sql/test_audit_log.py`  
 **Test count:** 25 tests, all passing
 
 Coverage:
