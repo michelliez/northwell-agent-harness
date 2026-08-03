@@ -18,7 +18,11 @@ jobs:
           version: "latest"
 
       - name: Install dependencies
-        run: uv sync --group dev --group bigquery
+        # Optional groups are installed so pyright can resolve them. Without a
+        # group, its imports are unresolved errors and the module goes silently
+        # unchecked -- which is why `bigquery` was already here, and why `ui`
+        # joins it now that src/ui imports chainlit and streamlit.
+        run: uv sync --group dev --group bigquery --group ui
 
       - name: Format check
         run: uv run ruff format --check src tests
