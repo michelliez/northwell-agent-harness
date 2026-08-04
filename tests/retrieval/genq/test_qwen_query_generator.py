@@ -179,3 +179,34 @@ def test_parse_queries_recovers_an_array_wrapped_in_an_object() -> None:
     # Instruct models often ignore "bare array" and emit a keyed object anyway.
     # Recovering the array beats burning a retry on a usable answer.
     assert _parse_queries('{"queries": ["a?", "b?"]}', 2) == ["a?", "b?"]
+
+
+def test_parse_queries_accepts_brackets_inside_a_query() -> None:
+    """A bracketed term in the text must not truncate the surrounding array.
+
+    This killed a corpus run 32% of the way in. The HMM_MAP passage reads
+    "Carryover Mapping [HMM] database", the model quoted it faithfully, and the
+    old non-greedy `\\[.*?\\]` stopped at the "]" of "[HMM]" -- handing the
+    decoder a fragment. Because the bracket comes from the passage, every retry
+    reproduced it, so a valid answer failed closed three times running.
+
+    Epic documentation uses bracketed tags routinely: 24 of 31,060 eligible
+    passages contain one, which made a completed run essentially impossible.
+    """
+    completion = (
+        '["What community IDs are associated with the Carryover Mapping [HMM] database?", '
+        '"How many unique community IDs are listed in the HMM_MAP table?"]'
+    )
+    assert _parse_queries(completion, 2) == [
+        "What community IDs are associated with the Carryover Mapping [HMM] database?",
+        "How many unique community IDs are listed in the HMM_MAP table?",
+    ]
+
+
+def test_parse_queries_skips_a_bracket_that_opens_nothing_decodable() -> None:
+    """Scanning must resume past a "[" that begins no complete value.
+
+    Prose can contain a stray bracket before the real array, so finding one is
+    not the same as finding the answer.
+    """
+    assert _parse_queries('see [note] below: ["a?", "b?"]', 2) == ["a?", "b?"]

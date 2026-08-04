@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from collections.abc import Sequence
 from typing import Any
 
@@ -31,9 +30,16 @@ LOGGER = logging.getLogger(__name__)
 SYSTEM_PROMPT = QUERY_GENERATION_SYSTEM_PROMPT
 
 # The model is asked for a bare JSON array. Anything it emits around that array
-# (a stray sentence, a markdown fence) is tolerated by locating the first
-# balanced bracket span rather than by demanding a clean response.
-_ARRAY = re.compile(r"\[.*?\]", re.DOTALL)
+# (a stray sentence, a markdown fence) is tolerated by decoding from each "["
+# until one yields a complete value, rather than by demanding a clean response.
+#
+# This is a parser rather than a regular expression because matching brackets is
+# not a regular language. The previous `\[.*?\]` truncated at the first "]" it
+# met, so a query quoting a bracketed term -- "the Carryover Mapping [HMM]
+# database", ordinary in Epic documentation -- turned valid JSON into a fragment
+# and failed every retry identically. `raw_decode` tracks string state, so
+# brackets inside a query are just characters.
+_DECODER = json.JSONDecoder()
 
 
 class QwenQueryGenerator:
@@ -266,9 +272,12 @@ def _parse_queries(completion: str, expected_count: int) -> list[str] | None:
     Returning None rather than raising lets the caller retry that one passage
     instead of aborting a multi-hour run over a single malformed reply.
     """
-    for match in _ARRAY.finditer(completion.strip()):
+    text = completion.strip()
+    for start, character in enumerate(text):
+        if character != "[":
+            continue
         try:
-            candidate = json.loads(match.group(0))
+            candidate, _ = _DECODER.raw_decode(text, start)
         except json.JSONDecodeError:
             continue
         if not isinstance(candidate, list):
