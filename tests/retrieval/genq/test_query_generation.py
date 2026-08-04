@@ -292,8 +292,11 @@ def test_pipeline_builds_the_claude_generator_from_config(
     fake.device_name = "anthropic-api"
     captured_models: list[str] = []
 
-    def make_generator(model_name: str) -> FakeGenerator:
+    captured_strides: list[int] = []
+
+    def make_generator(model_name: str, *, passages_per_request: int = 1) -> FakeGenerator:
         captured_models.append(model_name)
+        captured_strides.append(passages_per_request)
         return fake
 
     monkeypatch.setattr(query_generation, "ClaudeHaikuQueryGenerator", make_generator)
@@ -302,8 +305,10 @@ def test_pipeline_builds_the_claude_generator_from_config(
     report = generate_queries(settings)
 
     assert captured_models == ["test-claude-haiku"]
+    assert captured_strides == [1]
     assert report.generator_model == "test-claude-haiku"
     assert report.device == "anthropic-api"
+    assert report.passages_per_request == 1
 
 
 def test_pipeline_builds_the_gemma_generator_from_config(

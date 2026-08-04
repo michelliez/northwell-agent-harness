@@ -38,6 +38,7 @@ LOGGER = logging.getLogger(__name__)
 GENERATION_VERSION = "synthetic-query-generation-v2"
 DEFAULT_SEED = 42
 DEFAULT_BATCH_SIZE = 8
+DEFAULT_PASSAGES_PER_REQUEST = 1
 DEFAULT_QUERIES_PER_CHUNK = 5
 DEFAULT_MAX_INPUT_TOKENS = 300
 DEFAULT_MAX_QUERY_TOKENS = 64
@@ -78,6 +79,7 @@ class GenerationConfig:
     gemma_base_url: str = DEFAULT_GEMMA_BASE_URL
     seed: int = DEFAULT_SEED
     batch_size: int = DEFAULT_BATCH_SIZE
+    passages_per_request: int = DEFAULT_PASSAGES_PER_REQUEST
     queries_per_chunk: int = DEFAULT_QUERIES_PER_CHUNK
     max_input_tokens: int = DEFAULT_MAX_INPUT_TOKENS
     max_query_tokens: int = DEFAULT_MAX_QUERY_TOKENS
@@ -103,6 +105,7 @@ class GenerationConfig:
             raise ValueError("gemma_base_url must not be blank")
         for name, value in (
             ("batch_size", self.batch_size),
+            ("passages_per_request", self.passages_per_request),
             ("queries_per_chunk", self.queries_per_chunk),
             ("max_input_tokens", self.max_input_tokens),
             ("max_query_tokens", self.max_query_tokens),
@@ -195,7 +198,9 @@ def generate_queries(
             base_url=config.gemma_base_url,
         )
     else:
-        active_generator = ClaudeHaikuQueryGenerator(config.model_name)
+        active_generator = ClaudeHaikuQueryGenerator(
+            config.model_name, passages_per_request=config.passages_per_request
+        )
     records: list[GeneratedQueryRecord] = []
     failed_generation_chunk_count = 0
     for batch_number, start in enumerate(range(0, len(selected), config.batch_size)):
@@ -271,6 +276,7 @@ def generate_queries(
         device=active_generator.device_name,
         seed=config.seed,
         batch_size=config.batch_size,
+        passages_per_request=config.passages_per_request,
         queries_per_chunk=config.queries_per_chunk,
         max_input_tokens=config.max_input_tokens,
         max_query_tokens=config.max_query_tokens,
@@ -329,6 +335,15 @@ def main() -> None:
     )
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
+    parser.add_argument(
+        "--passages-per-request",
+        type=int,
+        default=DEFAULT_PASSAGES_PER_REQUEST,
+        help=(
+            "Passages to place in a single API request. 1 reproduces earlier runs; "
+            "10 cuts input tokens per passage from ~748 to ~135."
+        ),
+    )
     parser.add_argument("--queries-per-chunk", type=int, default=DEFAULT_QUERIES_PER_CHUNK)
     parser.add_argument("--max-input-tokens", type=int, default=DEFAULT_MAX_INPUT_TOKENS)
     parser.add_argument("--max-query-tokens", type=int, default=DEFAULT_MAX_QUERY_TOKENS)
@@ -357,6 +372,7 @@ def main() -> None:
                 gemma_base_url=args.gemma_base_url,
                 seed=args.seed,
                 batch_size=args.batch_size,
+                passages_per_request=args.passages_per_request,
                 queries_per_chunk=args.queries_per_chunk,
                 max_input_tokens=args.max_input_tokens,
                 max_query_tokens=args.max_query_tokens,

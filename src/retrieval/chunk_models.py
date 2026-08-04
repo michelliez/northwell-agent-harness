@@ -129,6 +129,8 @@ class GenerationReport(BaseModel):
     device: str
     seed: int = Field(ge=0)
     batch_size: int = Field(ge=1)
+    # Defaulted so reports written before batched requests existed still validate.
+    passages_per_request: int = Field(default=1, ge=1)
     queries_per_chunk: int = Field(ge=1)
     max_input_tokens: int = Field(ge=1)
     max_query_tokens: int = Field(ge=1)
