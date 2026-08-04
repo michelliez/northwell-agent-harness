@@ -27,6 +27,12 @@ from retrieval.genq.claude_query_generator import (
     DEFAULT_CLAUDE_MODEL,
     ClaudeHaikuQueryGenerator,
 )
+from retrieval.genq.gemma_query_generator import GemmaMLXQueryGenerator
+
+PROVIDER_CHOICES = ("claude", "gemma")
+
+DEFAULT_GEMMA_MODEL = ".local/models/gemma-3-1b-it-4bit"
+DEFAULT_GEMMA_BASE_URL = "http://127.0.0.1:8080"
 
 LOGGER = logging.getLogger(__name__)
 GENERATION_VERSION = "synthetic-query-generation-v2"
@@ -66,7 +72,10 @@ class GenerationConfig:
     input_path: Path
     output_path: Path
     report_path: Path
+    provider: str = "claude"
     model_name: str = DEFAULT_CLAUDE_MODEL
+    gemma_model_name: str = DEFAULT_GEMMA_MODEL
+    gemma_base_url: str = DEFAULT_GEMMA_BASE_URL
     seed: int = DEFAULT_SEED
     batch_size: int = DEFAULT_BATCH_SIZE
     queries_per_chunk: int = DEFAULT_QUERIES_PER_CHUNK
@@ -84,6 +93,14 @@ class GenerationConfig:
             raise ValueError("output_path and report_path must be different")
         if not self.model_name.strip():
             raise ValueError("model_name must not be blank")
+        if self.provider not in PROVIDER_CHOICES:
+            raise ValueError(
+                f"provider must be one of: {', '.join(PROVIDER_CHOICES)}"
+            )
+        if not self.gemma_model_name.strip():
+            raise ValueError("gemma_model_name must not be blank")
+        if not self.gemma_base_url.strip():
+            raise ValueError("gemma_base_url must not be blank")
         for name, value in (
             ("batch_size", self.batch_size),
             ("queries_per_chunk", self.queries_per_chunk),
@@ -170,8 +187,17 @@ def generate_queries(
     if not selected:
         raise ValueError("No chunks satisfy the configured passage length and limit")
 
-    active_generator = generator or ClaudeHaikuQueryGenerator(config.model_name)
+    if generator is not None:
+        active_generator = generator
+    elif config.provider == "gemma":
+        active_generator = GemmaMLXQueryGenerator(
+            config.gemma_model_name,
+            base_url=config.gemma_base_url,
+        )
+    else:
+        active_generator = ClaudeHaikuQueryGenerator(config.model_name)
     records: list[GeneratedQueryRecord] = []
+    failed_generation_chunk_count = 0
     for batch_number, start in enumerate(range(0, len(selected), config.batch_size)):
         batch = selected[start : start + config.batch_size]
         LOGGER.info(
@@ -193,6 +219,13 @@ def generate_queries(
                 f"Generator returned results for {len(generated)} passages; expected {len(batch)}"
             )
         for chunk, raw_queries in zip(batch, generated, strict=True):
+            if not raw_queries:
+                failed_generation_chunk_count += 1
+                LOGGER.warning(
+                    "Skipping chunk %s because the generator returned no queries",
+                    chunk.chunk_id,
+                )
+                continue
             if len(raw_queries) != config.queries_per_chunk:
                 raise RuntimeError(
                     f"Generator returned {len(raw_queries)} queries for {chunk.chunk_id}; "
@@ -248,6 +281,7 @@ def generate_queries(
         eligible_chunk_count=len(eligible),
         selected_chunk_count=len(selected),
         skipped_short_chunk_count=len(chunks) - len(eligible),
+        failed_generation_chunk_count=failed_generation_chunk_count,
         generated_query_count=len(records),
         duplicate_query_count=query_duplicates,
         query_counts_by_split={
@@ -266,14 +300,33 @@ def generate_queries(
 
 
 def main() -> None:
-    """Run raw Claude query generation from the command line."""
+    """Run raw synthetic-query generation from the command line."""
+    # Load local defaults before building argparse options so GEMMA_BASE_URL in
+    # .env can supply the CLI default. Explicit shell variables still win.
+    load_dotenv()
     parser = argparse.ArgumentParser(
         description="Generate raw synthetic queries from Stage 2 Epic chunks."
     )
     parser.add_argument("input_path", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument(
+        "--provider",
+        choices=PROVIDER_CHOICES,
+        default="claude",
+        help="Query-generation provider (default: claude)",
+    )
     parser.add_argument("--model", default=DEFAULT_CLAUDE_MODEL, help="Claude model ID")
+    parser.add_argument(
+        "--gemma-model",
+        default=DEFAULT_GEMMA_MODEL,
+        help="Gemma model name recorded in generated-query provenance",
+    )
+    parser.add_argument(
+        "--gemma-base-url",
+        default=os.getenv("GEMMA_BASE_URL", DEFAULT_GEMMA_BASE_URL),
+        help="Base URL of the local MLX-LM server",
+    )
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--queries-per-chunk", type=int, default=DEFAULT_QUERIES_PER_CHUNK)
@@ -292,16 +345,16 @@ def main() -> None:
         level=getattr(logging, args.log_level),
         format="%(levelname)s %(name)s: %(message)s",
     )
-    # Read .env the same way agent_host.config does, so credentials live in one
-    # place. Already-exported variables win, so this only adds resolution.
-    load_dotenv()
     try:
         report = generate_queries(
             GenerationConfig(
                 input_path=args.input_path,
                 output_path=args.output,
                 report_path=args.report,
+                provider=args.provider,
                 model_name=args.model,
+                gemma_model_name=args.gemma_model,
+                gemma_base_url=args.gemma_base_url,
                 seed=args.seed,
                 batch_size=args.batch_size,
                 queries_per_chunk=args.queries_per_chunk,
@@ -316,7 +369,8 @@ def main() -> None:
         parser.error(str(exc))
     print(
         f"Generated {report.generated_query_count} raw queries from "
-        f"{report.selected_chunk_count} chunks on {report.device}; "
+        f"{report.selected_chunk_count - report.failed_generation_chunk_count} chunks "
+        f"on {report.device}; skipped_failed={report.failed_generation_chunk_count}; "
         f"output_hash={report.output_query_hash}"
     )
 

@@ -21,9 +21,16 @@ class FakeGenerator:
     model_name = DEFAULT_CLAUDE_MODEL
     device_name = "fake-cpu"
 
-    def __init__(self, *, duplicate: bool = False, wrong_count: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        duplicate: bool = False,
+        wrong_count: bool = False,
+        skip: bool = False,
+    ) -> None:
         self.duplicate = duplicate
         self.wrong_count = wrong_count
+        self.skip = skip
         self.calls: list[tuple[list[str], int]] = []
 
     def generate(
@@ -38,6 +45,8 @@ class FakeGenerator:
     ) -> list[list[str]]:
         del max_input_tokens, max_query_tokens, top_p
         self.calls.append((list(passages), seed))
+        if self.skip:
+            return [[] for _passage in passages]
         count = queries_per_passage - 1 if self.wrong_count else queries_per_passage
         return [
             [
@@ -241,6 +250,28 @@ def test_generator_returning_wrong_query_count_fails_before_output(tmp_path: Pat
     assert not settings.output_path.exists()
 
 
+def test_generator_exhaustion_skips_chunk_and_is_reported(tmp_path: Path) -> None:
+    input_path = tmp_path / "split_chunks.jsonl"
+    write_jsonl(
+        input_path,
+        [
+            split_chunk(
+                "ONE",
+                "ONE.html",
+                "train",
+                text="One eligible passage whose generation will be skipped.",
+            )
+        ],
+    )
+    settings = config(tmp_path, input_path)
+
+    report = generate_queries(settings, generator=FakeGenerator(skip=True))
+
+    assert report.failed_generation_chunk_count == 1
+    assert report.generated_query_count == 0
+    assert read_jsonl(settings.output_path) == []
+
+
 def test_pipeline_builds_the_claude_generator_from_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -275,6 +306,46 @@ def test_pipeline_builds_the_claude_generator_from_config(
     assert report.device == "anthropic-api"
 
 
+def test_pipeline_builds_the_gemma_generator_from_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    input_path = tmp_path / "split_chunks.jsonl"
+    write_jsonl(
+        input_path,
+        [
+            split_chunk(
+                "ONE",
+                "ONE.html",
+                "test",
+                text="One eligible passage for Gemma provider selection.",
+            )
+        ],
+    )
+    fake = FakeGenerator()
+    fake.model_name = "local-gemma"
+    fake.device_name = "mlx-local-api"
+    captured: list[tuple[str, str]] = []
+
+    def make_generator(model_name: str, *, base_url: str) -> FakeGenerator:
+        captured.append((model_name, base_url))
+        return fake
+
+    monkeypatch.setattr(query_generation, "GemmaMLXQueryGenerator", make_generator)
+    settings = config(
+        tmp_path,
+        input_path,
+        provider="gemma",
+        gemma_model_name="local-gemma",
+        gemma_base_url="http://127.0.0.1:9090",
+    )
+
+    report = generate_queries(settings)
+
+    assert captured == [("local-gemma", "http://127.0.0.1:9090")]
+    assert report.generator_model == "local-gemma"
+    assert report.device == "mlx-local-api"
+
+
 @pytest.mark.parametrize(
     "overrides",
     [
@@ -284,6 +355,9 @@ def test_pipeline_builds_the_claude_generator_from_config(
         {"seed": -1},
         {"limit": 0},
         {"model_name": "  "},
+        {"provider": "unknown"},
+        {"gemma_model_name": "  "},
+        {"gemma_base_url": "  "},
     ],
 )
 def test_invalid_generation_configuration_is_rejected(

@@ -83,6 +83,7 @@ genq = [
     "accelerate>=0.26.0",
     "datasets>=5.0.0",
     "faiss-cpu>=1.14.3",
+    "mlx-lm>=0.29.1",
     "numpy>=2.1.0",
     "sentence-transformers>=4.1.0",
     "torch>=2.13.0",

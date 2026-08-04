@@ -139,6 +139,7 @@ class GenerationReport(BaseModel):
     eligible_chunk_count: int = Field(ge=0)
     selected_chunk_count: int = Field(ge=0)
     skipped_short_chunk_count: int = Field(ge=0)
+    failed_generation_chunk_count: int = Field(ge=0)
     generated_query_count: int = Field(ge=0)
     duplicate_query_count: int = Field(ge=0)
     query_counts_by_split: dict[SplitName, int]

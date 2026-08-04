@@ -141,12 +141,23 @@ close.
 
 ```bash
 uv run agent-harness-genq-generate .local/genq/corpus/chunks_with_splits.jsonl \
+  --provider claude \
   --model claude-haiku-4-5-20251001 \
   --output .local/queries/generated_queries.jsonl \
   --report .local/queries/generation_report.json \
   --queries-per-chunk 5 \
   --batch-size 8
 ```
+
+The same pipeline can use a locally hosted Gemma model through MLX-LM's
+OpenAI-compatible HTTP server. Select it with `--provider gemma`, identify the
+loaded model with `--gemma-model`, and set its endpoint with
+`--gemma-base-url` (or `GEMMA_BASE_URL`). The default endpoint is
+`http://127.0.0.1:8080`. MLX remains isolated from the main project environment;
+this process only sends HTTP requests to the already-running local server.
+Gemma retries each requested question up to `GENQ_GEMMA_MAX_ATTEMPTS` (default
+`5`). If every attempt fails, that chunk is skipped and counted in
+`failed_generation_chunk_count` in the generation report.
 
 Uses `ANTHROPIC_API_KEY` or `AI_HUB_API_KEY`, and honors `ANTHROPIC_BASE_URL`
 and `ANTHROPIC_CUSTOM_HEADERS`. `--max-input-tokens` bounds the passage using
