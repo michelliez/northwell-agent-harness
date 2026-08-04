@@ -13,19 +13,18 @@ from urllib.request import Request, urlopen
 
 import certifi
 
+from retrieval.genq.prompts import QUERY_GENERATION_SYSTEM_PROMPT
+
 DEFAULT_CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 DEFAULT_ANTHROPIC_VERSION = "2023-06-01"
 DEFAULT_TIMEOUT_SECONDS = 60.0
 LOGGER = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """\
-You create realistic semantic-search queries for Epic Clarity data-dictionary passages.
-Write questions that a healthcare data analyst, report developer, or SQL developer might ask.
-Use only facts supported by the supplied passage. Do not answer the questions.
-Vary wording and intent, avoid copying long phrases, and preserve important table or column names
-only when a real user would plausibly include them.
-"""
+# Shared with every other provider so that comparing generators compares models
+# rather than two prompts that drifted apart. See prompts.py for the rejected
+# variants and why prompt tuning was abandoned.
+SYSTEM_PROMPT = QUERY_GENERATION_SYSTEM_PROMPT
 
 
 class MessagesClient(Protocol):

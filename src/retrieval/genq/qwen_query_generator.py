@@ -20,17 +20,15 @@ import re
 from collections.abc import Sequence
 from typing import Any
 
+from retrieval.genq.prompts import QUERY_GENERATION_SYSTEM_PROMPT
+
 DEFAULT_QWEN_MODEL = "Qwen/Qwen3-4B-Instruct-2507"
 DEFAULT_MAX_RETRIES = 2
 LOGGER = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """\
-You create realistic semantic-search queries for Epic Clarity data-dictionary passages.
-Write questions that a healthcare data analyst, report developer, or SQL developer might ask.
-Use only facts supported by the supplied passage. Do not answer the questions.
-Vary wording and intent, avoid copying long phrases, and preserve important table or column names
-only when a real user would plausibly include them.
-"""
+# Identical to the Claude provider's by construction, not by copy. A local model
+# is only a fair substitute if it is given the same instruction.
+SYSTEM_PROMPT = QUERY_GENERATION_SYSTEM_PROMPT
 
 # The model is asked for a bare JSON array. Anything it emits around that array
 # (a stray sentence, a markdown fence) is tolerated by locating the first
