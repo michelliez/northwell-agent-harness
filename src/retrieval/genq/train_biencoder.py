@@ -17,6 +17,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -126,10 +127,10 @@ def train_biencoder(config: BiEncoderTrainingConfig) -> TrainingReport:
     config.validate()
 
     try:
-        from sentence_transformers import (  # pyright: ignore[reportMissingImports]
+        from sentence_transformers import (  # pyright: ignore[reportMissingImports, reportAttributeAccessIssue]
             InputExample,
             SentenceTransformer,
-            losses,
+            losses,  # pyright: ignore[reportAttributeAccessIssue]
         )
         from sentence_transformers.evaluation import (  # pyright: ignore[reportMissingImports]
             InformationRetrievalEvaluator,
@@ -193,7 +194,9 @@ def train_biencoder(config: BiEncoderTrainingConfig) -> TrainingReport:
 
     hf_dir = config.output_dir / "hf_model"
     hf_dir.mkdir(parents=True, exist_ok=True)
-    inner_model = model[0].auto_model  # type: ignore[index]
+    # `model[0]` is a Transformer module at runtime; the shipped stubs type
+    # SentenceTransformer.__getitem__ as returning a Tensor.
+    inner_model: Any = model[0].auto_model  # type: ignore[index]
     inner_model.save_pretrained(str(hf_dir))
     model.tokenizer.save_pretrained(str(hf_dir))  # type: ignore[union-attr]
     LOGGER.info("Saved HuggingFace-format checkpoint to %s", hf_dir)

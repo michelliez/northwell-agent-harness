@@ -14,6 +14,7 @@ import pytest
 faiss = pytest.importorskip("faiss")
 np = pytest.importorskip("numpy")
 
+from retrieval.genq import baseline_faiss  # noqa: E402
 from retrieval.genq.baseline_faiss import (  # noqa: E402
     BaselineConfig,
     TableBaselineConfig,
@@ -31,9 +32,12 @@ class FakeEncoder:
 
     def __init__(self, vectors: dict[str, list[float]]) -> None:
         self.vectors = vectors
+        self.query_calls = 0
 
-    def encode(self, texts: Sequence[str], *, batch_size: int) -> Any:
+    def encode(self, texts: Sequence[str], *, batch_size: int, is_query: bool = False) -> Any:
         assert batch_size > 0
+        if is_query:
+            self.query_calls += 1
         return np.asarray([self.vectors[text] for text in texts], dtype=np.float32)
 
 
@@ -441,3 +445,70 @@ def test_invalid_baseline_configuration_is_rejected(
 
     with pytest.raises(ValueError):
         settings.validate()
+
+
+def test_build_encoder_selects_last_token_pooling_for_qwen(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pooling must follow the checkpoint, not the caller.
+
+    Loading Qwen3-Embedding through the mean-pooling path yields embeddings that
+    look valid and retrieve badly, so selection is asserted explicitly.
+    """
+    built: list[str] = []
+
+    class FakeQwen:
+        def __init__(self, model_name: str, device: str, **kwargs: object) -> None:
+            built.append(f"qwen:{model_name}")
+
+    class FakeST:
+        def __init__(self, model_name: str, device: str, **kwargs: object) -> None:
+            built.append(f"st:{model_name}")
+
+    monkeypatch.setattr(baseline_faiss, "QwenEmbeddingEncoder", FakeQwen)
+    monkeypatch.setattr(baseline_faiss, "SentenceTransformerEncoder", FakeST)
+
+    baseline_faiss.build_encoder("Qwen/Qwen3-Embedding-0.6B", "cpu")
+    baseline_faiss.build_encoder("qwen/qwen3-embedding-8B", "cpu")
+    baseline_faiss.build_encoder("sentence-transformers/all-MiniLM-L6-v2", "cpu")
+
+    assert built == [
+        "qwen:Qwen/Qwen3-Embedding-0.6B",
+        "qwen:qwen/qwen3-embedding-8B",
+        "st:sentence-transformers/all-MiniLM-L6-v2",
+    ]
+
+
+def test_qwen_pooling_takes_the_last_real_token() -> None:
+    torch = pytest.importorskip("torch")
+    encoder = object.__new__(baseline_faiss.QwenEmbeddingEncoder)
+    encoder._torch = torch
+
+    hidden = torch.tensor(
+        [
+            [[1.0, 1.0], [2.0, 2.0], [3.0, 3.0]],
+            [[4.0, 4.0], [5.0, 5.0], [6.0, 6.0]],
+        ]
+    )
+    # Left padding: the final column is a real token for every row.
+    left_mask = torch.tensor([[0, 1, 1], [1, 1, 1]])
+    assert encoder._pool(hidden, left_mask).tolist() == [[3.0, 3.0], [6.0, 6.0]]
+
+    # Right padding: row 0 ends at position 1, so position 2 is padding.
+    right_mask = torch.tensor([[1, 1, 0], [1, 1, 1]])
+    assert encoder._pool(hidden, right_mask).tolist() == [[2.0, 2.0], [6.0, 6.0]]
+
+
+def test_qwen_query_formatting_wraps_only_queries() -> None:
+    encoder = object.__new__(baseline_faiss.QwenEmbeddingEncoder)
+    encoder._task = "Find the passage"
+
+    assert encoder._format("A0H_MAP stores access records.", is_query=False) == (
+        "A0H_MAP stores access records."
+    )
+    assert encoder._format("which table has access records?", is_query=True) == (
+        "Instruct: Find the passage\nQuery:which table has access records?"
+    )
+
+
+def test_default_model_is_the_qwen_encoder() -> None:
+    assert baseline_faiss.DEFAULT_MODEL == "Qwen/Qwen3-Embedding-0.6B"
+    assert baseline_faiss.LEGACY_MINILM_MODEL == "sentence-transformers/all-MiniLM-L6-v2"

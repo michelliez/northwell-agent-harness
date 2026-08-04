@@ -39,7 +39,8 @@ INDEX_VERSION = "pretrained-flatip-v1"
 EVALUATION_VERSION = "known-positive-exact-rank-v1"
 TABLE_INDEX_VERSION = "pretrained-table-flatip-v1"
 TABLE_EVALUATION_VERSION = "gold-document-exact-rank-v1"
-DEFAULT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+DEFAULT_MODEL = "Qwen/Qwen3-Embedding-0.6B"
+LEGACY_MINILM_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 DEFAULT_LIMIT = 200
 DEFAULT_BATCH_SIZE = 32
 DEFAULT_TOP_K = 10
@@ -112,8 +113,14 @@ class TextEncoder(Protocol):
     model_name: str
     device_name: str
 
-    def encode(self, texts: Sequence[str], *, batch_size: int) -> np.ndarray:
-        """Return one finite embedding row per input text."""
+    def encode(
+        self, texts: Sequence[str], *, batch_size: int, is_query: bool = False
+    ) -> np.ndarray:
+        """Return one finite embedding row per input text.
+
+        ``is_query`` lets asymmetric encoders wrap queries in an instruction while
+        embedding documents bare. Symmetric encoders ignore it.
+        """
         ...
 
 
@@ -130,6 +137,7 @@ class BaselineConfig:
     batch_size: int = DEFAULT_BATCH_SIZE
     top_k: int = DEFAULT_TOP_K
     trust_remote_code: bool = False
+    load_in_4bit: bool = False
 
     def validate(self) -> None:
         """Reject unsafe output placement and nonsensical runtime settings."""
@@ -160,6 +168,7 @@ class TableBaselineConfig:
     batch_size: int = DEFAULT_BATCH_SIZE
     top_k: int = DEFAULT_TOP_K
     trust_remote_code: bool = False
+    load_in_4bit: bool = False
 
     def validate(self) -> None:
         resolved_output = self.output_dir.resolve()
@@ -224,7 +233,15 @@ class SentenceTransformerEncoder:
             return "mps"
         return "cpu"
 
-    def encode(self, texts: Sequence[str], *, batch_size: int) -> np.ndarray:
+    def encode(
+        self, texts: Sequence[str], *, batch_size: int, is_query: bool = False
+    ) -> np.ndarray:
+        """Embed with attention-mask mean pooling.
+
+        ``is_query`` is accepted and ignored: this model is symmetric, so queries
+        and documents share one embedding space with no instruction prefix.
+        """
+        del is_query
         rows: list[np.ndarray] = []
         for start in range(0, len(texts), batch_size):
             batch = list(texts[start : start + batch_size])
@@ -246,6 +263,166 @@ class SentenceTransformerEncoder:
                 pooled = masked_hidden.sum(dim=1) / attention_mask.sum(dim=1).clamp(min=1)
             rows.append(pooled.detach().cpu().numpy().astype(np.float32))
         return np.concatenate(rows, axis=0)
+
+
+class QwenEmbeddingEncoder:
+    """Load a Qwen3-Embedding checkpoint with its required pooling and prompting.
+
+    This cannot reuse ``SentenceTransformerEncoder``. Qwen3-Embedding is a causal
+    model trained so that the final token's hidden state carries the sequence
+    embedding; mean pooling over all positions would average that summary with
+    every partial-context token and measurably degrade retrieval. It is also
+    asymmetric: queries are wrapped in an instruction while documents are
+    embedded bare, which is why ``encode`` takes ``is_query``.
+    """
+
+    DEFAULT_TASK = (
+        "Given a question about an Epic Clarity database table or column, "
+        "retrieve the data-dictionary passage that answers it"
+    )
+
+    def __init__(
+        self,
+        model_name: str,
+        device: str,
+        *,
+        trust_remote_code: bool = False,
+        task_description: str | None = None,
+        max_length: int = 512,
+        load_in_4bit: bool = False,
+    ) -> None:
+        try:
+            import torch  # pyright: ignore[reportMissingImports]
+            from transformers import (  # pyright: ignore[reportMissingImports]
+                AutoModel,
+                AutoTokenizer,
+            )
+        except ImportError as exc:
+            raise RuntimeError(
+                "Baseline dependencies are missing. Run `uv sync --group genq`."
+            ) from exc
+
+        self._torch = torch
+        self.model_name = model_name
+        self.device_name = SentenceTransformerEncoder._resolve_device(torch, device)
+        self._task = task_description or self.DEFAULT_TASK
+        self._max_length = max_length
+        quantization = self._quantization_config(load_in_4bit)
+        LOGGER.info(
+            "Loading %s on %s (%s)",
+            model_name,
+            self.device_name,
+            "4-bit NF4" if quantization else "fp16",
+        )
+        self._tokenizer = AutoTokenizer.from_pretrained(
+            model_name, trust_remote_code=trust_remote_code, padding_side="left"
+        )
+        self._model = AutoModel.from_pretrained(
+            model_name,
+            trust_remote_code=trust_remote_code,
+            dtype=torch.float16 if self.device_name == "cuda" else torch.float32,
+            device_map=self.device_name if quantization is not None else None,
+            quantization_config=quantization,
+        )
+        self._model.eval()
+        if quantization is None:
+            self._model.to(self.device_name)
+
+    def _quantization_config(self, load_in_4bit: bool) -> Any | None:
+        """Build the NF4 config, or None when 4-bit is unwanted or unavailable.
+
+        A 4B encoder is ~8 GB in fp16 -- on a 10 GB card that starves the desktop
+        compositor, which shares the GPU. NF4 brings it to ~2.5 GB. Quantizing an
+        encoder costs some embedding fidelity, so this is opt-in rather than the
+        default: correctness of the vectors matters more here than footprint.
+        """
+        if not load_in_4bit or self.device_name != "cuda":
+            return None
+        try:
+            import bitsandbytes  # noqa: F401  # pyright: ignore[reportMissingImports]
+            from transformers import BitsAndBytesConfig  # pyright: ignore[reportMissingImports]
+        except ImportError:
+            LOGGER.warning("bitsandbytes is unavailable; loading in fp16 instead of 4-bit")
+            return None
+        return BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_compute_dtype=self._torch.float16,
+        )
+
+    def _format(self, text: str, is_query: bool) -> str:
+        if not is_query:
+            return text
+        return f"Instruct: {self._task}\nQuery:{text}"
+
+    def _pool(self, hidden: Any, attention_mask: Any) -> Any:
+        """Take the last non-padding token's hidden state for each row.
+
+        The tokenizer is configured for left padding, so the final column is
+        always a real token and the fast path applies. The masked branch remains
+        because a caller supplying its own right-padded tokenizer would otherwise
+        silently embed padding.
+        """
+        torch = self._torch
+        if bool(attention_mask[:, -1].min() == 1):  # type: ignore[index]
+            return hidden[:, -1]  # type: ignore[index]
+        lengths = attention_mask.sum(dim=1) - 1  # type: ignore[attr-defined]
+        indexes = torch.arange(hidden.shape[0], device=hidden.device)  # type: ignore[attr-defined]
+        return hidden[indexes, lengths]  # type: ignore[index]
+
+    def encode(
+        self, texts: Sequence[str], *, batch_size: int, is_query: bool = False
+    ) -> np.ndarray:
+        """Return one last-token-pooled embedding row per input text."""
+        rows: list[np.ndarray] = []
+        for start in range(0, len(texts), batch_size):
+            batch = [self._format(text, is_query) for text in texts[start : start + batch_size]]
+            LOGGER.info(
+                "Embedding %d/%d texts%s",
+                min(start + len(batch), len(texts)),
+                len(texts),
+                " (queries)" if is_query else "",
+            )
+            tokenized = self._tokenizer(
+                batch,
+                padding=True,
+                truncation=True,
+                max_length=self._max_length,
+                return_tensors="pt",
+            ).to(self.device_name)
+            with self._torch.inference_mode():
+                hidden = self._model(**tokenized).last_hidden_state
+                pooled = self._pool(hidden, tokenized["attention_mask"])
+            rows.append(pooled.detach().cpu().float().numpy().astype(np.float32))
+        return np.concatenate(rows, axis=0)
+
+
+def build_encoder(
+    model_name: str,
+    device: str,
+    *,
+    trust_remote_code: bool = False,
+    load_in_4bit: bool = False,
+) -> TextEncoder:
+    """Pick the encoder whose pooling matches the checkpoint.
+
+    Selection is by model name because the pooling strategy is a property of how
+    the checkpoint was trained, not something the caller should have to restate.
+    Loading a Qwen3-Embedding model through the mean-pooling path produces
+    embeddings that look valid and retrieve poorly, which is the worst failure
+    mode available here.
+    """
+    if "qwen3-embedding" in model_name.casefold():
+        return QwenEmbeddingEncoder(
+            model_name,
+            device,
+            trust_remote_code=trust_remote_code,
+            load_in_4bit=load_in_4bit,
+        )
+    if load_in_4bit:
+        LOGGER.warning("load_in_4bit is ignored for %s; it is not a Qwen3 encoder", model_name)
+    return SentenceTransformerEncoder(model_name, device, trust_remote_code=trust_remote_code)
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -384,15 +561,20 @@ def run_baseline(
     LOGGER.info("Loading FAISS before initializing the embedding device")
     import faiss  # pyright: ignore[reportMissingImports]
 
-    active_encoder = encoder or SentenceTransformerEncoder(
-        config.model_name, config.device, trust_remote_code=config.trust_remote_code
+    active_encoder = encoder or build_encoder(
+        config.model_name,
+        config.device,
+        trust_remote_code=config.trust_remote_code,
+        load_in_4bit=config.load_in_4bit,
     )
     chunk_vectors = _normalize_embeddings(
         active_encoder.encode([chunk.text for chunk in selected], batch_size=config.batch_size),
         expected_rows=len(selected),
     )
     query_vectors = _normalize_embeddings(
-        active_encoder.encode([query.query for query in queries], batch_size=config.batch_size),
+        active_encoder.encode(
+            [query.query for query in queries], batch_size=config.batch_size, is_query=True
+        ),
         expected_rows=len(queries),
     )
 
@@ -649,8 +831,11 @@ def run_table_baseline(
             + ", ".join(sorted(missing_positive_paths)[:5])
         )
 
-    active_encoder = encoder or SentenceTransformerEncoder(
-        config.model_name, config.device, trust_remote_code=config.trust_remote_code
+    active_encoder = encoder or build_encoder(
+        config.model_name,
+        config.device,
+        trust_remote_code=config.trust_remote_code,
+        load_in_4bit=config.load_in_4bit,
     )
     table_vectors = _normalize_embeddings(
         active_encoder.encode(
@@ -660,7 +845,9 @@ def run_table_baseline(
         expected_rows=len(selected),
     )
     query_vectors = _normalize_embeddings(
-        active_encoder.encode([query.query for query in queries], batch_size=config.batch_size),
+        active_encoder.encode(
+            [query.query for query in queries], batch_size=config.batch_size, is_query=True
+        ),
         expected_rows=len(queries),
     )
     if query_vectors.shape[1] != table_vectors.shape[1]:
@@ -866,6 +1053,15 @@ def main() -> None:
     parser.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
     parser.add_argument("--trust-remote-code", action="store_true", default=False)
     parser.add_argument(
+        "--load-in-4bit",
+        action="store_true",
+        default=False,
+        help=(
+            "Load a Qwen3 encoder in 4-bit NF4. A 4B model is ~8 GB in fp16, which "
+            "starves the desktop compositor on a 10 GB card; NF4 brings it to ~2.5 GB."
+        ),
+    )
+    parser.add_argument(
         "--log-level",
         choices=("DEBUG", "INFO", "WARNING", "ERROR"),
         default="INFO",
@@ -888,6 +1084,7 @@ def main() -> None:
                     batch_size=args.batch_size,
                     top_k=args.top_k,
                     trust_remote_code=args.trust_remote_code,
+                    load_in_4bit=args.load_in_4bit,
                 )
             )
         else:
@@ -902,6 +1099,7 @@ def main() -> None:
                     batch_size=args.batch_size,
                     top_k=args.top_k,
                     trust_remote_code=args.trust_remote_code,
+                    load_in_4bit=args.load_in_4bit,
                 )
             )
     except (OSError, RuntimeError, ValueError) as exc:
