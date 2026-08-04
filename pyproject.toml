@@ -32,6 +32,7 @@ agent-harness-genq-baseline = "retrieval.genq.baseline_faiss:main"
 agent-harness-genq-train = "retrieval.genq.train_biencoder:main"
 agent-harness-metadata-extract = "retrieval.metadata_extractor:main"
 agent-harness-genq-columns = "retrieval.genq.column_extractor:main"
+agent-harness-genq-generate-local = "retrieval.genq.local_query_generation:main"
 agent-harness-ui = "ui.chainlit_runner:main"
 
 [build-system]
