@@ -440,10 +440,7 @@ def insert_parsed_document(
             return existing
         parent_id = root_node_id if len(path) == 1 else ensure_section(path[:-1])
         node_id = sha256_text(
-            "hierarchy:section:"
-            + document_id
-            + ":"
-            + json.dumps(path, separators=(",", ":"))
+            "hierarchy:section:" + document_id + ":" + json.dumps(path, separators=(",", ":"))
         )
         position = next_position.get(parent_id, 0)
         next_position[parent_id] = position + 1

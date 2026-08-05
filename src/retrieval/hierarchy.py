@@ -85,9 +85,7 @@ def get_parent(conn: sqlite3.Connection, node_id: str) -> HierarchyNode | None:
     return parent
 
 
-def get_children(
-    conn: sqlite3.Connection, node_id: str, *, limit: int = 10
-) -> list[HierarchyNode]:
+def get_children(conn: sqlite3.Connection, node_id: str, *, limit: int = 10) -> list[HierarchyNode]:
     """Return immediate children in source order, subject to a hard bound."""
     bounded = _bounded_limit(limit)
     parent = get_node(conn, node_id)
@@ -107,9 +105,7 @@ def get_children(
         conn.row_factory = previous_factory
 
 
-def get_siblings(
-    conn: sqlite3.Connection, node_id: str, *, limit: int = 10
-) -> list[HierarchyNode]:
+def get_siblings(conn: sqlite3.Connection, node_id: str, *, limit: int = 10) -> list[HierarchyNode]:
     """Return neighboring nodes under the same parent, excluding the focus."""
     bounded = _bounded_limit(limit)
     node = get_node(conn, node_id)

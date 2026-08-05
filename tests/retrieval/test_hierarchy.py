@@ -76,9 +76,9 @@ def test_bounded_parent_child_and_sibling_navigation(tmp_path: Path) -> None:
     db_path = _build_hierarchy(tmp_path)
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
-        root_id = conn.execute(
-            "SELECT node_id FROM nodes WHERE node_type = 'document'"
-        ).fetchone()[0]
+        root_id = conn.execute("SELECT node_id FROM nodes WHERE node_type = 'document'").fetchone()[
+            0
+        ]
         status_id = conn.execute(
             "SELECT node_id FROM nodes WHERE node_type = 'section' AND title = 'APPT_STATUS_C'"
         ).fetchone()[0]
