@@ -54,6 +54,18 @@ pythonpath = ["src"]
 [tool.uv]
 package = true
 
+# cryptography arrives only transitively -- through google-auth for BigQuery and
+# through pyjwt[crypto] for chainlit -- so neither a direct pin nor a group bump
+# can raise it. Versions 44.0.0 through 49.x expose a Bleichenbacher oracle in
+# PKCS#7 EnvelopedData decryption (CVE-2026-69247): the result of the RSA
+# operation was distinguishable both by error and by timing, which is enough to
+# recover a content-encryption key without ever holding the private key.
+#
+# Nothing here decrypts PKCS#7, so the path is unreachable today. The floor
+# exists so that remains true by construction rather than because no one has
+# added the feature yet.
+constraint-dependencies = ["cryptography>=50.0.0"]
+
 # PyPI ships CPU-only torch wheels for Windows, so an RTX card sits idle behind
 # `torch.cuda.is_available() == False`. CUDA builds live on PyTorch's own index.
 # The marker keeps macOS on PyPI, where the default wheel is the one with MPS.
