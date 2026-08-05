@@ -11,7 +11,7 @@ for, not by when it was written:
 | 1. Parse HTML into column chunks | `retrieval/column_parser.py` | `agent-harness-genq-parse` |
 | 2. Assign leakage-safe splits | `evals/dataset_split.py` | `agent-harness-genq-split` |
 | 3. Generate synthetic queries (Claude) | `retrieval/genq/query_generation.py` | `agent-harness-genq-generate` |
-| 3b. Generate synthetic queries (local) | `retrieval/genq/local_query_generation.py` | `agent-harness-genq-generate-local` |
+| 3b. Generate synthetic queries (local) | `retrieval/genq/qwen_query_generator.py` | `agent-harness-genq-generate --provider qwen` |
 | 4. Filter and review them | `evals/query_filter.py` | `agent-harness-genq-filter` |
 | 5. Encoder/FAISS baseline | `retrieval/genq/baseline_faiss.py` | `agent-harness-genq-baseline` |
 
@@ -270,8 +270,9 @@ near the floor of what an instruct model has to do. A local model covers those
 for no API spend.
 
 ```bash
-uv run agent-harness-genq-generate-local \
+uv run agent-harness-genq-generate \
   .local/genq/column-corpus/columns_dedup.jsonl \
+  --provider qwen \
   --output .local/queries/columns/generated_queries.jsonl \
   --report .local/queries/columns/generation_report.json \
   --queries-per-chunk 2 --batch-size 16
