@@ -1,5 +1,16 @@
 # Hierarchical RAG Design Proposal
 
+## Implementation status
+
+Phase 1, the storage foundation, is implemented. New indexes store document,
+section, and leaf nodes in a parent-linked SQLite `nodes` table. Existing flat
+chunks remain unchanged and each leaf links back to its canonical `chunk_id`.
+The typed helpers in `retrieval.hierarchy` provide bounded `get_node`,
+`get_parent`, `get_children`, and `get_siblings` operations. Search across node
+summaries, context expansion, traversal budgets, and agent routing remain later
+phases; the production retrieval path continues to use the existing flat BM25
+index until those pieces are evaluated.
+
 ## Objective
 
 Transform the current flat chunk index into a hierarchical RAG index that preserves each document's structure. The agent can begin with relevant nodes and expand upward, downward, or sideways until it has enough evidence to answer or reaches its token, tool-call, or time budget.

@@ -289,6 +289,7 @@ def table_to_chunks(category: str, heading: str, table: Tag) -> list[IndexedChun
 def create_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
+        DROP TABLE IF EXISTS nodes;
         DROP TABLE IF EXISTS section_facts;
         DROP TABLE IF EXISTS chunks_fts;
         DROP TABLE IF EXISTS chunks;
@@ -326,6 +327,25 @@ def create_schema(conn: sqlite3.Connection) -> None:
             fact TEXT NOT NULL,
             PRIMARY KEY (doc_id, heading_path)
         );
+
+        CREATE TABLE nodes (
+            node_id TEXT PRIMARY KEY,
+            document_id TEXT NOT NULL REFERENCES docs(doc_id),
+            parent_id TEXT REFERENCES nodes(node_id),
+            depth INTEGER NOT NULL CHECK (depth >= 0),
+            position INTEGER NOT NULL CHECK (position >= 0),
+            node_type TEXT NOT NULL CHECK (node_type IN ('document', 'section', 'leaf')),
+            title TEXT NOT NULL,
+            heading_path TEXT NOT NULL,
+            text TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            token_count INTEGER NOT NULL CHECK (token_count >= 1),
+            chunk_id TEXT UNIQUE REFERENCES chunks(chunk_id),
+            UNIQUE (parent_id, position)
+        );
+
+        CREATE INDEX nodes_by_document ON nodes(document_id, depth, position);
+        CREATE INDEX nodes_by_parent ON nodes(parent_id, position);
         """
     )
 
@@ -394,6 +414,62 @@ def insert_parsed_document(
         (document_id, parsed.source_path, parsed.title, parsed.source_hash),
     )
 
+    root_node_id = sha256_text(f"hierarchy:document:{document_id}")
+    root_summary = f"Documentation for {parsed.title}."
+    conn.execute(
+        """INSERT INTO nodes
+           (node_id, document_id, parent_id, depth, position, node_type, title,
+            heading_path, text, summary, token_count, chunk_id)
+           VALUES (?, ?, NULL, 0, 0, 'document', ?, ?, '', ?, ?, NULL)""",
+        (
+            root_node_id,
+            document_id,
+            parsed.title,
+            json.dumps([parsed.title], separators=(",", ":")),
+            root_summary,
+            estimate_tokens(root_summary),
+        ),
+    )
+
+    section_nodes: dict[tuple[str, ...], str] = {}
+    next_position: dict[str, int] = {root_node_id: 0}
+
+    def ensure_section(path: tuple[str, ...]) -> str:
+        existing = section_nodes.get(path)
+        if existing is not None:
+            return existing
+        parent_id = root_node_id if len(path) == 1 else ensure_section(path[:-1])
+        node_id = sha256_text(
+            "hierarchy:section:"
+            + document_id
+            + ":"
+            + json.dumps(path, separators=(",", ":"))
+        )
+        position = next_position.get(parent_id, 0)
+        next_position[parent_id] = position + 1
+        next_position[node_id] = 0
+        full_path = [parsed.title, *path]
+        summary = f"{path[-1]} section in {parsed.title}."
+        conn.execute(
+            """INSERT INTO nodes
+               (node_id, document_id, parent_id, depth, position, node_type, title,
+                heading_path, text, summary, token_count, chunk_id)
+               VALUES (?, ?, ?, ?, ?, 'section', ?, ?, '', ?, ?, NULL)""",
+            (
+                node_id,
+                document_id,
+                parent_id,
+                len(path),
+                position,
+                path[-1],
+                json.dumps(full_path, separators=(",", ":")),
+                summary,
+                estimate_tokens(summary),
+            ),
+        )
+        section_nodes[path] = node_id
+        return node_id
+
     # occurrence distinguishes split chunks that share a heading/category.
     occurrence_counter: dict[tuple[str, str], int] = {}
     for chunk_index, chunk in enumerate(parsed.chunks):
@@ -418,6 +494,37 @@ def insert_parsed_document(
                 chunk.text,
                 estimate_tokens(chunk.text),
                 text_hash,
+            ),
+        )
+
+        heading_parts = tuple(
+            part.strip() for part in chunk.heading_path.split(">") if part.strip()
+        )
+        if heading_parts and heading_parts[0].casefold() == parsed.title.casefold():
+            heading_parts = heading_parts[1:]
+        parent_id = root_node_id if not heading_parts else ensure_section(heading_parts)
+        leaf_position = next_position.get(parent_id, 0)
+        next_position[parent_id] = leaf_position + 1
+        leaf_node_id = sha256_text(f"hierarchy:leaf:{chunk_id}")
+        leaf_path = [parsed.title, *heading_parts]
+        leaf_title = heading_parts[-1] if heading_parts else chunk.category
+        conn.execute(
+            """INSERT INTO nodes
+               (node_id, document_id, parent_id, depth, position, node_type, title,
+                heading_path, text, summary, token_count, chunk_id)
+               VALUES (?, ?, ?, ?, ?, 'leaf', ?, ?, ?, ?, ?, ?)""",
+            (
+                leaf_node_id,
+                document_id,
+                parent_id,
+                len(heading_parts) + 1,
+                leaf_position,
+                leaf_title,
+                json.dumps(leaf_path, separators=(",", ":")),
+                chunk.text,
+                chunk.text,
+                estimate_tokens(chunk.text),
+                chunk_id,
             ),
         )
 
@@ -533,6 +640,7 @@ def build_index(
             conn.commit()
 
         total_section_facts = conn.execute("SELECT COUNT(*) FROM section_facts").fetchone()[0]
+        total_nodes = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
 
         version_manifest = {
             "schema_version": INDEX_SCHEMA_VERSION,
@@ -555,6 +663,7 @@ def build_index(
             "doc_count": str(len(html_files)),
             "chunk_count": str(total_chunks),
             "section_fact_count": str(total_section_facts),
+            "hierarchy_node_count": str(total_nodes),
         }
         conn.executemany(
             "INSERT INTO index_metadata (key, value) VALUES (?, ?)",

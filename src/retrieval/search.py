@@ -105,6 +105,7 @@ REQUIRED_INDEX_METADATA = frozenset(
         "doc_count",
         "chunk_count",
         "section_fact_count",
+        "hierarchy_node_count",
     }
 )
 
@@ -171,7 +172,14 @@ def validate_index(db_path: Path) -> None:
             row["name"]
             for row in cur.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
         }
-        missing = {"docs", "chunks", "chunks_fts", "index_metadata", "section_facts"} - present
+        missing = {
+            "docs",
+            "chunks",
+            "chunks_fts",
+            "index_metadata",
+            "section_facts",
+            "nodes",
+        } - present
         if missing:
             raise SystemExit(
                 f"RAG database {db_path} is missing tables: {', '.join(sorted(missing))}"
@@ -196,6 +204,7 @@ def validate_index(db_path: Path) -> None:
         doc_count = cur.execute("SELECT COUNT(*) FROM docs").fetchone()[0]
         chunk_count = cur.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
         section_fact_count = cur.execute("SELECT COUNT(*) FROM section_facts").fetchone()[0]
+        hierarchy_node_count = cur.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
         if doc_count < 1:
             raise SystemExit(f"RAG database {db_path} contains no indexed documents")
         if chunk_count < 1:
@@ -206,6 +215,10 @@ def validate_index(db_path: Path) -> None:
             raise SystemExit(f"RAG database {db_path} chunk count does not match metadata")
         if metadata["section_fact_count"] != str(section_fact_count):
             raise SystemExit(f"RAG database {db_path} section fact count does not match metadata")
+        if hierarchy_node_count < doc_count + chunk_count:
+            raise SystemExit(f"RAG database {db_path} contains an incomplete node hierarchy")
+        if metadata["hierarchy_node_count"] != str(hierarchy_node_count):
+            raise SystemExit(f"RAG database {db_path} hierarchy node count does not match metadata")
     except SystemExit:
         raise
     except sqlite3.DatabaseError as exc:
