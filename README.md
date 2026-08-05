@@ -49,15 +49,16 @@ src/
   agent_host/    LangGraph assembly, state, nodes, config, budgets, traces, CLI
   policy/        deterministic content and workflow policy
   retrieval/     HTML parsing and indexing, SQLite search, schema evidence, audit
-    genq/        offline synthetic-query generation (never in the request path)
   sql/           SQL models, planning, compilation, validation, BigQuery adapter
-  evals/         evaluation runner, assertions, dataset splits and query filters
   trace_viewer/  local trace rendering
 tests/           unit and graph-routing tests
-evals/           versioned evaluation cases
 docs/            product and retrieval design
 .local/          ignored indexes, traces, reports, and rendered artifacts
 ```
+
+Evaluation datasets, synthetic-query generation, retrieval benchmarks, and
+training live in the sibling `clarity_agent_evals` repository. That repository
+depends on this application; this application does not import evaluation code.
 
 ## Setup
 
@@ -74,7 +75,6 @@ Optional dependency groups are not needed to run the agent:
 | Group | Installs | Needed for |
 |---|---|---|
 | `bigquery` | `google-cloud-bigquery`, `pyarrow` | `sql/bigquery_adapter.dry_run` and its tests |
-| `genq` | Torch, Transformers, FAISS, SentenceTransformers | offline synthetic-query generation |
 
 `uv sync --group bigquery` enables the dry-run adapter. Without it the graph
 still runs unchanged — no node imports the BigQuery SDK, and `dry_run` fails
@@ -120,7 +120,7 @@ Render a trace:
 uv run agent-harness-traces .local/traces/<run_id>.jsonl --no-open
 ```
 
-Run evaluations:
+Run evaluations from the sibling `clarity_agent_evals` repository:
 
 ```powershell
 uv run agent-harness-eval --suite smoke
@@ -129,9 +129,8 @@ uv run agent-harness-eval --suite intent --repetitions 3
 uv run agent-harness-eval --suite retrieval --k 5 10
 ```
 
-Reports default to `.local/evals/`. The retrieval suite needs a built index and
-is described in [evals/retrieval/README.md](evals/retrieval/README.md); its
-results are only comparable within one `chunker_version`.
+Reports default to that repository's `.local/evals/`. The retrieval suite uses
+this application's installed package and a built runtime index.
 
 
 # Running the FastAPI Backend

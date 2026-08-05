@@ -67,13 +67,15 @@ adding one, and deleting a wrong document over annotating it.
 agent_host/    graph lifecycle, state, nodes, config, budget, trace, CLI
 policy/        deterministic screening and policy results
 retrieval/     HTML parsing, indexing, search, evidence extraction, index audit
-retrieval/genq/ offline synthetic-query generation; never in the request path
 sql/           SQL domain models, generation, validation, BigQuery boundary
                dry_run, read-only executor, result safety, and audit logging
                exist as adapters; no graph route reaches them
-evals/         evaluation execution, assertions, dataset splits, query filters
 trace_viewer/  trace parsing, redaction, and rendering
 ```
+
+Evaluation execution, datasets, synthetic-query generation, retrieval baselines,
+and training belong to the sibling `clarity_agent_evals` repository. The eval
+repository may depend on this application; never add the reverse dependency.
 
 Do not add a project-name wrapper beneath `src/`. Do not recreate internal MCP
 transport, a mock catalog, or configuration aliases without a concrete external

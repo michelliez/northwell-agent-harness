@@ -1,7 +1,7 @@
 [project]
 name = "agent-harness"
 version = "0.1.0"
-description = "Policy-gated agent workflows with retrieval, SQL planning, and evaluation"
+description = "Policy-gated Clarity agent with retrieval, SQL planning, API, and UI"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
@@ -19,19 +19,11 @@ dependencies = [
 
 [project.scripts]
 agent-harness = "agent_host.cli:main"
-agent-harness-eval = "evals.runner:main"
 agent-harness-traces = "trace_viewer.__main__:main"
 agent-harness-rag-index = "retrieval.indexer:main"
 agent-harness-rag-audit = "retrieval.audit:main"
 agent-harness-genq-parse = "retrieval.column_parser:main"
-agent-harness-genq-split = "evals.dataset_split:main"
-agent-harness-genq-generate = "retrieval.genq.query_generation:main"
-agent-harness-genq-filter = "evals.query_filter:main"
-agent-harness-genq-metadata-convert = "retrieval.genq.metadata_to_chunks:main"
-agent-harness-genq-baseline = "retrieval.genq.baseline_faiss:main"
-agent-harness-genq-train = "retrieval.genq.train_biencoder:main"
 agent-harness-metadata-extract = "retrieval.metadata_extractor:main"
-agent-harness-genq-columns = "retrieval.genq.column_extractor:main"
 agent-harness-ui = "ui.chainlit_runner:main"
 
 [build-system]
@@ -42,7 +34,6 @@ build-backend = "hatchling.build"
 packages = [
     "src/agent_host",
     "src/api",
-    "src/evals",
     "src/policy",
     "src/retrieval",
     "src/sql",
@@ -90,19 +81,6 @@ dev = [
 bigquery = [
     "google-cloud-bigquery>=3.26.0",
     "pyarrow>=16.0.0",
-]
-# Baseline inference and bi-encoder fine-tuning. Query generation runs through
-# the Anthropic SDK (a core dependency) and needs nothing from this group.
-genq = [
-    "accelerate>=0.26.0",
-    "bitsandbytes>=0.45.0; sys_platform == 'win32' or sys_platform == 'linux'",
-    "datasets>=5.0.0",
-    "faiss-cpu>=1.14.3",
-    "mlx-lm>=0.29.1",
-    "numpy>=2.1.0",
-    "sentence-transformers>=4.1.0",
-    "torch>=2.13.0",
-    "transformers>=4.41.0,<5",
 ]
 ui = [
     "chainlit>=2.9.4",

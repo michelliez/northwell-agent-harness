@@ -39,7 +39,6 @@ CANONICAL_PATTERNS = (
     "docs/reference/**/*",
     "src/*/README.md",
     "src/*/*/README.md",
-    "evals/*/README.md",
 )
 
 GUIDANCE = """
@@ -63,7 +62,11 @@ def tracked_markdown() -> list[str]:
         text=True,
         check=True,
     )
-    return sorted(line.strip() for line in result.stdout.splitlines() if line.strip())
+    return sorted(
+        line.strip()
+        for line in result.stdout.splitlines()
+        if line.strip() and (REPO_ROOT / line.strip()).is_file()
+    )
 
 
 def is_canonical(path: str) -> bool:
