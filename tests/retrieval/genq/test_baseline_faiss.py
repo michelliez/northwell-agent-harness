@@ -309,6 +309,25 @@ def test_embeddings_are_normalized_before_inner_product_search(tmp_path: Path) -
     assert report.query_results[0].top_hits[0].score == pytest.approx(1.0)
 
 
+def test_baseline_accepts_leakage_safe_split_chunks(tmp_path: Path) -> None:
+    split_chunk = {
+        **chunk("TABLE_A__METADATA", "passage a"),
+        "split": "test",
+        "split_version": "metadata-source-hash-split-v1",
+    }
+    settings = config(
+        tmp_path,
+        [split_chunk],
+        [query("q_a", "query a", "TABLE_A__METADATA")],
+    )
+    encoder = FakeEncoder({"passage a": [1.0, 0.0], "query a": [1.0, 0.0]})
+
+    report = run_baseline(settings, encoder=encoder)
+
+    assert report.evaluated_query_count == 1
+    assert report.hit_at_1 == 1.0
+
+
 def test_table_metadata_baseline_uses_gold_document_qrels(tmp_path: Path) -> None:
     settings = table_config(tmp_path)
     encoder = FakeEncoder(

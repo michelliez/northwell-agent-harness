@@ -31,6 +31,7 @@ from retrieval.chunk_models import (
     FaissMappingRecord,
     FilteredQueryRecord,
     RankedChunkHit,
+    SplitChunkRecord,
 )
 from retrieval.metadata_extractor import DescriptionStatus, MetadataEmbeddingRecord
 
@@ -451,6 +452,39 @@ def _load_jsonl[T: BaseModel](path: Path, model: type[T], label: str) -> tuple[l
     return records, _sha256_bytes(raw_bytes)
 
 
+def _load_chunk_jsonl(path: Path) -> tuple[list[ChunkRecord], str]:
+    """Load either Stage 1 chunks or Stage 2 leakage-safe split chunks.
+
+    The split assignment is dataset metadata rather than encoder input, so the
+    baseline normalizes both formats to the shared ``ChunkRecord`` contract.
+    """
+    try:
+        raw_bytes = path.read_bytes()
+    except FileNotFoundError as exc:
+        raise ValueError(f"chunk JSONL does not exist: {path}") from exc
+    if not raw_bytes.strip():
+        raise ValueError(f"chunk JSONL is empty: {path}")
+    records: list[ChunkRecord] = []
+    for line_number, line in enumerate(raw_bytes.splitlines(), start=1):
+        if not line.strip():
+            raise ValueError(f"{path}:{line_number}: blank JSONL line")
+        try:
+            records.append(ChunkRecord.model_validate_json(line))
+            continue
+        except ValidationError:
+            pass
+        try:
+            split_record = SplitChunkRecord.model_validate_json(line)
+            records.append(
+                ChunkRecord.model_validate(
+                    split_record.model_dump(exclude={"split", "split_version"})
+                )
+            )
+        except ValidationError as exc:
+            raise ValueError(f"{path}:{line_number}: invalid chunk record: {exc}") from exc
+    return records, _sha256_bytes(raw_bytes)
+
+
 def _normalize_embeddings(embeddings: np.ndarray, *, expected_rows: int) -> np.ndarray:
     if embeddings.ndim != 2 or embeddings.shape[0] != expected_rows:
         raise ValueError(
@@ -543,7 +577,7 @@ def run_baseline(
 ) -> BaselineEvaluationReport:
     """Embed chunks, build exact FAISS, and evaluate known-positive query ranks."""
     config.validate()
-    all_chunks, chunks_hash = _load_jsonl(config.chunks_path, ChunkRecord, "chunk")
+    all_chunks, chunks_hash = _load_chunk_jsonl(config.chunks_path)
     queries, queries_hash = _load_jsonl(config.queries_path, FilteredQueryRecord, "retained query")
     _validate_inputs(all_chunks, queries)
     selected = all_chunks[: config.limit] if config.limit is not None else all_chunks
