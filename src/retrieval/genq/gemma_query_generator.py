@@ -20,9 +20,7 @@ class GemmaMLXQueryGenerator:
         self.model_name = model_name
         self.device_name = "mlx-local-api"
         self.base_url = base_url.rstrip("/")
-        self.timeout_seconds = float(
-            os.getenv("GENQ_GEMMA_TIMEOUT_SECONDS", "120")
-        )
+        self.timeout_seconds = float(os.getenv("GENQ_GEMMA_TIMEOUT_SECONDS", "120"))
         self.max_attempts = int(os.getenv("GENQ_GEMMA_MAX_ATTEMPTS", "5"))
         if self.max_attempts < 1:
             raise ValueError("GENQ_GEMMA_MAX_ATTEMPTS must be at least 1")
@@ -238,9 +236,7 @@ Documentation passage:
             raise RuntimeError("Gemma response does not contain a query list.")
 
         normalized = [
-            query.strip()
-            for query in queries
-            if isinstance(query, str) and query.strip()
+            query.strip() for query in queries if isinstance(query, str) and query.strip()
         ]
 
         if len(normalized) != len(set(normalized)):

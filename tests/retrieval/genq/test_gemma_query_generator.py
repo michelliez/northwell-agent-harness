@@ -15,8 +15,7 @@ def test_parse_queries_accepts_json_code_fence() -> None:
 
 def test_parse_queries_accepts_tagged_lines() -> None:
     queries = GemmaMLXQueryGenerator._parse_queries(
-        "<query>What is A0H_MAP?</query>\n"
-        "<query>Which columns are available?</query>"
+        "<query>What is A0H_MAP?</query>\n<query>Which columns are available?</query>"
     )
 
     assert queries == ["What is A0H_MAP?", "Which columns are available?"]

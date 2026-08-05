@@ -292,8 +292,11 @@ def test_pipeline_builds_the_claude_generator_from_config(
     fake.device_name = "anthropic-api"
     captured_models: list[str] = []
 
-    def make_generator(model_name: str) -> FakeGenerator:
+    captured_strides: list[int] = []
+
+    def make_generator(model_name: str, *, passages_per_request: int = 1) -> FakeGenerator:
         captured_models.append(model_name)
+        captured_strides.append(passages_per_request)
         return fake
 
     monkeypatch.setattr(query_generation, "ClaudeHaikuQueryGenerator", make_generator)
@@ -302,8 +305,10 @@ def test_pipeline_builds_the_claude_generator_from_config(
     report = generate_queries(settings)
 
     assert captured_models == ["test-claude-haiku"]
+    assert captured_strides == [1]
     assert report.generator_model == "test-claude-haiku"
     assert report.device == "anthropic-api"
+    assert report.passages_per_request == 1
 
 
 def test_pipeline_builds_the_gemma_generator_from_config(
@@ -346,6 +351,74 @@ def test_pipeline_builds_the_gemma_generator_from_config(
     assert report.device == "mlx-local-api"
 
 
+def test_pipeline_builds_the_qwen_generator_from_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    input_path = tmp_path / "split_chunks.jsonl"
+    write_jsonl(
+        input_path,
+        [
+            split_chunk(
+                "ONE",
+                "ONE.html",
+                "test",
+                text="One eligible passage for Qwen provider selection.",
+            )
+        ],
+    )
+    fake = FakeGenerator()
+    fake.model_name = "local-qwen"
+    fake.device_name = "cuda"
+    captured: list[dict[str, object]] = []
+
+    def make_generator(
+        model_name: str,
+        *,
+        device: str,
+        load_in_4bit: bool,
+        batch_size: int,
+        max_retries: int,
+    ) -> FakeGenerator:
+        captured.append(
+            {
+                "model_name": model_name,
+                "device": device,
+                "load_in_4bit": load_in_4bit,
+                "batch_size": batch_size,
+                "max_retries": max_retries,
+            }
+        )
+        return fake
+
+    monkeypatch.setattr(query_generation, "QwenQueryGenerator", make_generator)
+    settings = config(
+        tmp_path,
+        input_path,
+        provider="qwen",
+        qwen_model_name="local-qwen",
+        qwen_device="cuda",
+        qwen_load_in_4bit=False,
+        qwen_max_retries=4,
+        batch_size=32,
+    )
+
+    report = generate_queries(settings)
+
+    # batch_size reaches the generator unchanged: Qwen batches on the GPU, so a
+    # separate knob could disagree with the pipeline about VRAM per run.
+    assert captured == [
+        {
+            "model_name": "local-qwen",
+            "device": "cuda",
+            "load_in_4bit": False,
+            "batch_size": 32,
+            "max_retries": 4,
+        }
+    ]
+    assert report.generator_model == "local-qwen"
+    assert report.device == "cuda"
+
+
 @pytest.mark.parametrize(
     "overrides",
     [
@@ -358,6 +431,9 @@ def test_pipeline_builds_the_gemma_generator_from_config(
         {"provider": "unknown"},
         {"gemma_model_name": "  "},
         {"gemma_base_url": "  "},
+        {"qwen_model_name": "  "},
+        {"qwen_device": "tpu"},
+        {"qwen_max_retries": -1},
     ],
 )
 def test_invalid_generation_configuration_is_rejected(

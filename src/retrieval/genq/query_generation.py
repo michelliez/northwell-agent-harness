@@ -28,16 +28,26 @@ from retrieval.genq.claude_query_generator import (
     ClaudeHaikuQueryGenerator,
 )
 from retrieval.genq.gemma_query_generator import GemmaMLXQueryGenerator
+from retrieval.genq.qwen_query_generator import (
+    DEFAULT_MAX_RETRIES as DEFAULT_QWEN_MAX_RETRIES,
+)
+from retrieval.genq.qwen_query_generator import (
+    DEFAULT_QWEN_MODEL,
+    QwenQueryGenerator,
+)
 
-PROVIDER_CHOICES = ("claude", "gemma")
+PROVIDER_CHOICES = ("claude", "gemma", "qwen")
 
 DEFAULT_GEMMA_MODEL = ".local/models/gemma-3-1b-it-4bit"
 DEFAULT_GEMMA_BASE_URL = "http://127.0.0.1:8080"
+DEFAULT_QWEN_DEVICE = "auto"
+QWEN_DEVICE_CHOICES = ("auto", "cuda", "cpu")
 
 LOGGER = logging.getLogger(__name__)
 GENERATION_VERSION = "synthetic-query-generation-v2"
 DEFAULT_SEED = 42
 DEFAULT_BATCH_SIZE = 8
+DEFAULT_PASSAGES_PER_REQUEST = 1
 DEFAULT_QUERIES_PER_CHUNK = 5
 DEFAULT_MAX_INPUT_TOKENS = 300
 DEFAULT_MAX_QUERY_TOKENS = 64
@@ -76,8 +86,13 @@ class GenerationConfig:
     model_name: str = DEFAULT_CLAUDE_MODEL
     gemma_model_name: str = DEFAULT_GEMMA_MODEL
     gemma_base_url: str = DEFAULT_GEMMA_BASE_URL
+    qwen_model_name: str = DEFAULT_QWEN_MODEL
+    qwen_device: str = DEFAULT_QWEN_DEVICE
+    qwen_load_in_4bit: bool = True
+    qwen_max_retries: int = DEFAULT_QWEN_MAX_RETRIES
     seed: int = DEFAULT_SEED
     batch_size: int = DEFAULT_BATCH_SIZE
+    passages_per_request: int = DEFAULT_PASSAGES_PER_REQUEST
     queries_per_chunk: int = DEFAULT_QUERIES_PER_CHUNK
     max_input_tokens: int = DEFAULT_MAX_INPUT_TOKENS
     max_query_tokens: int = DEFAULT_MAX_QUERY_TOKENS
@@ -94,15 +109,20 @@ class GenerationConfig:
         if not self.model_name.strip():
             raise ValueError("model_name must not be blank")
         if self.provider not in PROVIDER_CHOICES:
-            raise ValueError(
-                f"provider must be one of: {', '.join(PROVIDER_CHOICES)}"
-            )
+            raise ValueError(f"provider must be one of: {', '.join(PROVIDER_CHOICES)}")
         if not self.gemma_model_name.strip():
             raise ValueError("gemma_model_name must not be blank")
         if not self.gemma_base_url.strip():
             raise ValueError("gemma_base_url must not be blank")
+        if not self.qwen_model_name.strip():
+            raise ValueError("qwen_model_name must not be blank")
+        if self.qwen_device not in QWEN_DEVICE_CHOICES:
+            raise ValueError(f"qwen_device must be one of: {', '.join(QWEN_DEVICE_CHOICES)}")
+        if self.qwen_max_retries < 0:
+            raise ValueError("qwen_max_retries must be non-negative")
         for name, value in (
             ("batch_size", self.batch_size),
+            ("passages_per_request", self.passages_per_request),
             ("queries_per_chunk", self.queries_per_chunk),
             ("max_input_tokens", self.max_input_tokens),
             ("max_query_tokens", self.max_query_tokens),
@@ -194,8 +214,21 @@ def generate_queries(
             config.gemma_model_name,
             base_url=config.gemma_base_url,
         )
+    elif config.provider == "qwen":
+        active_generator = QwenQueryGenerator(
+            config.qwen_model_name,
+            device=config.qwen_device,
+            load_in_4bit=config.qwen_load_in_4bit,
+            # Qwen batches on the GPU itself, so the pipeline batch size only
+            # sets log granularity. One knob drives both rather than two that
+            # can disagree about how much VRAM a run needs.
+            batch_size=config.batch_size,
+            max_retries=config.qwen_max_retries,
+        )
     else:
-        active_generator = ClaudeHaikuQueryGenerator(config.model_name)
+        active_generator = ClaudeHaikuQueryGenerator(
+            config.model_name, passages_per_request=config.passages_per_request
+        )
     records: list[GeneratedQueryRecord] = []
     failed_generation_chunk_count = 0
     for batch_number, start in enumerate(range(0, len(selected), config.batch_size)):
@@ -271,6 +304,7 @@ def generate_queries(
         device=active_generator.device_name,
         seed=config.seed,
         batch_size=config.batch_size,
+        passages_per_request=config.passages_per_request,
         queries_per_chunk=config.queries_per_chunk,
         max_input_tokens=config.max_input_tokens,
         max_query_tokens=config.max_query_tokens,
@@ -327,8 +361,33 @@ def main() -> None:
         default=os.getenv("GEMMA_BASE_URL", DEFAULT_GEMMA_BASE_URL),
         help="Base URL of the local MLX-LM server",
     )
+    parser.add_argument(
+        "--qwen-model", default=DEFAULT_QWEN_MODEL, help="Hugging Face model ID for Qwen"
+    )
+    parser.add_argument("--qwen-device", default=DEFAULT_QWEN_DEVICE, choices=QWEN_DEVICE_CHOICES)
+    parser.add_argument(
+        "--qwen-no-4bit",
+        action="store_true",
+        default=False,
+        help="Load Qwen in bf16 instead of 4-bit NF4 (needs roughly 8 GB for a 4B model)",
+    )
+    parser.add_argument(
+        "--qwen-max-retries",
+        type=int,
+        default=DEFAULT_QWEN_MAX_RETRIES,
+        help="Re-sample attempts for a passage whose reply is not parseable JSON",
+    )
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
+    parser.add_argument(
+        "--passages-per-request",
+        type=int,
+        default=DEFAULT_PASSAGES_PER_REQUEST,
+        help=(
+            "Passages to place in a single API request. 1 reproduces earlier runs; "
+            "10 cuts input tokens per passage from ~748 to ~135."
+        ),
+    )
     parser.add_argument("--queries-per-chunk", type=int, default=DEFAULT_QUERIES_PER_CHUNK)
     parser.add_argument("--max-input-tokens", type=int, default=DEFAULT_MAX_INPUT_TOKENS)
     parser.add_argument("--max-query-tokens", type=int, default=DEFAULT_MAX_QUERY_TOKENS)
@@ -355,8 +414,13 @@ def main() -> None:
                 model_name=args.model,
                 gemma_model_name=args.gemma_model,
                 gemma_base_url=args.gemma_base_url,
+                qwen_model_name=args.qwen_model,
+                qwen_device=args.qwen_device,
+                qwen_load_in_4bit=not args.qwen_no_4bit,
+                qwen_max_retries=args.qwen_max_retries,
                 seed=args.seed,
                 batch_size=args.batch_size,
+                passages_per_request=args.passages_per_request,
                 queries_per_chunk=args.queries_per_chunk,
                 max_input_tokens=args.max_input_tokens,
                 max_query_tokens=args.max_query_tokens,

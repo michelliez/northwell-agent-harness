@@ -126,6 +126,61 @@ GenQ splits the corpus before generating, so held-out evaluation chunks cannot
 also become training pairs. It is an offline tool and must never enter the
 request path.
 
+### The committed table-level dataset
+
+`synthetic/` holds one complete generation run over the table corpus, so
+fine-tuning does not require re-running the pipeline. The `.jsonl` files are Git
+LFS; the `*_report.json` files beside them are plain git, because their hashes
+are the point.
+
+| file | rows | what it is |
+|---|---|---|
+| `table_chunks.jsonl` | 39,392 | Stage 2 passages, one per table, deduplicated on description |
+| `table_queries_raw.jsonl` | 62,120 | Qwen3-4B output before filtering |
+| `table_queries_retained.jsonl` | 62,048 | passed Stage 4; **this is the training input** |
+| `table_queries_reviews.jsonl` | 62,120 | every decision with reason codes, including the 30 rejects and 42 flagged |
+
+Retained by split: 49,706 train, 6,140 validation, 6,202 test.
+
+Training needs **both** files, because a query record carries
+`relevant_chunk_id` rather than passage text:
+
+```powershell
+uv run --group genq agent-harness-genq-train Qwen/Qwen3-Embedding-0.6B `
+  --queries evals/retrieval/synthetic/table_queries_retained.jsonl `
+  --chunks evals/retrieval/synthetic/table_chunks.jsonl `
+  --output-dir .local/models/qwen-emb-tuned
+```
+
+Provenance chains through the reports: generation records
+`input_corpus_hash 41391515…` over `table_chunks.jsonl` and
+`output_query_hash 2ed77433…`; the filter consumes that same
+`raw_queries_hash 2ed77433…` and produces
+`retained_queries_hash e66cfc30…`. A mismatch means the files no longer belong
+to each other and Stage 4 fails closed rather than filtering the wrong pair.
+
+Two things about this run differ from the defaults and matter when comparing
+against another:
+
+- **`--min-passage-chars 40`, not the default 100.** The length distribution is
+  bimodal, and 100 sits in the middle of it: 8,332 passages are `Table: NAME`
+  with no description at all, while 5,666 in the 40–99 band carry real ones
+  ("The status history of an ABN form"). The default silently discarded that
+  second group. 31,060 of 39,392 passages are eligible at 40.
+- **The queries cannot be regenerated.** Chunk corpora are deterministic, since
+  `index_contract.py` pins `INDEX_CHUNKER_VERSION`, but these are LLM samples.
+  The seed makes them repeatable on one GPU; CUDA kernel nondeterminism and a
+  different accelerator do not reproduce them. That is why they are committed
+  rather than left to a re-run.
+
+Retention was 99.88%, which measures the absence of verbatim copying and
+per-chunk duplication — not diversity or grounding. Notably, 32 of the 42
+flagged queries invented specifics absent from the passage (dates, department
+names, status values); the gate caught them only because they had *no* lexical
+overlap, so partial fabrication is still present and unmeasured. Treat the
+validation and test slices with that in mind: a hallucinated query makes its own
+gold chunk unfindable and depresses measured retrieval unfairly.
+
 The reviewed benchmark above and the GenQ pipeline measure different things at
 different granularity: the benchmark is a small hand-authored document-level
 qrel set, GenQ is a large synthetic chunk-level set. Do not compare their
