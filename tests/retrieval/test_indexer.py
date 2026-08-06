@@ -107,6 +107,58 @@ def test_indexes_and_expands_only_documented_foreign_keys(tmp_path: Path) -> Non
     assert "UNRELATED" not in {relationship["source_table"], relationship["target_table"]}
 
 
+def test_relationship_resolution_matches_file_names_case_insensitively(tmp_path: Path) -> None:
+    (tmp_path / "SOURCE_TABLE.html").write_text(
+        """
+        <html><head><title>SOURCE_TABLE</title></head><body>
+        <div class="header">SOURCE_TABLE</div><div id="oContent">
+          <table class="KeyValue"><tr><td>Distinctive source ledger</td></tr></table>
+          <table class="SubHeader3"><tr><td id="____Foreign-Key-Information____">
+            Foreign Key Information</td></tr></table>
+          <table class="List"><tbody>
+            <tr><th>Pos.</th><th>Src. Col.</th><th>Dest. Tbl.</th><th>Dest. Col.</th></tr>
+            <tr><td>1</td><td>PAT_ID</td><td><a>TARGET_TABLE</a></td><td>PAT_ID</td></tr>
+            <tr><td>1</td><td>OTHER_ID</td><td><a>OTHER_TABLE</a></td><td>OTHER_ID</td></tr>
+            <tr><td>1</td><td>GONE_ID</td><td><a>MISSING_TABLE</a></td><td>GONE_ID</td></tr>
+          </tbody></table>
+        </div></body></html>
+        """,
+        encoding="utf-8",
+    )
+    for relative in (
+        "sub_a/TARGET_TABLE.html",
+        "sub_b/TARGET_TABLE.html",
+        "nested/other_table.html",
+    ):
+        target = tmp_path / relative
+        target.parent.mkdir(exist_ok=True)
+        name = target.stem
+        target.write_text(
+            f"""<html><head><title>{name}</title></head><body>
+            <div class="header">{name}</div><div id="oContent">
+            <table class="KeyValue"><tr><td>{name} ledger</td></tr></table>
+            </div></body></html>""",
+            encoding="utf-8",
+        )
+    db_path = tmp_path / "rag.sqlite"
+    build_index(tmp_path, db_path, workers=1)
+
+    with sqlite3.connect(db_path) as conn:
+        doc_by_path = {
+            row[1]: row[0] for row in conn.execute("SELECT doc_id, source_path FROM docs")
+        }
+        resolved = {
+            row[0]: row[1]
+            for row in conn.execute("SELECT target_table, target_doc_id FROM table_relationships")
+        }
+
+    # Ties resolve to the smallest source path; matching ignores file-name
+    # case; a target absent from this exact index stays unresolved.
+    assert resolved["TARGET_TABLE"] == doc_by_path["sub_a/TARGET_TABLE.html"]
+    assert resolved["OTHER_TABLE"] == doc_by_path["nested/other_table.html"]
+    assert resolved["MISSING_TABLE"] is None
+
+
 def test_validation_rejects_incompatible_chunker_with_same_schema(tmp_path: Path) -> None:
     html_path = tmp_path / "page.html"
     html_path.write_text("<html><body>stable content</body></html>", encoding="utf-8")

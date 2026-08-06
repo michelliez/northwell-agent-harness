@@ -717,6 +717,38 @@ def _report_progress(processed: int, total: int, chunks: int) -> None:
         )
 
 
+def resolve_relationship_destinations(conn: sqlite3.Connection) -> None:
+    """Point each relationship at the document whose file name is its target table.
+
+    A document matches when the final segment of its source path equals
+    ``<target_table>.html`` case-insensitively; ties resolve to the smallest
+    source path. The lookup is built in one pass over ``docs`` because
+    resolving per relationship row against the docs table is quadratic in
+    corpus size, which left full rebuilds silent for hours in this step.
+    Unmatched targets keep their NULL destination: unresolved names remain
+    evidence-bearing edges but cannot expand retrieval.
+    """
+    best_doc_by_file_name: dict[str, tuple[str, str]] = {}
+    for doc_id, source_path in conn.execute("SELECT doc_id, source_path FROM docs").fetchall():
+        path = str(source_path)
+        file_name = path.rsplit("/", 1)[-1].upper()
+        best = best_doc_by_file_name.get(file_name)
+        if best is None or path < best[0]:
+            best_doc_by_file_name[file_name] = (path, str(doc_id))
+
+    resolved: list[tuple[str, str]] = []
+    for relationship_id, target_table in conn.execute(
+        "SELECT relationship_id, target_table FROM table_relationships"
+    ).fetchall():
+        best = best_doc_by_file_name.get(f"{target_table}.html".upper())
+        if best is not None:
+            resolved.append((best[1], str(relationship_id)))
+    conn.executemany(
+        "UPDATE table_relationships SET target_doc_id = ? WHERE relationship_id = ?",
+        resolved,
+    )
+
+
 def build_index(
     input_path: Path,
     db_path: Path,
@@ -793,16 +825,7 @@ def build_index(
             conn.commit()
 
         # Resolve destinations only against documents present in this exact index.
-        # Unresolved names remain evidence-bearing edges but cannot expand retrieval.
-        conn.execute(
-            """UPDATE table_relationships
-               SET target_doc_id = (
-                   SELECT docs.doc_id FROM docs
-                   WHERE upper(docs.source_path) = upper(table_relationships.target_table || '.html')
-                      OR upper(docs.source_path) LIKE upper('%/' || table_relationships.target_table || '.html')
-                   ORDER BY docs.source_path LIMIT 1
-               )"""
-        )
+        resolve_relationship_destinations(conn)
         total_section_facts = conn.execute("SELECT COUNT(*) FROM section_facts").fetchone()[0]
         total_nodes = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
         total_relationships = conn.execute("SELECT COUNT(*) FROM table_relationships").fetchone()[0]
