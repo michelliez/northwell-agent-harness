@@ -55,11 +55,38 @@ adding one, and deleting a wrong document over annotating it.
 - SQL validation is deterministic and never executes a query.
 - BigQuery integration: dry-run (ADR 002), cost gates (cost_gate.py), read-only
   execution (ADR 003), result safety (ADR 004), and audit logging (ADR 005) are
-  implemented and tested (422 tests passing). User-facing layer pending.
+  implemented and tested. User-facing layer pending.
+- Table relationships come only from Epic's Foreign Key Information tables, never
+  from prose. Every edge carries the `evidence_chunk_id` it was read from, so a
+  relationship can be traced to the documentation that asserts it.
+- Graph expansion is one hop and bounded. It is a deterministic lookup after
+  ranking, not recursive retrieval and not a model decision.
 - All execution limits live in `agent_host/budget.py`, not configuration.
 - Generated artifacts live under ignored `.local/`.
 - Never commit credentials, PHI, proprietary schemas or HTML, SQLite indexes,
   sensitive traces, or real query results.
+
+## The index contract
+
+`retrieval/index_contract.py` carries two versions that are easy to confuse and
+mean different things. `search.py` refuses to open an index whose stored value
+disagrees with either.
+
+| Constant | Governs | Changing it means |
+|---|---|---|
+| `INDEX_SCHEMA_VERSION` | SQLite table layout | rebuild the index; existing query datasets stay valid |
+| `INDEX_CHUNKER_VERSION` | how text becomes chunks, and therefore chunk IDs | every generated dataset keyed by `chunk_id` is invalidated |
+
+While the chunker version holds, a rebuild reproduces byte-identical chunk IDs,
+so the sibling evaluation repository's query sets survive a schema change
+untouched. Bump the chunker version only with that cost in view.
+
+Retrieval scores are comparable only across indexes built at the same chunker
+version. Record it beside any metric.
+
+The Clarity HTML corpus and the built indexes are inputs to both repositories and
+too large to duplicate per clone, so they live outside either checkout beside
+them, reached by a directory junction. Nothing under `fixtures/` is committed.
 
 ## Ownership
 
@@ -67,6 +94,8 @@ adding one, and deleting a wrong document over annotating it.
 agent_host/    graph lifecycle, state, nodes, config, budget, trace, CLI
 policy/        deterministic screening and policy results
 retrieval/     HTML parsing, indexing, search, evidence extraction, index audit
+               hierarchy.py holds the within-document containment tree;
+               table_relationships holds cross-document foreign-key edges
 sql/           SQL domain models, generation, validation, BigQuery boundary
                dry_run, read-only executor, result safety, and audit logging
                exist as adapters; no graph route reaches them
