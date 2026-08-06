@@ -49,6 +49,7 @@ class ParsedDocument:
     title: str
     chunks: list[IndexedChunk]
     facts: list[SectionFact]
+    relationships: list[TableRelationship]
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,19 @@ class SectionFact:
 
     heading_path: str
     fact: str  # "present_but_unavailable"
+
+
+@dataclass(frozen=True)
+class TableRelationship:
+    """One explicitly documented source-to-destination column relationship."""
+
+    source_table: str
+    target_table: str
+    source_column: str
+    target_column: str
+    ordinal: int
+    evidence_heading_path: str
+    relationship_type: str = "foreign_key"
 
 
 def sha256_text(text: str) -> str:
@@ -224,6 +238,64 @@ def extract_table_content(table: Tag) -> str:
     return " | ".join(parts)
 
 
+def extract_foreign_key_relationships(
+    table: Tag,
+    *,
+    source_table: str,
+    evidence_heading_path: str,
+) -> list[TableRelationship]:
+    """Parse Epic's structured Foreign Key Information table.
+
+    Destination cells use ``rowspan`` for composite keys, so later rows can
+    omit the table name. We carry only the currently documented destination
+    across those rows; arbitrary prose is never interpreted as a relationship.
+    """
+    relationships: list[TableRelationship] = []
+    active_target: str | None = None
+    remaining_target_rows = 0
+
+    for row in owned_rows(table):
+        cells = owned_cells(row)
+        if not cells or any(cell.name == "th" for cell in cells):
+            continue
+        values = [owned_cell_text(cell).strip() for cell in cells]
+        if not values or not values[0].isdigit() or len(values) < 3:
+            continue
+
+        ordinal = int(values[0])
+        source_column = values[1].upper()
+        target_cell = cells[2]
+        target_link = target_cell.find("a")
+        starts_target = isinstance(target_link, Tag)
+
+        if starts_target:
+            active_target = owned_cell_text(target_cell).strip().upper()
+            try:
+                remaining_target_rows = max(int(target_cell.get("rowspan", 1)) - 1, 0)
+            except (TypeError, ValueError):
+                remaining_target_rows = 0
+            target_column = values[3].upper() if len(values) >= 4 else ""
+        elif active_target is not None and remaining_target_rows > 0:
+            target_column = values[2].upper()
+            remaining_target_rows -= 1
+        else:
+            continue
+
+        if source_column and active_target and target_column:
+            relationships.append(
+                TableRelationship(
+                    source_table=source_table.upper(),
+                    target_table=active_target,
+                    source_column=source_column,
+                    target_column=target_column,
+                    ordinal=ordinal,
+                    evidence_heading_path=evidence_heading_path,
+                )
+            )
+
+    return relationships
+
+
 def table_to_chunks(category: str, heading: str, table: Tag) -> list[IndexedChunk]:
     """Split a content table into one or more chunks.
 
@@ -290,6 +362,7 @@ def create_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
         DROP TABLE IF EXISTS nodes;
+        DROP TABLE IF EXISTS table_relationships;
         DROP TABLE IF EXISTS section_facts;
         DROP TABLE IF EXISTS chunks_fts;
         DROP TABLE IF EXISTS chunks;
@@ -327,6 +400,23 @@ def create_schema(conn: sqlite3.Connection) -> None:
             fact TEXT NOT NULL,
             PRIMARY KEY (doc_id, heading_path)
         );
+
+        CREATE TABLE table_relationships (
+            relationship_id TEXT PRIMARY KEY,
+            source_doc_id TEXT NOT NULL REFERENCES docs(doc_id),
+            target_doc_id TEXT REFERENCES docs(doc_id),
+            source_table TEXT NOT NULL,
+            target_table TEXT NOT NULL,
+            source_column TEXT NOT NULL,
+            target_column TEXT NOT NULL,
+            ordinal INTEGER NOT NULL CHECK (ordinal >= 1),
+            relationship_type TEXT NOT NULL CHECK (relationship_type = 'foreign_key'),
+            evidence_chunk_id TEXT REFERENCES chunks(chunk_id)
+        );
+
+        CREATE INDEX relationships_by_source ON table_relationships(source_doc_id);
+        CREATE INDEX relationships_by_target ON table_relationships(target_doc_id);
+        CREATE INDEX relationships_by_target_name ON table_relationships(target_table);
 
         CREATE TABLE nodes (
             node_id TEXT PRIMARY KEY,
@@ -388,12 +478,41 @@ def parse_one_document(
         column_chunk_factory=column_chunks,
     )
 
+    soup = BeautifulSoup(html, "html.parser")
+    content = soup.find("div", id="oContent")
+    header = content.find_previous("div", class_="header") if isinstance(content, Tag) else None
+    source_table = (
+        header.get_text(" ", strip=True)
+        if isinstance(header, Tag)
+        else Path(source_path).stem
+    )
+    relationships: list[TableRelationship] = []
+    for subheader in soup.find_all("table", class_="SubHeader3"):
+        section_cell = subheader.find("td", id=True)
+        section_name = (
+            owned_cell_text(section_cell).replace("-", " ").strip()
+            if isinstance(section_cell, Tag)
+            else ""
+        )
+        if section_name.casefold() != "foreign key information":
+            continue
+        value = subheader.find_next_sibling()
+        if isinstance(value, Tag) and value.name == "table":
+            relationships.extend(
+                extract_foreign_key_relationships(
+                    value,
+                    source_table=source_table,
+                    evidence_heading_path=f"{source_table} > Foreign-Key-Information",
+                )
+            )
+
     return ParsedDocument(
         source_path=source_path,
         source_hash=source_hash,
         title=title,
         chunks=chunks,
         facts=facts,
+        relationships=relationships,
     )
 
 
@@ -469,6 +588,7 @@ def insert_parsed_document(
 
     # occurrence distinguishes split chunks that share a heading/category.
     occurrence_counter: dict[tuple[str, str], int] = {}
+    first_chunk_by_heading: dict[str, str] = {}
     for chunk_index, chunk in enumerate(parsed.chunks):
         text_hash = sha256_text(chunk.text)
         occ_key = (chunk.heading_path, chunk.category)
@@ -493,6 +613,7 @@ def insert_parsed_document(
                 text_hash,
             ),
         )
+        first_chunk_by_heading.setdefault(chunk.heading_path, chunk_id)
 
         heading_parts = tuple(
             part.strip() for part in chunk.heading_path.split(">") if part.strip()
@@ -543,6 +664,39 @@ def insert_parsed_document(
         conn.execute(
             "INSERT OR IGNORE INTO section_facts (doc_id, heading_path, fact) VALUES (?, ?, ?)",
             (document_id, fact.heading_path, fact.fact),
+        )
+
+    for occurrence, relationship in enumerate(parsed.relationships):
+        relationship_id = sha256_text(
+            ":".join(
+                (
+                    "relationship",
+                    document_id,
+                    relationship.target_table,
+                    relationship.source_column,
+                    relationship.target_column,
+                    str(relationship.ordinal),
+                    str(occurrence),
+                )
+            )
+        )
+        conn.execute(
+            """INSERT INTO table_relationships
+               (relationship_id, source_doc_id, target_doc_id, source_table,
+                target_table, source_column, target_column, ordinal,
+                relationship_type, evidence_chunk_id)
+               VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                relationship_id,
+                document_id,
+                relationship.source_table,
+                relationship.target_table,
+                relationship.source_column,
+                relationship.target_column,
+                relationship.ordinal,
+                relationship.relationship_type,
+                first_chunk_by_heading.get(relationship.evidence_heading_path),
+            ),
         )
 
     return parsed.source_hash, len(parsed.chunks)
@@ -636,8 +790,25 @@ def build_index(
 
             conn.commit()
 
+        # Resolve destinations only against documents present in this exact index.
+        # Unresolved names remain evidence-bearing edges but cannot expand retrieval.
+        conn.execute(
+            """UPDATE table_relationships
+               SET target_doc_id = (
+                   SELECT docs.doc_id FROM docs
+                   WHERE upper(docs.source_path) = upper(table_relationships.target_table || '.html')
+                      OR upper(docs.source_path) LIKE upper('%/' || table_relationships.target_table || '.html')
+                   ORDER BY docs.source_path LIMIT 1
+               )"""
+        )
         total_section_facts = conn.execute("SELECT COUNT(*) FROM section_facts").fetchone()[0]
         total_nodes = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
+        total_relationships = conn.execute(
+            "SELECT COUNT(*) FROM table_relationships"
+        ).fetchone()[0]
+        resolved_relationships = conn.execute(
+            "SELECT COUNT(*) FROM table_relationships WHERE target_doc_id IS NOT NULL"
+        ).fetchone()[0]
 
         version_manifest = {
             "schema_version": INDEX_SCHEMA_VERSION,
@@ -661,6 +832,8 @@ def build_index(
             "chunk_count": str(total_chunks),
             "section_fact_count": str(total_section_facts),
             "hierarchy_node_count": str(total_nodes),
+            "relationship_count": str(total_relationships),
+            "resolved_relationship_count": str(resolved_relationships),
         }
         conn.executemany(
             "INSERT INTO index_metadata (key, value) VALUES (?, ?)",

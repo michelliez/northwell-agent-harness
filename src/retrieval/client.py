@@ -23,9 +23,26 @@ class RetrievedChunk(BaseModel):
     score: float | None = None
 
 
+class RetrievedRelationship(BaseModel):
+    relationship_id: str = Field(min_length=1)
+    seed_document_id: str = Field(min_length=1)
+    seed_rank: int = Field(ge=1)
+    direction: str
+    related_document_id: str = Field(min_length=1)
+    related_source_path: str = Field(min_length=1)
+    source_table: str = Field(min_length=1)
+    target_table: str = Field(min_length=1)
+    source_column: str = Field(min_length=1)
+    target_column: str = Field(min_length=1)
+    ordinal: int = Field(ge=1)
+    relationship_type: str
+    evidence_chunk_id: str | None = None
+
+
 class RetrievalResult(BaseModel):
     query: str = Field(min_length=1)
     chunks: list[RetrievedChunk]
+    relationships: list[RetrievedRelationship] = Field(default_factory=list)
     index_version: str = Field(min_length=1)
 
 
@@ -39,13 +56,28 @@ def retrieve_documentation(
     *,
     budget: ExecutionBudget,
     top_k: int = 5,
+    include_relationships: bool = False,
+    max_related_tables: int = 5,
 ) -> RetrievalResult:
     """Search the SQLite RAG index and return bounded, typed chunks."""
     if top_k < 1:
         raise ValueError("top_k must be at least 1")
     bounded_top_k = budget.bound_retrieval_count(top_k)
 
-    result = search.retrieve_documentation_context(query, db_path, top_k=bounded_top_k)
+    relationship_options = (
+        {
+            "include_relationships": True,
+            "max_related_tables": max_related_tables,
+        }
+        if include_relationships
+        else {}
+    )
+    result = search.retrieve_documentation_context(
+        query,
+        db_path,
+        top_k=bounded_top_k,
+        **relationship_options,
+    )
 
     chunks: list[RetrievedChunk] = []
     for fallback_rank, chunk in enumerate(result.get("chunks", [])[:bounded_top_k], start=1):
@@ -68,6 +100,11 @@ def retrieve_documentation(
     return RetrievalResult(
         query=query,
         chunks=chunks,
+        relationships=[
+            RetrievedRelationship.model_validate(relationship)
+            for relationship in result.get("relationships", [])
+            if isinstance(relationship, dict)
+        ],
         index_version=str(result.get("index_version", "unknown")),
     )
 

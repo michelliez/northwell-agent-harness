@@ -106,6 +106,8 @@ REQUIRED_INDEX_METADATA = frozenset(
         "chunk_count",
         "section_fact_count",
         "hierarchy_node_count",
+        "relationship_count",
+        "resolved_relationship_count",
     }
 )
 
@@ -179,6 +181,7 @@ def validate_index(db_path: Path) -> None:
             "index_metadata",
             "section_facts",
             "nodes",
+            "table_relationships",
         } - present
         if missing:
             raise SystemExit(
@@ -205,6 +208,10 @@ def validate_index(db_path: Path) -> None:
         chunk_count = cur.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
         section_fact_count = cur.execute("SELECT COUNT(*) FROM section_facts").fetchone()[0]
         hierarchy_node_count = cur.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
+        relationship_count = cur.execute("SELECT COUNT(*) FROM table_relationships").fetchone()[0]
+        resolved_relationship_count = cur.execute(
+            "SELECT COUNT(*) FROM table_relationships WHERE target_doc_id IS NOT NULL"
+        ).fetchone()[0]
         if doc_count < 1:
             raise SystemExit(f"RAG database {db_path} contains no indexed documents")
         if chunk_count < 1:
@@ -219,6 +226,12 @@ def validate_index(db_path: Path) -> None:
             raise SystemExit(f"RAG database {db_path} contains an incomplete node hierarchy")
         if metadata["hierarchy_node_count"] != str(hierarchy_node_count):
             raise SystemExit(f"RAG database {db_path} hierarchy node count does not match metadata")
+        if metadata["relationship_count"] != str(relationship_count):
+            raise SystemExit(f"RAG database {db_path} relationship count does not match metadata")
+        if metadata["resolved_relationship_count"] != str(resolved_relationship_count):
+            raise SystemExit(
+                f"RAG database {db_path} resolved relationship count does not match metadata"
+            )
     except SystemExit:
         raise
     except sqlite3.DatabaseError as exc:
@@ -570,10 +583,72 @@ def search_ranked_chunks(
     )
 
 
+def expand_document_relationships(
+    cur: sqlite3.Cursor,
+    *,
+    seed_document_ids: list[str],
+    max_related_tables: int = 5,
+) -> list[dict]:
+    """Return a bounded one-hop graph expansion from ranked seed documents.
+
+    Every returned edge originated in an explicit Foreign Key Information row.
+    Expansion is deliberately one hop: this is deterministic graph lookup, not
+    recursive retrieval or an LLM decision.
+    """
+    if max_related_tables < 1 or not seed_document_ids:
+        return []
+
+    expanded: list[dict] = []
+    seen_neighbors: set[str] = set()
+    for seed_rank, seed_doc_id in enumerate(seed_document_ids, start=1):
+        rows = cur.execute(
+            """SELECT r.relationship_id, r.source_doc_id, r.target_doc_id,
+                      r.source_table, r.target_table, r.source_column,
+                      r.target_column, r.ordinal, r.relationship_type,
+                      r.evidence_chunk_id,
+                      source_doc.source_path AS source_path,
+                      target_doc.source_path AS target_path
+               FROM table_relationships r
+               JOIN docs source_doc ON source_doc.doc_id = r.source_doc_id
+               JOIN docs target_doc ON target_doc.doc_id = r.target_doc_id
+               WHERE r.source_doc_id = ? OR r.target_doc_id = ?
+               ORDER BY r.target_table, r.source_table, r.ordinal, r.relationship_id""",
+            (seed_doc_id, seed_doc_id),
+        ).fetchall()
+        for row in rows:
+            outbound = row["source_doc_id"] == seed_doc_id
+            neighbor_doc_id = row["target_doc_id"] if outbound else row["source_doc_id"]
+            if neighbor_doc_id in seen_neighbors or neighbor_doc_id in seed_document_ids:
+                continue
+            seen_neighbors.add(str(neighbor_doc_id))
+            expanded.append(
+                {
+                    "relationship_id": row["relationship_id"],
+                    "seed_document_id": seed_doc_id,
+                    "seed_rank": seed_rank,
+                    "direction": "outbound" if outbound else "inbound",
+                    "related_document_id": neighbor_doc_id,
+                    "related_source_path": row["target_path"] if outbound else row["source_path"],
+                    "source_table": row["source_table"],
+                    "target_table": row["target_table"],
+                    "source_column": row["source_column"],
+                    "target_column": row["target_column"],
+                    "ordinal": row["ordinal"],
+                    "relationship_type": row["relationship_type"],
+                    "evidence_chunk_id": row["evidence_chunk_id"],
+                }
+            )
+            if len(expanded) >= max_related_tables:
+                return expanded
+    return expanded
+
+
 def retrieve_documentation_context(
     query: str,
     db_path: Path,
     top_k: int = 5,
+    include_relationships: bool = False,
+    max_related_tables: int = 5,
 ) -> dict:
     """Search documentation and return bounded, full chunks for answer generation."""
     if not 1 <= top_k <= MAX_RAG_TOP_K:
@@ -591,10 +666,21 @@ def retrieve_documentation_context(
             chunk["score"] = result.get("score")
             chunks.append(chunk)
 
+        relationships = (
+            expand_document_relationships(
+                cur,
+                seed_document_ids=list(dict.fromkeys(chunk["doc_id"] for chunk in chunks)),
+                max_related_tables=max_related_tables,
+            )
+            if include_relationships
+            else []
+        )
+
         return {
             "query": query,
             "retrieval_mode": "keyword",
             "chunks": chunks,
+            "relationships": relationships,
             "index_version": get_index_version(conn),
         }
     finally:

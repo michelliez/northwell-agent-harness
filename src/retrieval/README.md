@@ -200,6 +200,22 @@ exactly three, so one wrong document consumed 60% of the top-5 budget.
 `retrieve_documentation_context()` re-reads each ranked chunk by ID to get full
 text, attaches rank and score, and returns them with the index version.
 
+### Optional relationship expansion
+
+Version 5 indexes the explicit rows under each document's **Foreign Key
+Information** section in `table_relationships`. Each edge retains its source
+and destination columns and the chunk containing the source evidence. After
+all documents are indexed, destination table names are resolved to document
+IDs within that same index; unresolved names are retained but cannot be used
+for expansion.
+
+Call `retrieve_documentation_context(..., include_relationships=True)` (or the
+equivalent option on `retrieval.client.retrieve_documentation`) to expand the
+BM25 seed documents by one bounded hop. The result's `relationships` list
+records direction, related document, join columns, and `evidence_chunk_id`.
+Unrelated documents are never inferred from semantic similarity. This option
+is currently off by default and is not yet connected to SQL planning.
+
 ## What this is good and bad at
 
 Measured on the 50-query benchmark, document Hit@5 by failure bucket:

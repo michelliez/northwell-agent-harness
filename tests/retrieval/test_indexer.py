@@ -46,6 +46,69 @@ def test_build_and_search_rag_index(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     assert "Scheduled or completed" in chunk["text"]
 
 
+def test_indexes_and_expands_only_documented_foreign_keys(tmp_path: Path) -> None:
+    source = tmp_path / "SOURCE_TABLE.html"
+    source.write_text(
+        """
+        <html><head><title>SOURCE_TABLE</title></head><body>
+        <div class="header">SOURCE_TABLE</div><div id="oContent">
+          <table class="KeyValue"><tr><td>Distinctive source ledger</td></tr></table>
+          <table class="SubHeader3"><tr><td id="____Foreign-Key-Information____">
+            Foreign Key Information</td></tr></table>
+          <table class="List"><tbody>
+            <tr><th>Pos.</th><th>Src. Col.</th><th>Dest. Tbl.</th><th>Dest. Col.</th></tr>
+            <tr><td>1</td><td>PAT_ID</td><td rowspan="2"><a>TARGET_TABLE</a></td>
+                <td>PAT_ID</td></tr>
+            <tr><td>2</td><td>LINE</td><td>LINE</td></tr>
+          </tbody></table>
+        </div></body></html>
+        """,
+        encoding="utf-8",
+    )
+    (tmp_path / "TARGET_TABLE.html").write_text(
+        """<html><head><title>TARGET_TABLE</title></head><body>
+        <div class="header">TARGET_TABLE</div><div id="oContent">
+        <table class="KeyValue"><tr><td>Destination ledger</td></tr></table>
+        </div></body></html>""",
+        encoding="utf-8",
+    )
+    (tmp_path / "UNRELATED.html").write_text(
+        """<html><head><title>UNRELATED</title></head><body>
+        <div class="header">UNRELATED</div><div id="oContent">
+        <table class="KeyValue"><tr><td>Unrelated ledger</td></tr></table>
+        </div></body></html>""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "rag.sqlite"
+    build_index(tmp_path, db_path, workers=1)
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            """SELECT source_table, target_table, source_column, target_column,
+                      target_doc_id, evidence_chunk_id
+               FROM table_relationships ORDER BY ordinal"""
+        ).fetchall()
+    assert [(row[0], row[1], row[2], row[3]) for row in rows] == [
+        ("SOURCE_TABLE", "TARGET_TABLE", "PAT_ID", "PAT_ID"),
+        ("SOURCE_TABLE", "TARGET_TABLE", "LINE", "LINE"),
+    ]
+    assert all(row[4] is not None and row[5] is not None for row in rows)
+
+    result = search_module.retrieve_documentation_context(
+        "distinctive source ledger",
+        db_path,
+        top_k=1,
+        include_relationships=True,
+    )
+    assert len(result["relationships"]) == 1
+    relationship = result["relationships"][0]
+    assert relationship["target_table"] == "TARGET_TABLE"
+    assert relationship["related_source_path"] == "TARGET_TABLE.html"
+    assert "UNRELATED" not in {
+        relationship["source_table"], relationship["target_table"]
+    }
+
+
 def test_validation_rejects_incompatible_chunker_with_same_schema(tmp_path: Path) -> None:
     html_path = tmp_path / "page.html"
     html_path.write_text("<html><body>stable content</body></html>", encoding="utf-8")

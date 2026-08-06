@@ -6,10 +6,12 @@ Phase 1, the storage foundation, is implemented. New indexes store document,
 section, and leaf nodes in a parent-linked SQLite `nodes` table. Existing flat
 chunks remain unchanged and each leaf links back to its canonical `chunk_id`.
 The typed helpers in `retrieval.hierarchy` provide bounded `get_node`,
-`get_parent`, `get_children`, and `get_siblings` operations. Search across node
-summaries, context expansion, traversal budgets, and agent routing remain later
-phases; the production retrieval path continues to use the existing flat BM25
-index until those pieces are evaluated.
+`get_parent`, `get_children`, and `get_siblings` operations. A separate,
+evidence-backed `table_relationships` graph now supports optional one-hop
+expansion from flat BM25 seed documents. Search across hierarchy summaries,
+adaptive tree expansion, and agent routing remain later phases; production SQL
+planning still uses the existing flat BM25 results until graph expansion is
+evaluated independently.
 
 ## Objective
 

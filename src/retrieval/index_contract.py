@@ -1,6 +1,6 @@
 """Shared compatibility contract for generated RAG index artifacts."""
 
-INDEX_SCHEMA_VERSION = "rag-sqlite-v4-hierarchy"
+INDEX_SCHEMA_VERSION = "rag-sqlite-v5-relationships"
 INDEX_CHUNKER_VERSION = "section-table-genq-columns-v5"
 
 
