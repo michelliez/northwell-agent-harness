@@ -104,9 +104,7 @@ def test_indexes_and_expands_only_documented_foreign_keys(tmp_path: Path) -> Non
     relationship = result["relationships"][0]
     assert relationship["target_table"] == "TARGET_TABLE"
     assert relationship["related_source_path"] == "TARGET_TABLE.html"
-    assert "UNRELATED" not in {
-        relationship["source_table"], relationship["target_table"]
-    }
+    assert "UNRELATED" not in {relationship["source_table"], relationship["target_table"]}
 
 
 def test_validation_rejects_incompatible_chunker_with_same_schema(tmp_path: Path) -> None:

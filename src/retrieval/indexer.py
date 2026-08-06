@@ -270,10 +270,14 @@ def extract_foreign_key_relationships(
 
         if starts_target:
             active_target = owned_cell_text(target_cell).strip().upper()
-            try:
-                remaining_target_rows = max(int(target_cell.get("rowspan", 1)) - 1, 0)
-            except (TypeError, ValueError):
-                remaining_target_rows = 0
+            # Tag.get returns str | list[str] | None, since BeautifulSoup gives a
+            # list for multi-valued attributes. Narrowing before coercion is what
+            # makes this check out; a missing or non-numeric rowspan means the
+            # destination spans this row only, so no rows carry over.
+            rowspan = target_cell.get("rowspan")
+            remaining_target_rows = (
+                max(int(rowspan) - 1, 0) if isinstance(rowspan, str) and rowspan.isdigit() else 0
+            )
             target_column = values[3].upper() if len(values) >= 4 else ""
         elif active_target is not None and remaining_target_rows > 0:
             target_column = values[2].upper()
@@ -482,9 +486,7 @@ def parse_one_document(
     content = soup.find("div", id="oContent")
     header = content.find_previous("div", class_="header") if isinstance(content, Tag) else None
     source_table = (
-        header.get_text(" ", strip=True)
-        if isinstance(header, Tag)
-        else Path(source_path).stem
+        header.get_text(" ", strip=True) if isinstance(header, Tag) else Path(source_path).stem
     )
     relationships: list[TableRelationship] = []
     for subheader in soup.find_all("table", class_="SubHeader3"):
@@ -803,9 +805,7 @@ def build_index(
         )
         total_section_facts = conn.execute("SELECT COUNT(*) FROM section_facts").fetchone()[0]
         total_nodes = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
-        total_relationships = conn.execute(
-            "SELECT COUNT(*) FROM table_relationships"
-        ).fetchone()[0]
+        total_relationships = conn.execute("SELECT COUNT(*) FROM table_relationships").fetchone()[0]
         resolved_relationships = conn.execute(
             "SELECT COUNT(*) FROM table_relationships WHERE target_doc_id IS NOT NULL"
         ).fetchone()[0]
