@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -157,6 +158,79 @@ def test_relationship_resolution_matches_file_names_case_insensitively(tmp_path:
     assert resolved["TARGET_TABLE"] == doc_by_path["sub_a/TARGET_TABLE.html"]
     assert resolved["OTHER_TABLE"] == doc_by_path["nested/other_table.html"]
     assert resolved["MISSING_TABLE"] is None
+
+
+def _write_ledger_html(path: Path) -> None:
+    path.write_text(
+        f"""<html><head><title>{path.stem}</title></head><body>
+        <div class="header">{path.stem}</div><div id="oContent">
+        <table class="KeyValue"><tr><td>Distinctive source ledger</td></tr></table>
+        </div></body></html>""",
+        encoding="utf-8",
+    )
+
+
+def test_expansion_queries_are_searchable_but_never_touch_chunk_text(tmp_path: Path) -> None:
+    html_path = tmp_path / "data.html"
+    _write_ledger_html(html_path)
+    plain_db = tmp_path / "plain.sqlite"
+    build_index(html_path, plain_db, workers=1)
+
+    with sqlite3.connect(plain_db) as conn:
+        chunk_id, plain_text_hash = conn.execute(
+            "SELECT chunk_id, text_hash FROM chunks ORDER BY chunk_index LIMIT 1"
+        ).fetchone()
+
+    expansion_path = tmp_path / "expansion.jsonl"
+    expansion_path.write_text(
+        json.dumps(
+            {
+                "chunk_id": chunk_id,
+                "queries": [{"query": "zebra clinician cancellations"}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    expanded_db = tmp_path / "expanded.sqlite"
+    build_index(html_path, expanded_db, workers=1, expansion_path=expansion_path)
+
+    with sqlite3.connect(plain_db) as conn:
+        conn.row_factory = sqlite3.Row
+        assert (
+            search_module.search_ranked_chunks(conn.cursor(), query="zebra cancellations", top_k=5)
+            == []
+        )
+
+    with sqlite3.connect(expanded_db) as conn:
+        conn.row_factory = sqlite3.Row
+        results = search_module.search_ranked_chunks(
+            conn.cursor(), query="zebra cancellations", top_k=5
+        )
+        assert [result["chunk_id"] for result in results] == [chunk_id]
+        expanded_text_hash = conn.execute(
+            "SELECT text_hash FROM chunks WHERE chunk_id = ?", (chunk_id,)
+        ).fetchone()["text_hash"]
+        metadata = dict(conn.execute("SELECT key, value FROM index_metadata"))
+
+    # Chunk identity and text are byte-identical; only searchable tokens grew.
+    assert expanded_text_hash == plain_text_hash
+    assert metadata["expansion_query_count"] == "1"
+    assert metadata["expansion_chunk_count"] == "1"
+    assert metadata["expansion_corpus_hash"]
+
+
+def test_expansion_corpus_keyed_to_foreign_chunks_fails_closed(tmp_path: Path) -> None:
+    html_path = tmp_path / "data.html"
+    _write_ledger_html(html_path)
+    expansion_path = tmp_path / "expansion.jsonl"
+    expansion_path.write_text(
+        json.dumps({"chunk_id": "not-a-chunk", "queries": [{"query": "orphan question"}]}) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="different chunker output"):
+        build_index(html_path, tmp_path / "db.sqlite", workers=1, expansion_path=expansion_path)
 
 
 def test_validation_rejects_incompatible_chunker_with_same_schema(tmp_path: Path) -> None:

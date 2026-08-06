@@ -15,7 +15,8 @@ not; several look load-bearing and are not.
 CREATE TABLE chunks (chunk_id, doc_id, chunk_index, category,
                      heading_path, text, token_count, text_hash);
 CREATE VIRTUAL TABLE chunks_fts USING fts5(
-    chunk_id, source_path, title, category, heading_path, text);
+    chunk_id, source_path, title, category, heading_path, text,
+    generated_queries);
 ```
 
 One page becomes many chunks. Column definitions get one chunk each, from
@@ -155,7 +156,7 @@ A wrong hint is worse than none, because step 4 sorts by it before score.
 ### 4. Rank
 
 ```sql
-ORDER BY document_rank, bm25(chunks_fts, 0.0, 8.0, 10.0, 0.5, 5.0, 1.0)
+ORDER BY document_rank, bm25(chunks_fts, 0.0, 8.0, 10.0, 0.5, 5.0, 1.0, 0.5)
 ```
 
 `document_rank` is 0 when the row's `source_path` or `title` matches the hint
@@ -172,6 +173,7 @@ The weights map positionally onto the FTS columns:
 | `category` | 0.5 | nearly ignored |
 | `heading_path` | 5.0 | `TABLE > Column-Information > COL` |
 | `text` | 1.0 | baseline |
+| `generated_queries` | 0.5 | doc2query expansion; below `text` so borrowed analyst phrasing can bridge vocabulary but never outshout documentation matches |
 
 FTS5 BM25 returns *negative* scores, better being more negative, which is why
 `ORDER BY score` ascending is correct and why raw scores look wrong in reports.

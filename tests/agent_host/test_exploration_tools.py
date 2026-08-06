@@ -29,7 +29,8 @@ def _index(tmp_path):
             text TEXT NOT NULL
         );
         CREATE VIRTUAL TABLE chunks_fts USING fts5(
-            chunk_id, source_path, title, category, heading_path, text
+            chunk_id, source_path, title, category, heading_path, text,
+            generated_queries
         );
         CREATE TABLE index_metadata (
             key TEXT PRIMARY KEY,
@@ -68,7 +69,7 @@ def _index(tmp_path):
     ]
     conn.executemany("INSERT INTO chunks VALUES (?, ?, ?, ?, ?, ?)", rows)
     conn.executemany(
-        "INSERT INTO chunks_fts VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO chunks_fts VALUES (?, ?, ?, ?, ?, ?, ?)",
         [
             (
                 row[0],
@@ -77,6 +78,7 @@ def _index(tmp_path):
                 row[4],
                 row[3],
                 row[5],
+                "",
             )
             for row in rows
         ],

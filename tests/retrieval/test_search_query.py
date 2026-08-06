@@ -124,7 +124,8 @@ def _fts_connection(rows: list[tuple[str, ...]]) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute(
         """CREATE VIRTUAL TABLE chunks_fts USING fts5(
-               chunk_id, source_path, title, category, heading_path, text
+               chunk_id, source_path, title, category, heading_path, text,
+               generated_queries
            )"""
     )
     conn.executemany(
@@ -216,7 +217,8 @@ def test_ranked_search_filters_conversational_noise_and_weights_title() -> None:
     conn.row_factory = sqlite3.Row
     conn.execute(
         """CREATE VIRTUAL TABLE chunks_fts USING fts5(
-               chunk_id, source_path, title, category, heading_path, text
+               chunk_id, source_path, title, category, heading_path, text,
+               generated_queries
            )"""
     )
     conn.executemany(
@@ -257,7 +259,8 @@ def test_ranked_search_returns_chunks_holding_any_term() -> None:
     conn.row_factory = sqlite3.Row
     conn.execute(
         """CREATE VIRTUAL TABLE chunks_fts USING fts5(
-               chunk_id, source_path, title, category, heading_path, text
+               chunk_id, source_path, title, category, heading_path, text,
+               generated_queries
            )"""
     )
     conn.executemany(
@@ -284,7 +287,8 @@ def test_ranked_search_promotes_exact_document_hint_over_extension_table() -> No
     conn.row_factory = sqlite3.Row
     conn.execute(
         """CREATE VIRTUAL TABLE chunks_fts USING fts5(
-               chunk_id, source_path, title, category, heading_path, text
+               chunk_id, source_path, title, category, heading_path, text,
+               generated_queries
            )"""
     )
     conn.executemany(

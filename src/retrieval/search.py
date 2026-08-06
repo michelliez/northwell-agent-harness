@@ -91,7 +91,12 @@ MAX_CHUNKS_PER_DOCUMENT = 3
 CANDIDATE_POOL_MULTIPLIER = 4
 
 
-FTS_BM25_WEIGHTS = (0.0, 8.0, 10.0, 0.5, 5.0, 1.0)
+# The trailing weight scores the generated_queries doc2query column. It sits
+# below the text weight so expansion vocabulary can bridge analyst phrasing the
+# documentation lacks, but can never outshout documentation matches: at parity
+# the pilot showed expansion text on competing tables stealing ranks from a
+# document that matched on its own words.
+FTS_BM25_WEIGHTS = (0.0, 8.0, 10.0, 0.5, 5.0, 1.0, 0.5)
 DOCUMENT_HINT_EXCLUSIONS = frozenset({"EHI", "ETL", "INI", "SQL"})
 
 REQUIRED_INDEX_METADATA = frozenset(
@@ -480,7 +485,7 @@ def keyword_search(
                    ) THEN 0
                    ELSE 1
                END AS document_rank,
-               bm25(chunks_fts, ?, ?, ?, ?, ?, ?) AS score
+               bm25(chunks_fts, ?, ?, ?, ?, ?, ?, ?) AS score
         FROM chunks_fts
         WHERE chunks_fts MATCH ?
         ORDER BY document_rank, score

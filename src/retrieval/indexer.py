@@ -395,7 +395,8 @@ def create_schema(conn: sqlite3.Connection) -> None:
         );
 
         CREATE VIRTUAL TABLE chunks_fts USING fts5(
-            chunk_id, source_path, title, category, heading_path, text
+            chunk_id, source_path, title, category, heading_path, text,
+            generated_queries
         );
 
         CREATE TABLE section_facts (
@@ -523,9 +524,37 @@ def parse_one_document_task(args: tuple[Path, Path]) -> ParsedDocument:
     return parse_one_document(html_path, corpus_root=corpus_root)
 
 
+def load_expansion_corpus(path: Path) -> tuple[dict[str, str], int, str]:
+    """Load a doc2query expansion corpus keyed by chunk ID.
+
+    Rows come from the evaluation repository's expansion builder. Queries are
+    index-side vocabulary only: they are joined into one searchable string for
+    the FTS row and never touch chunk text or chunk identity.
+    """
+    raw_bytes = path.read_bytes()
+    if not raw_bytes.strip():
+        raise ValueError(f"expansion corpus is empty: {path}")
+    expansion_by_chunk: dict[str, str] = {}
+    query_count = 0
+    for line_number, line in enumerate(raw_bytes.splitlines(), start=1):
+        if not line.strip():
+            raise ValueError(f"{path}:{line_number}: blank JSONL line")
+        row = json.loads(line)
+        chunk_id = str(row.get("chunk_id", "")).strip()
+        queries = [str(entry["query"]).strip() for entry in row.get("queries", [])]
+        if not chunk_id or not queries or not all(queries):
+            raise ValueError(f"{path}:{line_number}: row needs chunk_id and non-empty queries")
+        if chunk_id in expansion_by_chunk:
+            raise ValueError(f"{path}:{line_number}: duplicate chunk_id {chunk_id}")
+        expansion_by_chunk[chunk_id] = "\n".join(queries)
+        query_count += len(queries)
+    return expansion_by_chunk, query_count, hashlib.sha256(raw_bytes).hexdigest()
+
+
 def insert_parsed_document(
     conn: sqlite3.Connection,
     parsed: ParsedDocument,
+    expansion_by_chunk: dict[str, str] | None = None,
 ) -> tuple[str, int]:
     # doc_id is path-only so it survives content changes across re-indexing runs.
     document_id = sha256_text(parsed.source_path)
@@ -650,8 +679,9 @@ def insert_parsed_document(
 
         conn.execute(
             """INSERT INTO chunks_fts
-               (chunk_id, source_path, title, category, heading_path, text)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+               (chunk_id, source_path, title, category, heading_path, text,
+                generated_queries)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (
                 chunk_id,
                 parsed.source_path,
@@ -659,6 +689,7 @@ def insert_parsed_document(
                 chunk.category,
                 chunk.heading_path,
                 chunk.text,
+                (expansion_by_chunk or {}).get(chunk_id, ""),
             ),
         )
 
@@ -756,6 +787,7 @@ def build_index(
     limit: int | None = None,
     workers: int | None = None,
     batch_size: int = 500,
+    expansion_path: Path | None = None,
 ) -> tuple[str, int, int]:
     html_files = discover_html_files(input_path)
 
@@ -764,6 +796,14 @@ def build_index(
 
     if not html_files:
         raise ValueError(f"No HTML files found under {input_path}")
+
+    expansion_by_chunk: dict[str, str] = {}
+    expansion_query_count = 0
+    expansion_corpus_hash = ""
+    if expansion_path is not None:
+        expansion_by_chunk, expansion_query_count, expansion_corpus_hash = load_expansion_corpus(
+            expansion_path
+        )
 
     if batch_size < 1:
         raise ValueError("batch_size must be at least 1")
@@ -790,7 +830,9 @@ def build_index(
             if worker_count == 1:
                 parsed_documents = (parse_one_document_task(task) for task in tasks)
                 for parsed in parsed_documents:
-                    source_hash, chunk_count = insert_parsed_document(conn, parsed)
+                    source_hash, chunk_count = insert_parsed_document(
+                        conn, parsed, expansion_by_chunk
+                    )
                     source_fingerprints.append(
                         {
                             "source_path": parsed.source_path,
@@ -811,7 +853,9 @@ def build_index(
                         buffersize=max(worker_count * 2, 1),
                     )
                     for parsed in parsed_documents:
-                        source_hash, chunk_count = insert_parsed_document(conn, parsed)
+                        source_hash, chunk_count = insert_parsed_document(
+                            conn, parsed, expansion_by_chunk
+                        )
                         source_fingerprints.append(
                             {
                                 "source_path": parsed.source_path,
@@ -826,6 +870,17 @@ def build_index(
 
         # Resolve destinations only against documents present in this exact index.
         resolve_relationship_destinations(conn)
+
+        if expansion_by_chunk:
+            applied = conn.execute(
+                "SELECT COUNT(*) FROM chunks_fts WHERE generated_queries != ''"
+            ).fetchone()[0]
+            if applied != len(expansion_by_chunk):
+                raise ValueError(
+                    f"expansion corpus targets {len(expansion_by_chunk)} chunks but "
+                    f"{applied} matched this build - the corpus was keyed to a "
+                    "different chunker output"
+                )
         total_section_facts = conn.execute("SELECT COUNT(*) FROM section_facts").fetchone()[0]
         total_nodes = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
         total_relationships = conn.execute("SELECT COUNT(*) FROM table_relationships").fetchone()[0]
@@ -839,6 +894,7 @@ def build_index(
             "chunker_version": CHUNKER_VERSION,
             "chunk_target_chars": CHUNK_TARGET_CHARS,
             "chunk_hard_max_chars": CHUNK_HARD_MAX_CHARS,
+            "expansion_corpus_hash": expansion_corpus_hash,
             "sources": source_fingerprints,
         }
         index_version = sha256_text(
@@ -857,6 +913,9 @@ def build_index(
             "hierarchy_node_count": str(total_nodes),
             "relationship_count": str(total_relationships),
             "resolved_relationship_count": str(resolved_relationships),
+            "expansion_corpus_hash": expansion_corpus_hash,
+            "expansion_query_count": str(expansion_query_count),
+            "expansion_chunk_count": str(len(expansion_by_chunk)),
         }
         conn.executemany(
             "INSERT INTO index_metadata (key, value) VALUES (?, ?)",
@@ -873,6 +932,13 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=None)
     parser.add_argument("--bs", type=int, default=500)
     parser.add_argument("--db", type=Path, default=Path(".local/rag/index.sqlite"))
+    parser.add_argument(
+        "--expansion",
+        type=Path,
+        default=None,
+        help="Doc2query expansion corpus JSONL; queries are indexed in the "
+        "generated_queries FTS column and never alter chunk text or identity.",
+    )
     args = parser.parse_args()
     if args.input_path.is_file() and args.input_path.suffix.lower() not in {".html", ".htm"}:
         parser.error("input_path must be an HTML file or a directory")
@@ -883,6 +949,7 @@ def main() -> None:
         limit=args.limit,
         workers=args.workers,
         batch_size=args.bs,
+        expansion_path=args.expansion,
     )
 
     print(f"Indexed {doc_count} docs / {chunk_count} chunks into {args.db} (version={version})")
