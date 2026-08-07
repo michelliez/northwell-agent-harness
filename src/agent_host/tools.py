@@ -11,7 +11,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from agent_host.budget import ExecutionBudget
 from retrieval.search import fetch_chunk_by_id, open_connection, search_ranked_chunks
 
-ExplorationIntent = Literal["table_discovery", "schema_lookup", "aggregate_definition"]
+ExplorationIntent = Literal[
+    "table_discovery", "schema_lookup", "aggregate_definition", "safe_sql_generation"
+]
 
 
 class _StrictArgs(BaseModel):
@@ -62,6 +64,9 @@ _ALLOWED_TOOLS: dict[str, frozenset[str]] = {
     "table_discovery": frozenset({"find_table_doc", "search_columns"}),
     "schema_lookup": frozenset({"find_table_doc", "get_doc_section", "search_columns"}),
     "aggregate_definition": frozenset({"find_table_doc", "get_doc_section", "search_columns"}),
+    # SQL generation gathers its SchemaSnapshot evidence through the same
+    # read-only exploration tools; the intent still grants no SQL authority.
+    "safe_sql_generation": frozenset({"find_table_doc", "get_doc_section", "search_columns"}),
 }
 
 

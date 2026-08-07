@@ -92,7 +92,16 @@ def _route_from_classify_intent(state: AgentState) -> str:
 
 
 def _route_from_retrieval_permission(state: AgentState) -> str:
-    if state.get("intent") in {"table_discovery", "schema_lookup", "aggregate_definition"}:
+    # safe_sql_generation explores too: the SchemaSnapshot is only as good as
+    # the evidence gathered here, and a single BM25 shot misses concept-phrased
+    # questions. Exploration falls back to BM25 itself when the loop finds
+    # nothing, so this strictly widens evidence, never narrows it.
+    if state.get("intent") in {
+        "table_discovery",
+        "schema_lookup",
+        "aggregate_definition",
+        "safe_sql_generation",
+    }:
         return "exploration"
     return "retrieve_context"
 

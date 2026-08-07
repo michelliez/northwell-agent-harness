@@ -91,9 +91,11 @@ def _index(tmp_path):
 def test_registry_scopes_tools_by_intent() -> None:
     table_tools = {tool["name"] for tool in tools_for_intent("table_discovery")}
     schema_tools = {tool["name"] for tool in tools_for_intent("schema_lookup")}
+    sql_tools = {tool["name"] for tool in tools_for_intent("safe_sql_generation")}
 
     assert table_tools == {"find_table_doc", "search_columns"}
     assert "get_doc_section" in schema_tools
+    assert sql_tools == {"find_table_doc", "get_doc_section", "search_columns"}
     assert tools_for_intent("general_question") == []
 
 

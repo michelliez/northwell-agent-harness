@@ -247,12 +247,15 @@ def test_unknown_intent_with_clarification_exhausted_routes_to_result_safety() -
 # ── retrieval authority routing ──────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("intent", ["table_discovery", "schema_lookup", "aggregate_definition"])
+@pytest.mark.parametrize(
+    "intent",
+    ["table_discovery", "schema_lookup", "aggregate_definition", "safe_sql_generation"],
+)
 def test_exploration_intents_route_to_bounded_exploration(intent: str) -> None:
     assert _route_from_retrieval_permission(_state(intent=intent)) == "exploration"
 
 
-@pytest.mark.parametrize("intent", ["documentation_lookup", "safe_sql_generation"])
+@pytest.mark.parametrize("intent", ["documentation_lookup"])
 def test_direct_retrieval_intents_skip_exploration(intent: str) -> None:
     assert _route_from_retrieval_permission(_state(intent=intent)) == "retrieve_context"
 
