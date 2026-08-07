@@ -25,8 +25,6 @@ def _make_state(question: str) -> dict:
         "query_plan": None,
         "validation_result": None,
         "execution_status": None,
-        "repair_count": 0,
-        "repair_hint": None,
         "citations": [],
         "answer": None,
         "clarification_count": 0,

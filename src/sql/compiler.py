@@ -12,9 +12,18 @@ from sql.models import (
     CompiledQuery,
     PlannedAggregation,
     PlannedFilter,
+    PlannedTimeBucket,
+    SchemaSnapshot,
 )
 
-COMPILER_VERSION = "approved-plan-bigquery-v1"
+COMPILER_VERSION = "approved-plan-bigquery-v2"
+
+# BigQuery pairs each temporal type with its own truncation function.
+_TRUNC_BY_TYPE: dict[str, type[exp.Func]] = {
+    "DATE": exp.DateTrunc,
+    "DATETIME": exp.DatetimeTrunc,
+    "TIMESTAMP": exp.TimestampTrunc,
+}
 
 
 class UnsupportedPlanError(ValueError):
@@ -29,7 +38,13 @@ def plan_to_bigquery_sql(approved: ApprovedQueryPlan) -> CompiledQuery:
     if not plan.tables:
         raise UnsupportedPlanError("missing_table")
 
-    projections: list[exp.Expression] = [_column(reference) for reference in plan.groupings]
+    snapshot = approved.permission_scope.schema_snapshot
+    bucket_expressions = [_time_bucket(item, snapshot) for item in plan.time_buckets]
+    projections: list[exp.Expression] = [
+        cast(exp.Expression, expression.copy().as_(item.alias))
+        for item, expression in zip(plan.time_buckets, bucket_expressions, strict=True)
+    ]
+    projections.extend(_column(reference) for reference in plan.groupings)
     projections.extend(_aggregation(item) for item in plan.aggregations)
     query = exp.select(*projections).from_(exp.to_table(plan.tables[0]))
 
@@ -57,8 +72,21 @@ def plan_to_bigquery_sql(approved: ApprovedQueryPlan) -> CompiledQuery:
             combined = exp.and_(combined, predicate)
         query = query.where(combined)
 
-    if plan.groupings:
-        query = query.group_by(*(_column(reference) for reference in plan.groupings))
+    if bucket_expressions or plan.groupings:
+        query = query.group_by(
+            *(expression.copy() for expression in bucket_expressions),
+            *(_column(reference) for reference in plan.groupings),
+        )
+
+    if plan.order_by is not None:
+        query = query.order_by(
+            exp.Ordered(
+                this=exp.column(plan.order_by.alias),
+                desc=plan.order_by.direction == "DESC",
+            )
+        )
+    if plan.limit is not None:
+        query = query.limit(plan.limit)
 
     return CompiledQuery(
         sql=query.sql(dialect="bigquery", pretty=True),
@@ -90,6 +118,25 @@ def _aggregation(item: PlannedAggregation) -> exp.Expression:
     return cast(exp.Expression, result.as_(item.alias))
 
 
+def _time_bucket(item: PlannedTimeBucket, snapshot: SchemaSnapshot) -> exp.Expression:
+    table = snapshot.tables_by_name.get(item.column.table.lower())
+    column = None
+    if table is not None:
+        column = next(
+            (col for col in table.columns if col.name.casefold() == item.column.column.casefold()),
+            None,
+        )
+    data_type = (column.data_type or "").upper().split("(", 1)[0].strip() if column else ""
+    trunc_type = _TRUNC_BY_TYPE.get(data_type)
+    if trunc_type is None:
+        # Plan authorization already rejects this; the compiler still refuses
+        # rather than guessing a truncation function for an unknown type.
+        raise UnsupportedPlanError("time_bucket_untruncatable_type")
+    return cast(
+        exp.Expression, trunc_type(this=_column(item.column), unit=exp.var(item.granularity))
+    )
+
+
 def _predicate(item: PlannedFilter) -> exp.Expression:
     column = _column(item.column)
     parameters = [exp.Parameter(this=exp.Var(this=name)) for name in item.parameter_names]
@@ -99,8 +146,6 @@ def _predicate(item: PlannedFilter) -> exp.Expression:
             low=parameters[0],
             high=parameters[1],
         )
-    if item.operator == "IN":
-        raise UnsupportedPlanError("array_parameter_in_not_supported")
     expression_type = {
         "=": exp.EQ,
         "!=": exp.NEQ,

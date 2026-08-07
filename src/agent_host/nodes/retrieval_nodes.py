@@ -150,7 +150,18 @@ def context_gate_node(state: AgentState) -> dict:
             return {"schema_snapshot": snapshot.model_dump()}
         except Exception as exc:
             trace.record("context_gate.schema_build_error", error=str(exc))
-            return {"schema_snapshot": None}
+            # An assembly failure is an internal error, not missing user
+            # context: say so instead of letting query_plan blame the question.
+            return {
+                "schema_snapshot": None,
+                "answer": (
+                    "I retrieved documentation but hit an internal error while "
+                    "assembling schema evidence from it, so I can't plan SQL for "
+                    "this question right now. Please try again; if it persists, "
+                    "this is a bug worth reporting rather than a problem with "
+                    "your question."
+                ),
+            }
 
     return {}
 

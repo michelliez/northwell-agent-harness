@@ -193,7 +193,7 @@ def test_executor_sets_audit_labels(executor, mock_bigquery_client, mock_job_suc
         compiled=MagicMock(
             sql="SELECT * FROM table",
             parameters=[],
-            source="claude_repair",
+            source="deterministic",
         ),
         maximum_bytes_billed=1_000_000,
         run_id="run-123",
@@ -202,7 +202,7 @@ def test_executor_sets_audit_labels(executor, mock_bigquery_client, mock_job_suc
 
     job_config = mock_bigquery_client.query.call_args[1]["job_config"]
     assert job_config.labels["source"] == "agent-harness"
-    assert job_config.labels["sql_source"] == "claude_repair"
+    assert job_config.labels["sql_source"] == "deterministic"
     assert job_config.labels["run_id"] == "run-123"
     assert job_config.labels["user_id"] == "user-456"
 
@@ -489,7 +489,7 @@ def test_executor_with_multiple_parameters(executor, mock_bigquery_client, mock_
             PlannedParameter(name="end_date", type="DATE", value="2026-12-31"),
             PlannedParameter(name="min_count", type="INT64", value=5),
         ],
-        source="claude_repair",
+        source="deterministic",
     )
 
     result = executor.execute(

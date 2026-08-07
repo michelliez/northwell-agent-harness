@@ -54,9 +54,6 @@ class AgentState(TypedDict, total=False):
     cost_gate_result: dict | None  # serialized CostGateResult
     approval_token: str | None
     execution_status: str | None  # "not_configured" | None
-    repair_count: int
-    repair_hint: str | None
-    repair_history: Annotated[list[dict], _append]
 
     # Output
     citations: Annotated[list[str], _append]
@@ -107,9 +104,6 @@ def make_initial_state(
         cost_gate_result=None,
         approval_token=None,
         execution_status=None,
-        repair_count=0,
-        repair_hint=None,
-        repair_history=[],
         citations=[],
         output_safety_assessment=None,
         answer=None,

@@ -74,11 +74,6 @@ def test_budget_owns_retrieval_breadth_limit() -> None:
         ExecutionBudget(max_retrieved_chunks=0).bound_retrieval_count(1)
 
 
-def test_budget_owns_sql_repair_limit() -> None:
-    budget = ExecutionBudget(max_sql_repairs=3)
-    assert budget.max_sql_repairs == 3
-
-
 def test_budget_caps_model_calls() -> None:
     budget = ExecutionBudget(max_model_calls=2)
     budget.reserve_model_call({"content": "hello"})
@@ -110,7 +105,6 @@ def test_budget_from_env_uses_defaults_when_no_env_vars(monkeypatch) -> None:
         monkeypatch.delenv(var, raising=False)
 
     budget = budget_from_env()
-    assert budget.max_sql_repairs == 3
     assert budget.max_retrieved_chunks == 15
     assert budget.max_wall_seconds == 120.0
 

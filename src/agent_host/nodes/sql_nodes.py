@@ -6,7 +6,6 @@ with execution_status='not_configured'. No SQL is ever run.
 
 from __future__ import annotations
 
-import hashlib
 import json
 
 from langgraph.runtime import Runtime
@@ -17,14 +16,13 @@ from agent_host.state import AgentContext, AgentState
 from agent_host.trace_logger import TraceLogger
 from sql.compiler import UnsupportedPlanError, plan_to_bigquery_sql
 from sql.cost_gate import cost_execution_config_from_env, evaluate_cost_execution
-from sql.generation import generate_sql
+from sql.guidance import describe_violations
 from sql.models import (
     ApprovedQueryPlan,
     CompiledQuery,
     DryRunResult,
     PermissionScope,
     QueryPlanAST,
-    RepairAttempt,
     SchemaSnapshot,
     SqlValidationResult,
 )
@@ -47,7 +45,9 @@ def query_plan_node(
     question = state.get("question", "")
     raw_snapshot = state.get("schema_snapshot")
 
-    if not raw_snapshot:
+    if not raw_snapshot or not raw_snapshot.get("tables"):
+        # A snapshot with zero tables is as unusable as no snapshot: every
+        # plan the model could propose would fail table_out_of_scope.
         trace.record("query_plan.no_schema_snapshot")
         return {
             "query_plan": None,
@@ -114,12 +114,12 @@ def plan_safety_node(state: AgentState) -> dict:
         citations,
     )
     if not validation.allowed:
-        codes = ", ".join(violation.code for violation in validation.violations)
-        trace.record("plan_safety.rejected", violations=codes)
+        codes = [violation.code for violation in validation.violations]
+        trace.record("plan_safety.rejected", violations=", ".join(codes))
         return {
             "plan_validation": validation.model_dump(),
             "approved_plan": None,
-            "answer": f"I couldn't approve the proposed query plan: {codes}.",
+            "answer": (f"I couldn't approve the proposed query plan. {describe_violations(codes)}"),
         }
 
     trace.record(
@@ -174,86 +174,21 @@ def write_sql_node(
     }
 
 
-def fix_sql_node(
-    state: AgentState,
-    runtime: Runtime[AgentContext] | None = None,
-) -> dict:
-    """Repair SQL without permitting changes to the approved plan."""
-    cfg = get_config()
-    budget = runtime.context.budget if runtime is not None else budget_from_env()
-    trace = _open_trace(state, cfg)
-    raw_plan = state.get("approved_plan")
-    candidate = state.get("candidate_sql")
-    raw_validation = state.get("validation_result")
-    if not raw_plan or not candidate or not raw_validation:
-        trace.record("fix_sql.missing_state")
-        return {"answer": "I stopped because SQL repair state was incomplete."}
-
-    plan = ApprovedQueryPlan.model_validate(raw_plan)
-    validation = SqlValidationResult.model_validate(raw_validation)
-    try:
-        result = generate_sql(
-            plan,
-            cfg,
-            budget,
-            repair_hint=validation.repair_hint or validation.reason,
-            candidate_sql=candidate,
-        )
-    except Exception as exc:
-        trace.record("fix_sql.error", error=type(exc).__name__)
-        return {"answer": "I encountered an internal error while repairing SQL."}
-    if result.sql is None:
-        return {"answer": "The SQL repair model could not produce a candidate."}
-
-    input_hash = _sql_hash(candidate)
-    output_hash = _sql_hash(result.sql)
-    previous_hashes = {str(item.get("output_sql_hash")) for item in state.get("repair_history", [])}
-    if output_hash == input_hash or output_hash in previous_hashes:
-        trace.record("fix_sql.loop_detected")
-        return {"answer": "SQL repair stopped because it repeated an earlier candidate."}
-
-    attempt = max(1, state.get("repair_count", 1))
-    compiled = CompiledQuery(
-        sql=result.sql,
-        parameters=plan.plan.parameters,
-        plan_hash=plan.plan_hash,
-        compiler_version="claude-repair-v1",
-        source="claude_repair",
-    )
-    trace.record("fix_sql.completed", attempt=attempt)
-    return {
-        "compiled_query": compiled.model_dump(),
-        "candidate_sql": compiled.sql,
-        "query_parameters": [item.model_dump() for item in compiled.parameters],
-        "validation_result": None,
-        # Through RepairAttempt rather than a bare dict: the model already
-        # declares the hash format and attempt floor, and it was being bypassed.
-        "repair_history": [
-            RepairAttempt(
-                attempt=attempt,
-                input_sql_hash=input_hash,
-                output_sql_hash=output_hash,
-                error_code=validation.reason or "validation_error",
-            ).model_dump()
-        ],
-    }
-
-
 def validate_sql_node(
     state: AgentState,
-    runtime: Runtime[AgentContext] | None = None,
+    _runtime: Runtime[AgentContext] | None = None,
 ) -> dict:
     """Run deterministic SQLGlot validation against the schema snapshot.
 
-    Sets repair_count and repair_hint on invalid-but-repairable results so
-    the conditional edge can route back to generate_sql.
+    Failure is terminal: the candidate is deterministic compiler output, so a
+    validation failure is a compiler/validator version skew to surface, not
+    something a model rewrite could fix (the plan_sql_mismatch gate would
+    reject any rewrite that differs from the compiled plan anyway).
     """
     cfg = get_config()
     trace = _open_trace(state, cfg)
     sql = state.get("candidate_sql")
     raw_plan = state.get("approved_plan")
-    repair_count = state.get("repair_count", 0)
-    budget = runtime.context.budget if runtime is not None else budget_from_env()
 
     if not sql:
         trace.record("validate_sql.no_sql")
@@ -275,37 +210,18 @@ def validate_sql_node(
         "validate_sql.completed",
         allowed=result.allowed,
         reason=result.reason,
-        is_repairable=result.is_repairable,
     )
 
     validation_dict = result.model_dump()
 
     if result.allowed:
-        return {
-            "validation_result": validation_dict,
-            "repair_hint": None,
-        }
+        return {"validation_result": validation_dict}
 
-    # Invalid SQL
-    next_repair_count = repair_count + 1
-    if result.is_repairable and next_repair_count < budget.max_sql_repairs:
-        trace.record("validate_sql.routing_to_repair", repair_count=next_repair_count)
-        return {
-            "validation_result": validation_dict,
-            "repair_count": next_repair_count,
-            "repair_hint": result.repair_hint,
-        }
-
-    # Not repairable or budget exhausted
     trace.record("validate_sql.failed_final", reason=result.reason)
-    violations = [v.code for v in result.violations]
+    codes = [result.reason] if result.reason else [v.code for v in result.violations]
     return {
         "validation_result": validation_dict,
-        "answer": (
-            f"The generated SQL failed safety validation and could not be repaired. "
-            f"Violation: {result.reason or ', '.join(violations)}. "
-            "Please rephrase your question."
-        ),
+        "answer": (f"The generated SQL failed safety validation. {describe_violations(codes)}"),
     }
 
 
@@ -401,10 +317,6 @@ def cost_execution_gate_node(state: AgentState) -> dict:
         "cost_gate_result": decision.model_dump(mode="json"),
         "approval_token": decision.approval_token,
     }
-
-
-def _sql_hash(sql: str) -> str:
-    return hashlib.sha256(sql.encode()).hexdigest()
 
 
 def _open_trace(state: AgentState, cfg) -> TraceLogger:

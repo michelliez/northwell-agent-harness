@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from agent_host.budget import ExecutionBudget
 from agent_host.nodes import sql_nodes
 from sql.models import (
     ApprovedQueryPlan,
@@ -10,7 +9,6 @@ from sql.models import (
     SchemaColumn,
     SchemaSnapshot,
     SchemaTable,
-    SqlGenerationResult,
     SqlValidationResult,
     SqlViolation,
 )
@@ -103,79 +101,13 @@ def test_deterministic_write_then_static_validation_succeeds() -> None:
         {
             "approved_plan": approved.model_dump(),
             "candidate_sql": written["candidate_sql"],
-            "repair_count": 0,
         }  # type: ignore[arg-type]
     )
 
     assert validated["validation_result"]["allowed"] is True
 
 
-def test_fix_sql_node_records_repair_attempt(monkeypatch) -> None:
-    approved = _approved_count_plan()
-    validation = SqlValidationResult(
-        allowed=False,
-        reason="plan_sql_mismatch",
-        violations=[SqlViolation(code="plan_sql_mismatch", message="Mismatch")],
-        is_repairable=True,
-        repair_hint="Restore the approved aggregation.",
-    )
-    monkeypatch.setattr(
-        sql_nodes,
-        "generate_sql",
-        lambda *_args, **_kwargs: SqlGenerationResult(
-            sql="SELECT COUNT(*) AS row_count FROM A0H_MAP",
-            tables=["A0H_MAP"],
-        ),
-    )
-
-    result = sql_nodes.fix_sql_node(
-        {
-            "approved_plan": approved.model_dump(),
-            "candidate_sql": "SELECT COUNT(*) FROM A0H_MAP",
-            "validation_result": validation.model_dump(),
-            "repair_count": 1,
-            "repair_history": [],
-        }  # type: ignore[arg-type]
-    )
-
-    assert result["compiled_query"]["source"] == "claude_repair"
-    assert result["repair_history"][0]["attempt"] == 1
-    assert result["candidate_sql"].endswith("FROM A0H_MAP")
-
-
-def test_fix_sql_node_stops_repeated_candidate(monkeypatch) -> None:
-    approved = _approved_count_plan()
-    candidate = "SELECT COUNT(*) FROM A0H_MAP"
-    validation = SqlValidationResult(
-        allowed=False,
-        reason="plan_sql_mismatch",
-        violations=[SqlViolation(code="plan_sql_mismatch", message="Mismatch")],
-        is_repairable=True,
-        repair_hint="Repair it.",
-    )
-    monkeypatch.setattr(
-        sql_nodes,
-        "generate_sql",
-        lambda *_args, **_kwargs: SqlGenerationResult(
-            sql=candidate,
-            tables=["A0H_MAP"],
-        ),
-    )
-
-    result = sql_nodes.fix_sql_node(
-        {
-            "approved_plan": approved.model_dump(),
-            "candidate_sql": candidate,
-            "validation_result": validation.model_dump(),
-            "repair_count": 1,
-            "repair_history": [],
-        }  # type: ignore[arg-type]
-    )
-
-    assert "repeated" in result["answer"]
-
-
-def test_last_failed_repair_returns_an_answer(
+def test_failed_validation_returns_an_answer(
     monkeypatch,
 ) -> None:
     validation = SqlValidationResult(
@@ -187,20 +119,12 @@ def test_last_failed_repair_returns_an_answer(
                 message="Declared tables do not match referenced tables.",
             )
         ],
-        is_repairable=True,
-        repair_hint="Declare the referenced table exactly.",
     )
     monkeypatch.setattr(sql_nodes, "validate_sql", lambda *_args: validation)
-    monkeypatch.setattr(
-        sql_nodes,
-        "budget_from_env",
-        lambda: ExecutionBudget(max_sql_repairs=3),
-    )
 
     result = sql_nodes.validate_sql_node(
         {
             "candidate_sql": "SELECT COUNT(*) FROM A0H_MAP",
-            "repair_count": 2,
         }  # type: ignore[arg-type]
     )
 

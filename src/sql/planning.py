@@ -30,6 +30,10 @@ output fields not requested or supported by the scope. All predicates must use
 named parameters; never put literal values or SQL fragments in the plan.
 Identifiers may only be counted or joined to identifiers. Unknown and sensitive
 columns may not be used. Row-level output is forbidden.
+For per-day/week/month/quarter/year questions, use time_buckets on a temporal
+safe_aggregate column; its alias is an output field. For top-N or ranked
+requests, use order_by (one output alias) and limit. Range predicates use
+BETWEEN with two parameters; there is no IN operator.
 """.strip()
 
 _PLAN_TOOL: dict[str, Any] = {
@@ -157,6 +161,49 @@ def validate_query_plan(
                 )
             )
 
+    _TEMPORAL_TYPES = {"DATE", "DATETIME", "TIMESTAMP"}
+    for bucket in proposed.time_buckets:
+        column = _resolve_column(bucket.column, tables)
+        if column is None:
+            continue  # column_out_of_scope already recorded above
+        if column.safety != "safe_aggregate":
+            violations.append(
+                _violation(
+                    "time_bucket_unsafe_column",
+                    "Time buckets require a column classified safe_aggregate.",
+                    f"{bucket.column.table}.{bucket.column.column}",
+                )
+            )
+        data_type = (column.data_type or "").upper().split("(", 1)[0].strip()
+        if data_type not in _TEMPORAL_TYPES:
+            violations.append(
+                _violation(
+                    "time_bucket_not_temporal",
+                    "Time buckets require an evidenced DATE, DATETIME, or TIMESTAMP column.",
+                    f"{bucket.column.table}.{bucket.column.column}",
+                )
+            )
+
+    output_aliases = [
+        *(aggregation.alias for aggregation in proposed.aggregations),
+        *(bucket.alias for bucket in proposed.time_buckets),
+    ]
+    if len({alias.casefold() for alias in output_aliases}) != len(output_aliases):
+        violations.append(_violation("duplicate_output_alias", "Output aliases must be unique."))
+
+    if proposed.order_by is not None:
+        known_outputs = {alias.casefold() for alias in output_aliases} | {
+            group.column.casefold() for group in proposed.groupings
+        }
+        if proposed.order_by.alias.casefold() not in known_outputs:
+            violations.append(
+                _violation(
+                    "order_by_unknown_alias",
+                    "ORDER BY must reference an output alias or grouping column.",
+                    proposed.order_by.alias,
+                )
+            )
+
     for aggregation in proposed.aggregations:
         if aggregation.column is None:
             continue
@@ -256,9 +303,11 @@ def validate_query_plan(
             )
         )
 
-    expected_outputs = {aggregation.alias.casefold() for aggregation in proposed.aggregations} | {
-        group.column.casefold() for group in proposed.groupings
-    }
+    expected_outputs = (
+        {aggregation.alias.casefold() for aggregation in proposed.aggregations}
+        | {group.column.casefold() for group in proposed.groupings}
+        | {bucket.alias.casefold() for bucket in proposed.time_buckets}
+    )
     if {value.casefold() for value in proposed.expected_output} != expected_outputs:
         violations.append(
             _violation(
@@ -288,6 +337,7 @@ def _all_references(plan: QueryPlanAST) -> list[CatalogRef]:
     references.extend(item.column for item in plan.filters)
     references.extend(item.column for item in plan.time_constraints)
     references.extend(item.column for item in plan.aggregations if item.column is not None)
+    references.extend(item.column for item in plan.time_buckets)
     for join in plan.joins:
         references.extend((join.left, join.right))
     return references
@@ -311,7 +361,11 @@ def _resolve_column(
 
 
 def _normalized(value: str) -> str:
-    return " ".join(value.split()).casefold()
+    # Punctuation-insensitive: the check exists to stop objective *drift*
+    # (a planner substituting its own goal), not to fail a plan because the
+    # model dropped a question mark or a comma while copying the request.
+    cleaned = "".join(ch if ch.isalnum() or ch.isspace() else " " for ch in value)
+    return " ".join(cleaned.split()).casefold()
 
 
 def _parameter_type_for_column(data_type: str) -> str | None:

@@ -52,7 +52,6 @@ from agent_host.nodes.retrieval_nodes import (
 )
 from agent_host.nodes.sql_nodes import (
     execution_not_configured_node,
-    fix_sql_node,
     plan_safety_node,
     query_plan_node,
     validate_sql_node,
@@ -144,14 +143,6 @@ def _route_from_write_sql(state: AgentState) -> str:
     return "result_safety"
 
 
-def _route_from_fix_sql(state: AgentState) -> str:
-    if state.get("answer"):
-        return "result_safety"
-    if state.get("candidate_sql"):
-        return "validate_sql"
-    return "result_safety"
-
-
 def _route_from_validate_sql(state: AgentState) -> str:
     if state.get("answer"):
         return "result_safety"
@@ -163,16 +154,11 @@ def _route_from_validate_sql(state: AgentState) -> str:
     from sql.models import SqlValidationResult
 
     result = SqlValidationResult.model_validate(raw_validation)
-    budget = budget_from_env()
 
     if result.allowed:
         return "execution_not_configured"
 
-    repair_count = state.get("repair_count", 0)
-    if result.is_repairable and repair_count < budget.max_sql_repairs:
-        return "fix_sql"
-
-    # Failed or exhausted — answer already set in validate_sql_node
+    # Failed — answer already set in validate_sql_node
     return "result_safety"
 
 
@@ -207,7 +193,6 @@ def build_graph(checkpointer=None):
     builder.add_node("query_plan", query_plan_node)
     builder.add_node("plan_safety", plan_safety_node)
     builder.add_node("write_sql", write_sql_node)
-    builder.add_node("fix_sql", fix_sql_node)
     builder.add_node("validate_sql", validate_sql_node)
     builder.add_node("execution_not_configured", execution_not_configured_node)
     builder.add_node("classify_output_safety", classify_output_safety_node)
@@ -292,19 +277,10 @@ def build_graph(checkpointer=None):
         },
     )
     builder.add_conditional_edges(
-        "fix_sql",
-        _route_from_fix_sql,
-        {
-            "result_safety": "result_safety",
-            "validate_sql": "validate_sql",
-        },
-    )
-    builder.add_conditional_edges(
         "validate_sql",
         _route_from_validate_sql,
         {
             "execution_not_configured": "execution_not_configured",
-            "fix_sql": "fix_sql",
             "result_safety": "result_safety",
         },
     )
@@ -481,8 +457,6 @@ def _result_to_response(result: dict, run_id: str, thread_id: str) -> AskRespons
     raw_compiled = result.get("compiled_query") or {}
     if raw_compiled.get("source") == "deterministic":
         used_tools.append("compile_sql")
-    elif raw_compiled.get("source") == "claude_repair":
-        used_tools.append("fix_sql")
     elif result.get("candidate_sql"):
         used_tools.append("generate_sql")
     if result.get("validation_result"):

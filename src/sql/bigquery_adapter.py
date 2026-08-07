@@ -201,7 +201,7 @@ class BigQueryReadOnlyExecutor:
             # Build labels for audit logging
             labels = {
                 "source": "agent-harness",
-                "sql_source": compiled.source,  # deterministic, claude_repair, etc.
+                "sql_source": compiled.source,
             }
             if run_id:
                 labels["run_id"] = run_id[:64]  # Label max length

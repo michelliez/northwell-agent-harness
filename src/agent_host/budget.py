@@ -41,7 +41,6 @@ class ExecutionBudget:
     # Discovery questions span several tables; five chunks cannot cover three
     # table documents, so the model answered from a single one.
     max_retrieved_chunks: int = 15
-    max_sql_repairs: int = 3
     max_input_bytes: int = 16_000
     max_tool_result_bytes: int = 32_000
     max_context_bytes: int = 128_000
@@ -146,7 +145,6 @@ def budget_from_env() -> ExecutionBudget:
         max_calls_per_tool=_int("MAX_CALLS_PER_TOOL", 6),
         max_candidate_schemas=_int("MAX_CANDIDATE_SCHEMAS", 5),
         max_retrieved_chunks=_int("MAX_RETRIEVED_CHUNKS", 15),
-        max_sql_repairs=_int("MAX_SQL_REPAIRS", 3),
         max_input_bytes=_int("MAX_INPUT_BYTES", 16_000),
         max_tool_result_bytes=_int("MAX_TOOL_RESULT_BYTES", 32_000),
         max_context_bytes=_int("MAX_CONTEXT_BYTES", 128_000),

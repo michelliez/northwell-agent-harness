@@ -20,7 +20,6 @@ from agent_host.graph import (
     _route_from_classify_intent,
     _route_from_context_gate,
     _route_from_contextualize,
-    _route_from_fix_sql,
     _route_from_plan_safety,
     _route_from_policy,
     _route_from_query_plan,
@@ -59,9 +58,6 @@ def _state(**kwargs) -> dict:
         "query_parameters": [],
         "validation_result": None,
         "execution_status": None,
-        "repair_count": 0,
-        "repair_hint": None,
-        "repair_history": [],
         "citations": [],
         "answer": None,
         "clarification_count": 0,
@@ -332,6 +328,35 @@ def test_context_gate_builds_sql_schema_from_retrieved_chunk_model_dump(
     assert result["schema_snapshot"]["tables"][0]["columns"][0]["name"] == "CONFIG_STATUS"
 
 
+def test_context_gate_schema_build_error_is_reported_not_swallowed(tmp_path, monkeypatch) -> None:
+    """An assembly failure must produce an honest answer, not a silent None
+    that downstream misreports as missing user context."""
+    from agent_host.nodes import retrieval_nodes
+
+    monkeypatch.setattr(retrieval_nodes, "get_config", lambda: _FakeCfg(tmp_path))
+
+    def broken_resolver(_retrieval):
+        raise RuntimeError("synthetic assembly failure")
+
+    monkeypatch.setattr(retrieval_nodes, "resolve_schema_evidence", broken_resolver)
+    state = _state(
+        intent="safe_sql_generation",
+        retrieved_chunks=[
+            {
+                "chunk_id": "chunk-x",
+                "document_id": "doc-x",
+                "source_path": "X.html",
+                "text": "text",
+            }
+        ],
+    )
+
+    result = retrieval_nodes.context_gate_node(state)
+
+    assert result["schema_snapshot"] is None
+    assert "internal error" in result["answer"]
+
+
 def test_context_gate_exploration_intents_route_to_documentation_answer() -> None:
     for intent in ["table_discovery", "schema_lookup", "aggregate_definition"]:
         state = _state(
@@ -374,16 +399,6 @@ def test_write_sql_with_sql_routes_to_validate_sql() -> None:
     assert _route_from_write_sql(state) == "validate_sql"
 
 
-def test_successful_fix_routes_back_through_validation() -> None:
-    state = _state(candidate_sql="SELECT COUNT(*) FROM A0H_MAP", answer=None)
-    assert _route_from_fix_sql(state) == "validate_sql"
-
-
-def test_failed_fix_routes_to_result_safety() -> None:
-    state = _state(candidate_sql="old SQL", answer="Repair loop stopped.")
-    assert _route_from_fix_sql(state) == "result_safety"
-
-
 def test_validate_sql_allowed_routes_to_execution_not_configured() -> None:
     result = SqlValidationResult(
         allowed=True,
@@ -391,39 +406,25 @@ def test_validate_sql_allowed_routes_to_execution_not_configured() -> None:
         violations=[],
         notes=[],
     )
-    state = _state(validation_result=result.model_dump(), repair_count=0)
+    state = _state(validation_result=result.model_dump())
     assert _route_from_validate_sql(state) == "execution_not_configured"
 
 
-def _blocked_result(reason: str, repairable: bool) -> SqlValidationResult:
+def _blocked_result(reason: str) -> SqlValidationResult:
     return SqlValidationResult(
         allowed=False,
         reason=reason,
         normalized_sql=None,
         violations=[SqlViolation(code=reason, message=reason.replace("_", " "))],
         notes=[],
-        is_repairable=repairable,
     )
 
 
-def test_validate_sql_repairable_within_budget_routes_to_fix_sql() -> None:
-    result = _blocked_result("ungrouped_projection", repairable=True)
-    # repair_count=1 < max_sql_repairs=3 → route to fix_sql
-    state = _state(validation_result=result.model_dump(), repair_count=1)
-    assert _route_from_validate_sql(state) == "fix_sql"
-
-
-def test_validate_sql_budget_exhausted_routes_to_result_safety() -> None:
-    result = _blocked_result("ungrouped_projection", repairable=True)
-    # repair_count=3 >= max_sql_repairs=3 → route to result_safety
-    state = _state(validation_result=result.model_dump(), repair_count=3)
-    assert _route_from_validate_sql(state) == "result_safety"
-
-
-def test_validate_sql_not_repairable_routes_to_result_safety() -> None:
-    result = _blocked_result("unsafe_sql_operation", repairable=False)
-    state = _state(validation_result=result.model_dump(), repair_count=0)
-    assert _route_from_validate_sql(state) == "result_safety"
+def test_validate_sql_blocked_routes_to_result_safety() -> None:
+    # Validation failure is terminal (ADR 008): no repair edge exists.
+    for reason in ("ungrouped_projection", "unsafe_sql_operation"):
+        state = _state(validation_result=_blocked_result(reason).model_dump())
+        assert _route_from_validate_sql(state) == "result_safety"
 
 
 # ── policy-before-model ordering invariant ────────────────────────────────────

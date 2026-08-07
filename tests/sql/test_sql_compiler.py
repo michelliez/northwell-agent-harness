@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from sql.compiler import plan_to_bigquery_sql
 from sql.models import (
     PermissionScope,
@@ -30,6 +33,11 @@ def _scope() -> PermissionScope:
                         SchemaColumn(
                             name="STATUS_CODE",
                             data_type="STRING",
+                            safety="safe_aggregate",
+                        ),
+                        SchemaColumn(
+                            name="CONTACT_DATE",
+                            data_type="DATETIME",
                             safety="safe_aggregate",
                         ),
                     ],
@@ -137,3 +145,95 @@ def test_plan_aware_validation_rejects_sql_that_broadens_plan() -> None:
 
     assert result.allowed is False
     assert result.reason == "plan_sql_mismatch"
+
+
+def test_compiles_monthly_bucket_with_order_and_limit() -> None:
+    approved = _approved(
+        time_buckets=[
+            {
+                "column": {"table": "A0H_MAP", "column": "CONTACT_DATE"},
+                "granularity": "MONTH",
+                "alias": "month",
+            }
+        ],
+        order_by={"alias": "row_count", "direction": "DESC"},
+        limit=10,
+        expected_output=["month", "row_count"],
+    )
+
+    compiled = plan_to_bigquery_sql(approved)
+
+    assert "DATETIME_TRUNC(A0H_MAP.CONTACT_DATE, MONTH) AS month" in compiled.sql
+    assert "ORDER BY" in compiled.sql
+    assert "LIMIT 10" in compiled.sql
+
+    validation = validate_sql(
+        compiled.sql,
+        approved.plan.tables,
+        approved.permission_scope.schema_snapshot,
+        approved,
+    )
+    assert validation.allowed, validation.violations
+
+
+def test_in_operator_is_no_longer_expressible() -> None:
+    with pytest.raises(ValidationError):
+        QueryPlanAST.model_validate(
+            {
+                "objective": QUESTION,
+                "target_metric": "row_count",
+                "tables": ["A0H_MAP"],
+                "filters": [
+                    {
+                        "column": {"table": "A0H_MAP", "column": "STATUS_CODE"},
+                        "operator": "IN",
+                        "parameter_names": ["statuses"],
+                    }
+                ],
+                "aggregations": [{"function": "COUNT", "alias": "row_count"}],
+                "expected_output": ["row_count"],
+                "citations": [CITATION],
+            }
+        )
+
+
+def test_time_bucket_requires_temporal_safe_aggregate_column() -> None:
+    plan = QueryPlanAST.model_validate(
+        {
+            "objective": QUESTION,
+            "target_metric": "row_count",
+            "tables": ["A0H_MAP"],
+            "time_buckets": [
+                {
+                    "column": {"table": "A0H_MAP", "column": "STATUS_CODE"},
+                    "granularity": "MONTH",
+                    "alias": "month",
+                }
+            ],
+            "aggregations": [{"function": "COUNT", "alias": "row_count"}],
+            "expected_output": ["month", "row_count"],
+            "citations": [CITATION],
+        }
+    )
+    result = validate_query_plan(QUESTION, plan, _scope(), {CITATION})
+
+    assert not result.allowed
+    assert "time_bucket_not_temporal" in {v.code for v in result.violations}
+
+
+def test_order_by_must_reference_an_output() -> None:
+    plan = QueryPlanAST.model_validate(
+        {
+            "objective": QUESTION,
+            "target_metric": "row_count",
+            "tables": ["A0H_MAP"],
+            "order_by": {"alias": "nonexistent", "direction": "ASC"},
+            "aggregations": [{"function": "COUNT", "alias": "row_count"}],
+            "expected_output": ["row_count"],
+            "citations": [CITATION],
+        }
+    )
+    result = validate_query_plan(QUESTION, plan, _scope(), {CITATION})
+
+    assert not result.allowed
+    assert "order_by_unknown_alias" in {v.code for v in result.violations}

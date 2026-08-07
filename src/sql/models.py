@@ -58,12 +58,17 @@ class CatalogRef(BaseModel):
 
 
 class PlannedFilter(BaseModel):
-    """A parameterized predicate; literal values never appear in generated SQL."""
+    """A parameterized predicate; literal values never appear in generated SQL.
+
+    IN is deliberately absent: array parameters require UNNEST, which the
+    validator rejects as an unapproved table source (ADR 007). Offering IN in
+    the schema only to fail it at compile time let plans die one node late.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     column: CatalogRef
-    operator: Literal["=", "!=", "<", "<=", ">", ">=", "IN", "BETWEEN"]
+    operator: Literal["=", "!=", "<", "<=", ">", ">=", "BETWEEN"]
     parameter_names: list[Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")]] = Field(
         min_length=1, max_length=2
     )
@@ -98,6 +103,30 @@ class PlannedAggregation(BaseModel):
         return self
 
 
+class PlannedTimeBucket(BaseModel):
+    """A calendar grouping over a temporal safe_aggregate column.
+
+    Compiles to DATE_TRUNC/DATETIME_TRUNC/TIMESTAMP_TRUNC chosen by the
+    column's evidenced data type; the expression appears in both the
+    projection and GROUP BY, so it stays deterministic and validator-visible.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    column: CatalogRef
+    granularity: Literal["DAY", "WEEK", "MONTH", "QUARTER", "YEAR"]
+    alias: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+class PlannedOrdering(BaseModel):
+    """ORDER BY one output alias; never an arbitrary expression."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    alias: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    direction: Literal["ASC", "DESC"] = "DESC"
+
+
 class PlannedParameter(BaseModel):
     """A typed BigQuery parameter kept separate from SQL text."""
 
@@ -122,6 +151,9 @@ class QueryPlanAST(BaseModel):
     aggregations: list[PlannedAggregation] = Field(min_length=1)
     time_constraints: list[PlannedFilter] = Field(default_factory=list)
     groupings: list[CatalogRef] = Field(default_factory=list)
+    time_buckets: list[PlannedTimeBucket] = Field(default_factory=list, max_length=2)
+    order_by: PlannedOrdering | None = None
+    limit: int | None = Field(default=None, ge=1, le=1000)
     expected_output: list[str] = Field(min_length=1)
     citations: list[str] = Field(min_length=1)
     parameters: list[PlannedParameter] = Field(default_factory=list)
@@ -189,7 +221,7 @@ class CompiledQuery(BaseModel):
     parameters: list[PlannedParameter] = Field(default_factory=list)
     plan_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     compiler_version: str
-    source: Literal["deterministic", "claude_fallback", "claude_repair"]
+    source: Literal["deterministic"]
 
 
 class DryRunResult(BaseModel):
@@ -246,36 +278,6 @@ class CostGateResult(BaseModel):
         return self
 
 
-class RepairAttempt(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    attempt: int = Field(ge=1)
-    input_sql_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
-    output_sql_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
-    error_code: str
-
-
-class SqlGenerationResult(BaseModel):
-    sql: str | None = None
-    tables: list[str] = Field(default_factory=list)
-    notes: list[str] = Field(default_factory=list)
-    refused: bool = False
-    reason: str | None = None
-    source: str = "claude_sql_generation"
-
-    @model_validator(mode="after")
-    def validate_result_state(self) -> SqlGenerationResult:
-        if self.refused:
-            if self.sql is not None or self.tables or not self.reason:
-                raise ValueError("refusals require a reason and cannot contain SQL or tables")
-        elif self.sql is None:
-            if self.tables or self.reason != "unsupported_or_ambiguous_request":
-                raise ValueError("unsupported results require the canonical reason and no tables")
-        elif not self.tables or self.reason is not None:
-            raise ValueError("generated SQL requires tables and cannot contain a reason")
-        return self
-
-
 VALIDATOR_VERSION = "sqlglot_ast_v2"
 
 
@@ -303,8 +305,6 @@ class SqlValidationResult(BaseModel):
     sqlglot_version: str = sqlglot.__version__
     notes: list[str] = Field(default_factory=list)
     source: str = "deterministic_sql_validation"
-    is_repairable: bool = False
-    repair_hint: str | None = None
 
     @model_validator(mode="after")
     def enforce_allowed_result_contract(self) -> SqlValidationResult:

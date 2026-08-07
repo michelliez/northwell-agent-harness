@@ -70,15 +70,6 @@ PROHIBITED_FUNCTIONS = {
     "SESSION_USER",
 }
 
-# Violation codes where repair (regeneration) is worth attempting.
-REPAIRABLE_CODES = {
-    "ungrouped_projection",
-    "non_aggregate_sql",
-    "unknown_or_ambiguous_column",
-    "declared_table_mismatch",
-    "unknown_safety_column",
-}
-
 
 def validate_sql(
     sql: str,
@@ -283,7 +274,6 @@ def validate_sql(
                 "declared_tables": declared_tables,
                 "referenced_tables": referenced_tables,
             },
-            repairable=True,
         )
 
     # Gate 5: column qualification against SchemaSnapshot
@@ -303,7 +293,6 @@ def validate_sql(
             referenced_tables=referenced_tables,
             statement_type=statement_type,
             evidence={"error": str(exc)},
-            repairable=True,
         )
 
     referenced_columns = sorted(
@@ -321,7 +310,6 @@ def validate_sql(
             referenced_tables=referenced_tables,
             referenced_columns=referenced_columns,
             statement_type=statement_type,
-            repairable=True,
         )
 
     ungrouped_column = next(
@@ -336,7 +324,6 @@ def validate_sql(
             referenced_columns=referenced_columns,
             statement_type=statement_type,
             evidence={"column": _column_reference(ungrouped_column)},
-            repairable=True,
         )
 
     # Reject unknown-safety columns (cannot be evaluated without evidence)
@@ -356,7 +343,6 @@ def validate_sql(
             referenced_columns=referenced_columns,
             statement_type=statement_type,
             evidence={"column": _column_reference(unknown_safety_col)},
-            repairable=False,
         )
 
     unsafe_sensitive = _find_sensitive_column(qualified, table_aliases, snapshot)
@@ -409,7 +395,6 @@ def validate_sql(
                     "candidate": candidate_canonical,
                     "expected": expected_canonical,
                 },
-                repairable=True,
             )
 
     # Gate 7: normalize
@@ -612,9 +597,7 @@ def _blocked(
     referenced_columns: list[str] | None = None,
     statement_type: str | None = None,
     evidence: dict[str, Any] | None = None,
-    repairable: bool = False,
 ) -> SqlValidationResult:
-    repair_hint = f"Revise the SQL to address: {reason.replace('_', ' ')}" if repairable else None
     violation = SqlViolation(
         code=reason,
         message=reason.replace("_", " "),
@@ -633,6 +616,4 @@ def _blocked(
         statement_type=statement_type,
         violations=[violation],
         notes=["Generated SQL failed deterministic SQLGlot validation."],
-        is_repairable=repairable or reason in REPAIRABLE_CODES,
-        repair_hint=repair_hint,
     )

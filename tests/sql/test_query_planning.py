@@ -146,3 +146,28 @@ def test_filter_parameters_must_be_declared_once_and_used() -> None:
         "undeclared_parameter",
         "unused_parameter",
     }
+
+
+def test_objective_check_tolerates_punctuation_differences() -> None:
+    """The gate stops objective drift, not a dropped question mark. A follow-up
+    contextualizer or a model copying the request must not fail on punctuation."""
+    result = validate_query_plan(
+        "Count all A0H_MAP rows?",
+        _count_plan(objective="Count all A0H_MAP rows"),
+        _scope(),
+        {"chunk-a0h"},
+    )
+
+    assert result.allowed is True
+
+
+def test_objective_drift_is_still_rejected() -> None:
+    result = validate_query_plan(
+        "Count all A0H_MAP rows",
+        _count_plan(objective="Count all patient encounters"),
+        _scope(),
+        {"chunk-a0h"},
+    )
+
+    assert result.allowed is False
+    assert "objective_mismatch" in {v.code for v in result.violations}
