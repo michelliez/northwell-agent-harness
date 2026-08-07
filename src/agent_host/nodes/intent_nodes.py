@@ -81,7 +81,10 @@ Apply this order when a request contains more than one intent:
    table, column, metric, or request context is entirely missing. A named
    column plus an aggregate operation is enough context to begin approved
    schema discovery; the user does not need to know the table in advance.
-   Do not guess a safe route.
+   Do not guess a safe route. When you set needs_clarification=true, also
+   fill candidate_interpretations with up to three concrete readings of what
+   the user may be trying to find out, each phrased as a short question they
+   could pick (aggregate or schema questions only, never row-level requests).
 
 Examples:
 - "What data would I need to count patients with visits last month?" means
@@ -214,6 +217,14 @@ _INTENT_TOOL: dict[str, Any] = {
             "confidence": {"type": "number", "minimum": 0, "maximum": 1},
             "risk_flags": {"type": "array", "items": {"type": "string"}},
             "needs_clarification": {"type": "boolean"},
+            # When clarification is needed, up to three concrete readings of
+            # what the user may be trying to find out, phrased as questions
+            # the user could pick from ("The number of X per Y?").
+            "candidate_interpretations": {
+                "type": "array",
+                "items": {"type": "string", "maxLength": 160},
+                "maxItems": 3,
+            },
         },
         "required": ["intent", "confidence", "risk_flags", "needs_clarification"],
         "additionalProperties": False,
@@ -274,6 +285,7 @@ class _RawIntentDecision(BaseModel):
     confidence: float = Field(ge=0, le=1)
     risk_flags: list[str] = Field(default_factory=list)
     needs_clarification: bool
+    candidate_interpretations: list[str] = Field(default_factory=list, max_length=3)
 
 
 def enforce_intent_contract(
@@ -304,6 +316,8 @@ def enforce_intent_contract(
             "needs_clarification": False,
         }
 
+    candidates = _bounded_candidates(decision)
+
     if confidence < min_confidence:
         flags.append("low_confidence")
         return {
@@ -312,6 +326,7 @@ def enforce_intent_contract(
             "risk_flags": sorted(flags),
             "recommended_action": "clarify",
             "needs_clarification": True,
+            "candidate_interpretations": candidates,
         }
 
     if intent == "unknown" or needs_clarification:
@@ -322,6 +337,7 @@ def enforce_intent_contract(
             "risk_flags": sorted(flags),
             "recommended_action": "clarify",
             "needs_clarification": True,
+            "candidate_interpretations": candidates,
         }
 
     return {
@@ -331,6 +347,19 @@ def enforce_intent_contract(
         "recommended_action": _action_for_intent(intent),
         "needs_clarification": False,
     }
+
+
+def _bounded_candidates(decision: Any) -> list[str]:
+    """Sanitize model-proposed interpretations: at most 3 single-line strings."""
+    raw = getattr(decision, "candidate_interpretations", None) or []
+    candidates: list[str] = []
+    for item in raw:
+        text = " ".join(str(item).split()).strip()
+        if text:
+            candidates.append(text[:160])
+        if len(candidates) == 3:
+            break
+    return candidates
 
 
 def _action_for_intent(intent: str) -> RecommendedAction:
@@ -447,11 +476,24 @@ def classify_intent_node(
                 ),
             }
 
-        clarification_prompt = (
-            "I need one more detail to identify the documented schema. "
-            "Please provide the table, column, or metric you mean. If you do not "
-            "know the table, say that I should find the table for the named column."
-        )
+        candidates = [
+            str(item) for item in decision.get("candidate_interpretations") or [] if str(item)
+        ]
+        if candidates:
+            numbered = " ".join(
+                f"({index}) {text}" for index, text in enumerate(candidates, start=1)
+            )
+            clarification_prompt = (
+                "I want to make sure I look for the right thing. "
+                f"Are you trying to find out: {numbered} "
+                "Reply with a number, or describe what you're after."
+            )
+        else:
+            clarification_prompt = (
+                "I need one more detail to identify the documented schema. "
+                "Please provide the table, column, or metric you mean. If you do not "
+                "know the table, say that I should find the table for the named column."
+            )
         trace.record("intent.clarification_requested", prompt=clarification_prompt)
 
         new_question = interrupt(clarification_prompt)

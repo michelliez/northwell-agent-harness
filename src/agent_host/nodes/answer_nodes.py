@@ -22,6 +22,16 @@ not claim that SQL was executed or that patient records were accessed.
 Keep the answer concise: 3-5 sentences or up to 5 short bullets. Prefer the
 single most relevant table/document first, then mention only the strongest
 supporting context. Do not quote long passages from the chunks.
+
+If, and only if, the chunks support a safe aggregate analysis relevant to the
+question, end with exactly one final line of the form
+"Suggested query: <one specific aggregate question naming its table>"
+(for example "Suggested query: Count encounters in PAT_ENC by encounter type
+per month"). The suggestion must be answerable from the cited tables, must
+aggregate (counts, sums, averages, per-period breakdowns), and must never ask
+for individual records or patient identifiers. Omit the line entirely when no
+safe aggregate follow-up exists. This is only a suggestion for the user's next
+question; do not draft SQL.
 """.strip()
 
 _GENERAL_SYSTEM = """

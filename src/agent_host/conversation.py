@@ -1,8 +1,12 @@
 """Bounded, process-local context for safe follow-up resolution.
 
 The store deliberately retains no assistant answer, retrieved passage, SQL, or
-query result. It keeps only recent standalone questions and catalog-like
-anchors long enough to resolve phrases such as ``this table``.
+query result. It keeps only recent standalone questions, catalog-like anchors
+long enough to resolve phrases such as ``this table``, and at most one
+model-suggested follow-up *question* per turn. That suggestion is the single
+sanctioned piece of assistant-derived text, because it is question-shaped by
+construction, size-capped, and — like every contextualized rewrite — passes
+the deterministic input policy screen again before anything routes on it.
 """
 
 from __future__ import annotations
@@ -16,6 +20,35 @@ from dataclasses import dataclass, field
 _TABLE_REFERENCE = re.compile(r"\b(?:this|that|the)\s+table\b", re.IGNORECASE)
 _COLUMN_REFERENCE = re.compile(r"\b(?:this|that|the)\s+column\b", re.IGNORECASE)
 _CATALOG_IDENTIFIER = re.compile(r"\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b")
+_SUGGESTED_QUERY_LINE = re.compile(r"^Suggested query:\s*(.+?)\s*$", re.MULTILINE)
+MAX_SUGGESTION_CHARS = 300
+
+# A closed vocabulary, not sentiment analysis: only a reply that is nothing
+# but an acceptance may be rewritten into the stored suggestion. Anything
+# with additional content is a new question and resolves normally.
+_ACCEPTANCE_PHRASES = frozenset(
+    {
+        "yes",
+        "yes please",
+        "yeah",
+        "yep",
+        "sure",
+        "ok",
+        "okay",
+        "please",
+        "please do",
+        "do it",
+        "do that",
+        "go ahead",
+        "sounds good",
+        "draft it",
+        "draft that",
+        "generate it",
+        "write it",
+        "try it",
+        "that one",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -25,6 +58,7 @@ class ConversationTurn:
     question: str
     tables: tuple[str, ...] = ()
     columns: tuple[str, ...] = ()
+    suggested_question: str = ""
 
 
 @dataclass
@@ -87,11 +121,19 @@ class ConversationStore:
 
 
 def resolve_followup(question: str, turns: list[ConversationTurn]) -> tuple[str, bool]:
-    """Resolve explicit table/column deixis only when the latest anchor is unique."""
+    """Resolve explicit table/column deixis only when the latest anchor is unique.
+
+    A reply consisting solely of an acceptance phrase resolves to the previous
+    turn's suggested question, if one was offered. The caller re-screens every
+    changed question through the input policy before routing on it.
+    """
     if not turns:
         return question, False
 
     latest = turns[-1]
+    if latest.suggested_question and _is_acceptance(question):
+        return latest.suggested_question, True
+
     resolved = question
     if len(latest.tables) == 1 and _TABLE_REFERENCE.search(resolved):
         resolved = _TABLE_REFERENCE.sub(f"the {latest.tables[0]} table", resolved)
@@ -106,7 +148,25 @@ def turn_from_result(question: str, result: dict) -> ConversationTurn:
     plan_tables = _plan_table_names(result)
     chunk_tables = _chunk_table_names(result)
     tables = explicit or plan_tables or chunk_tables
-    return ConversationTurn(question=question, tables=tuple(tables[:5]))
+    return ConversationTurn(
+        question=question,
+        tables=tuple(tables[:5]),
+        suggested_question=_extract_suggestion(result),
+    )
+
+
+def _is_acceptance(question: str) -> bool:
+    normalized = " ".join(question.split()).casefold().rstrip(".!?")
+    return normalized in _ACCEPTANCE_PHRASES
+
+
+def _extract_suggestion(result: dict) -> str:
+    """Pull the last single-line 'Suggested query:' offer out of the answer."""
+    answer = str(result.get("answer") or "")
+    matches = _SUGGESTED_QUERY_LINE.findall(answer)
+    if not matches:
+        return ""
+    return matches[-1][:MAX_SUGGESTION_CHARS]
 
 
 def _plan_table_names(result: dict) -> list[str]:

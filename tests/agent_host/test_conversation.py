@@ -47,3 +47,66 @@ def test_store_delete_is_idempotent() -> None:
     store.record("thread", ConversationTurn(question="one"))
     assert store.delete("thread") is True
     assert store.delete("thread") is False
+
+
+def test_acceptance_reply_resolves_to_stored_suggestion() -> None:
+    turns = [
+        ConversationTurn(
+            question="What does PAT_ENC contain?",
+            tables=("PAT_ENC",),
+            suggested_question="Count encounters in PAT_ENC by encounter type per month",
+        )
+    ]
+
+    resolved, changed = resolve_followup("yes please", turns)
+
+    assert changed is True
+    assert resolved == "Count encounters in PAT_ENC by encounter type per month"
+
+
+def test_substantive_reply_is_not_treated_as_acceptance() -> None:
+    turns = [
+        ConversationTurn(
+            question="What does PAT_ENC contain?",
+            tables=("PAT_ENC",),
+            suggested_question="Count encounters in PAT_ENC by encounter type per month",
+        )
+    ]
+
+    resolved, changed = resolve_followup("yes but only for 2025 admissions", turns)
+
+    assert resolved == "yes but only for 2025 admissions"
+    assert changed is False
+
+
+def test_acceptance_without_stored_suggestion_stays_unchanged() -> None:
+    turns = [ConversationTurn(question="What does PAT_ENC contain?", tables=("PAT_ENC",))]
+
+    resolved, changed = resolve_followup("yes", turns)
+
+    assert resolved == "yes"
+    assert changed is False
+
+
+def test_turn_extracts_single_bounded_suggestion_from_answer() -> None:
+    turn = turn_from_result(
+        "What does PAT_ENC contain?",
+        {
+            "answer": (
+                "PAT_ENC holds encounters. [chunk-1]\n"
+                "Suggested query: Count encounters in PAT_ENC by department"
+            ),
+            "retrieved_chunks": [],
+        },
+    )
+
+    assert turn.suggested_question == "Count encounters in PAT_ENC by department"
+
+
+def test_turn_without_suggestion_line_stores_none() -> None:
+    turn = turn_from_result(
+        "What does PAT_ENC contain?",
+        {"answer": "PAT_ENC holds encounters. [chunk-1]", "retrieved_chunks": []},
+    )
+
+    assert turn.suggested_question == ""

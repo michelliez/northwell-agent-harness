@@ -182,3 +182,44 @@ def test_clarification_reply_preserves_the_original_sql_request() -> None:
 
     assert "average of the VISITS column" in merged
     assert "User clarification: mean" in merged
+
+
+def test_clarify_branches_carry_bounded_candidate_interpretations() -> None:
+    from agent_host.nodes.intent_nodes import enforce_intent_contract
+
+    class _Decision:
+        intent = "unknown"
+        confidence = 0.9
+        risk_flags: list[str] = []
+        needs_clarification = True
+        candidate_interpretations = [
+            "  The number of   encounters per department?  ",
+            "x" * 500,
+            "Schema of PAT_ENC?",
+            "A fourth reading that must be dropped",
+        ]
+
+    decision = enforce_intent_contract(_Decision())
+
+    assert decision["needs_clarification"] is True
+    candidates = decision["candidate_interpretations"]
+    assert len(candidates) == 3
+    assert candidates[0] == "The number of encounters per department?"
+    assert len(candidates[1]) == 160
+    assert "fourth" not in " ".join(candidates)
+
+
+def test_confident_intents_do_not_carry_candidates() -> None:
+    from agent_host.nodes.intent_nodes import enforce_intent_contract
+
+    class _Decision:
+        intent = "schema_lookup"
+        confidence = 0.95
+        risk_flags: list[str] = []
+        needs_clarification = False
+        candidate_interpretations = ["should be ignored"]
+
+    decision = enforce_intent_contract(_Decision())
+
+    assert decision["intent"] == "schema_lookup"
+    assert "candidate_interpretations" not in decision
