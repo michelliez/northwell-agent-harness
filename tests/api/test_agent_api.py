@@ -231,6 +231,35 @@ def test_graph_response_resolves_readable_citation_metadata() -> None:
     assert response.citation_details[0].source_file == "A0H_MAP.html"
 
 
+def test_graph_response_surfaces_validated_candidate_sql() -> None:
+    response = _result_to_response(
+        {
+            "answer": "Here is the validated SQL draft.",
+            "candidate_sql": "SELECT COUNT(*) AS row_count FROM A0H_MAP",
+            "validation_result": {"allowed": True},
+            "execution_status": "not_configured",
+        },
+        "run-sql",
+        "thread-sql",
+    )
+
+    assert response.generated_sql == "SELECT COUNT(*) AS row_count FROM A0H_MAP"
+
+
+def test_graph_response_withholds_sql_that_failed_validation() -> None:
+    response = _result_to_response(
+        {
+            "answer": "The generated SQL failed safety validation.",
+            "candidate_sql": "SELECT secret FROM A0H_MAP",
+            "validation_result": {"allowed": False},
+        },
+        "run-blocked",
+        "thread-blocked",
+    )
+
+    assert response.generated_sql is None
+
+
 def test_public_api_replaces_internal_chunk_ids_with_numbered_references(tmp_path) -> None:
     chunk_id = "A0H_MAP__COLUMN_DEFINITION__LINE"
 

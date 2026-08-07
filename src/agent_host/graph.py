@@ -502,7 +502,14 @@ def _result_to_response(result: dict, run_id: str, thread_id: str) -> AskRespons
         intent=result.get("intent"),
         intent_confidence=result.get("intent_confidence"),
         disclosure_status=result.get("execution_status"),
-        generated_sql=result.get("generated_sql"),
+        # candidate_sql is the state key the SQL nodes write; it is exposed
+        # only once deterministic validation allowed it, because failed
+        # candidates also remain in state.
+        generated_sql=(
+            result.get("candidate_sql")
+            if (result.get("validation_result") or {}).get("allowed")
+            else None
+        ),
         query_parameters=list(result.get("query_parameters") or []),
         citations=citation_ids,
         citation_details=citation_details,
