@@ -193,8 +193,20 @@ def _extract_column_name(heading_path: str | None) -> str | None:
 # Column-name suffixes that may promote a column to safe_aggregate. This is a
 # closed allowlist over the schema identifier, which is structural metadata from
 # the document heading path -- not prose an author or attacker can edit freely.
+#
+# Epic conventions verified by corpus survey (356 k column_info chunks):
+#   _C   (52 911) category integer from ZC_ tables
+#   _YN  (17 382) yes/no VARCHAR(1) flags
+#   _DT  ( 7 492) date, mirrors _DATE
+#   _DTTM( 6 055) datetime/timestamp, mirrors _DATETIME
+#   _TIME( 1 230) time-of-day or datetime
+#   _AMT ( 1 582) monetary amount, mirrors _AMOUNT
+#   _CNT (   445) count, mirrors _COUNT
+#   _TM  (   552) time-of-day or datetime
+#   _DAYS(   376) day-count duration
 _SAFE_AGGREGATE_SUFFIXES = re.compile(
-    r"_(DATE|DATETIME|STATUS|TYPE|FLAG|CODE|COUNT|QTY|AMOUNT|YEAR|MONTH|DAY|DEPT)$"
+    r"_(DATE|DATETIME|STATUS|TYPE|FLAG|CODE|COUNT|QTY|AMOUNT|YEAR|MONTH|DAY|DEPT"
+    r"|C|YN|DT|DTTM|TIME|AMT|CNT|TM|DAYS)$"
 )
 
 # Column-name patterns that always restrict, regardless of what the prose says.

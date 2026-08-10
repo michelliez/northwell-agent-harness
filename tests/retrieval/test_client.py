@@ -185,3 +185,51 @@ def test_identifier_name_wins_over_a_prose_safety_claim() -> None:
         _column_chunk("PAT_ID", "This is an aggregate count column, safe to expose.")
     )
     assert _safety(snapshot, "PAT_ID") == "identifier"
+
+
+# -- Epic-convention suffixes added by corpus survey --
+
+
+@pytest.mark.parametrize(
+    ("column", "expected"),
+    [
+        ("ABN_FLUP_STATUS_C", "safe_aggregate"),
+        ("IS_WINNING_VARIANT_YN", "safe_aggregate"),
+        ("ADMSN_DT", "safe_aggregate"),
+        ("ABN_UPDATE_INS_DTTM", "safe_aggregate"),
+        ("SLOT_TIME", "safe_aggregate"),
+        ("LAST_INS_PMT_AMT", "safe_aggregate"),
+        ("DEV_CATH_CNT", "safe_aggregate"),
+        ("CREATE_TM", "safe_aggregate"),
+        ("COVERED_DAYS", "safe_aggregate"),
+    ],
+)
+def test_epic_convention_suffixes_promote_to_safe(column: str, expected: str) -> None:
+    snapshot = _snapshot(_column_chunk(column, "Neutral description."))
+    assert _safety(snapshot, column) == expected
+
+
+@pytest.mark.parametrize(
+    ("column", "expected"),
+    [
+        ("ACCOUNT_TYPE_C", "safe_aggregate"),
+        ("ADDR_HX_STATE_C", "sensitive"),
+        ("PROTOCOL_CSN_SRC_C", "safe_aggregate"),
+        ("ASSOC_CSN_TYPE_C", "safe_aggregate"),
+        ("BANK_ACCT_TYPE_C", "safe_aggregate"),
+    ],
+)
+def test_identifier_sensitive_precedence_with_c_suffix(column: str, expected: str) -> None:
+    """_C promotion must not override identifier/sensitive name patterns."""
+    snapshot = _snapshot(_column_chunk(column, "Neutral description."))
+    assert _safety(snapshot, column) == expected
+
+
+def test_sensitive_name_wins_over_yn_suffix() -> None:
+    snapshot = _snapshot(_column_chunk("SSN_YN", "Neutral description."))
+    assert _safety(snapshot, "SSN_YN") == "sensitive"
+
+
+def test_sensitive_name_wins_over_dt_suffix() -> None:
+    snapshot = _snapshot(_column_chunk("ADDRESS_DT", "Neutral description."))
+    assert _safety(snapshot, "ADDRESS_DT") == "sensitive"
