@@ -68,7 +68,7 @@ def test_retrieval_uses_budget_bound(monkeypatch, tmp_path: Path) -> None:
 
     calls: list[dict] = []
 
-    def fake_retrieve(query, db_path, top_k=5):
+    def fake_retrieve(query, db_path, top_k=5, dense_index_dir=None):
         calls.append({"query": query, "top_k": top_k})
         return {
             "query": query,

@@ -58,6 +58,7 @@ def retrieve_documentation(
     top_k: int = 5,
     include_relationships: bool = False,
     max_related_tables: int = 5,
+    dense_index_dir: Path | None = None,
 ) -> RetrievalResult:
     """Search the SQLite RAG index and return bounded, typed chunks."""
     if top_k < 1:
@@ -76,6 +77,7 @@ def retrieve_documentation(
         query,
         db_path,
         top_k=bounded_top_k,
+        dense_index_dir=dense_index_dir,
         **relationship_options,
     )
 

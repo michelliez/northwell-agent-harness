@@ -99,6 +99,15 @@ ui = [
     "httpx>=0.28.1",
     "streamlit>=1.59.1",
 ]
+# Dense retrieval stays optional like BigQuery: nothing imports these at module
+# scope, `retrieval/dense.py` imports lazily and fails closed when the group is
+# absent, and the FTS-only path never needs them.
+dense = [
+    "faiss-cpu>=1.14.3",
+    "numpy>=2.1.0",
+    "torch>=2.13.0",
+    "transformers>=4.41.0,<5",
+]
 
 [tool.ruff]
 src = ["src"]

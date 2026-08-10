@@ -218,18 +218,44 @@ records direction, related document, join columns, and `evidence_chunk_id`.
 Unrelated documents are never inferred from semantic similarity. This option
 is currently off by default and is not yet connected to SQL planning.
 
+### Optional hybrid dense fusion (ADR 009)
+
+With `DENSE_INDEX_DIR` set (a prebuilt FAISS artifact over the same index),
+`retrieve_documentation_context` fuses the FTS ranking with a dense ranking by
+reciprocal rank: each arm contributes `top_k * 2` candidates and a chunk
+scores the sum of `1 / (60 + rank)` across the lists containing it. The
+`retrieval_mode` field reports `hybrid` instead of `keyword`. Constants are
+frozen from the measured benchmark configuration; `retrieval/dense.py` owns
+the artifact loader, query encoder, and fusion. Dependencies live in the
+optional `dense` group and everything fails closed without them. Unset, the
+lexical path is untouched.
+
 ## What this is good and bad at
 
-Measured on the 50-query benchmark, document Hit@5 by failure bucket:
+Frozen baseline (2026-08-10), document hit@5 by failure bucket on the 85-query
+reviewed benchmark, chunker `section-table-genq-columns-v5`, index
+`rag-sqlite-v6-genq-expansion` with the combined doc2query corpus:
 
-| Bucket | Hit@5 | Why |
-|---|---:|---|
-| `named_table_lookup` | **1.000** | Hint fires; exact identifier match |
-| `named_column_schema` | 0.600 | Column names are not unique across 40K docs |
-| `cross_table_synthesis` | 0.400 | Works when a table is named |
-| `business_concept_discovery` | **0.091** | No lexical overlap to match on |
+| Bucket (n) | FTS combined | Dense | **Hybrid RRF** |
+|---|---:|---:|---:|
+| `named_table_lookup` (15) | 1.000 | 0.667 | **1.000** |
+| `named_column_schema` (16) | 0.750 | 0.562 | **0.750** |
+| `cross_table_synthesis` (18) | 0.556 | 0.333 | **0.556** |
+| `business_concept_discovery` (25) | 0.120 | 0.440 | **0.360** |
+| **Overall hit@5** | 0.541 | 0.486 | **0.622** |
+| Overall recall@20 | 0.538 | 0.578 | **0.649** |
 
-The pattern is one thing: **this system retrieves identifiers, not meaning.**
+Four FTS arms (no expansion / questions / summaries / combined doc2query
+corpora) were measured before this table; combined won with zero regressions
+and is the FTS column above. Dense is Qwen3-Embedding-0.6B over all 482K
+chunks. Hybrid is the shipping configuration (ADR 009): fusion held every
+FTS identifier bucket exactly while tripling business-concept hit@5, and its
+recall@20 broke the ~0.51 saturation ceiling that four FTS configurations
+could not. Judgments are positives-only, so recall/hit/MRR are the valid
+headline metrics; precision and nDCG are partially blind.
+
+The lexical pattern that motivated all of this is one thing: **FTS retrieves
+identifiers, not meaning.**
 
 Where it fails, it fails plausibly, which is worse than failing loudly:
 
@@ -250,13 +276,19 @@ precise about the scope: the deficit is concentrated in
 rare tokens like `ABN_STATUS_C`, which is exactly what this corpus is made of.
 Expect hybrid, not replacement.
 
-## Frozen lexical baseline
+That prediction held exactly: measured alone, dense dropped named-table lookup
+to 0.667; fused by rank, it regressed nothing and tripled concept discovery
+(see the baseline table above).
 
-The lexical ranker is frozen after the evidence-aware token-selection pass.
-Further work should compare dense and hybrid retrieval rather than tune more FTS
-parameters against these same 50 gold queries.
+## Frozen retrieval baseline
 
-Two behaviors remain visible but move to hybrid evaluation:
+The lexical ranker is frozen after the evidence-aware token-selection pass, and
+the retrieval configuration as a whole is frozen at the hybrid table above.
+Changing any of it — FTS weights, fusion constants, encoder, corpus — requires
+rerunning the 85-query benchmark in the evaluation repository and beating that
+table without bucket regressions.
+
+Two behaviors remain visible and deliberately unaddressed:
 
 1. Invalid document hints such as `LINE` and `ABN` match no live document, so
    the current SQL assigns every result the same `document_rank`; existence

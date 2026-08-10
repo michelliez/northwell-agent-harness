@@ -654,18 +654,52 @@ def retrieve_documentation_context(
     top_k: int = 5,
     include_relationships: bool = False,
     max_related_tables: int = 5,
+    dense_index_dir: Path | None = None,
 ) -> dict:
-    """Search documentation and return bounded, full chunks for answer generation."""
+    """Search documentation and return bounded, full chunks for answer generation.
+
+    With ``dense_index_dir`` set, the FTS ranking is fused with a dense FAISS
+    ranking by reciprocal rank (see ``retrieval.dense``); otherwise the frozen
+    lexical path runs alone and behaves exactly as before.
+    """
     if not 1 <= top_k <= MAX_RAG_TOP_K:
         raise ValueError(f"top_k must be between 1 and {MAX_RAG_TOP_K}")
     conn = open_connection(db_path)
     cur = conn.cursor()
     try:
-        ranked = search_ranked_chunks(cur, query=query.strip(), top_k=top_k)
+        retrieval_mode = "keyword"
+        if dense_index_dir is not None:
+            from retrieval.dense import (
+                HYBRID_CANDIDATE_MULTIPLIER,
+                load_dense_searcher,
+                rrf_fuse,
+            )
+
+            searcher = load_dense_searcher(dense_index_dir)
+            depth = top_k * HYBRID_CANDIDATE_MULTIPLIER
+            fts_ranked = search_ranked_chunks(cur, query=query.strip(), top_k=depth)
+            dense_hits = searcher.search(query.strip(), depth)
+            fused = rrf_fuse(
+                [
+                    [(str(hit["chunk_id"]), hit.get("score")) for hit in fts_ranked],
+                    dense_hits,
+                ],
+                top_k,
+            )
+            ranked = [{"chunk_id": chunk_id, "score": score} for chunk_id, score in fused]
+            retrieval_mode = "hybrid"
+        else:
+            ranked = search_ranked_chunks(cur, query=query.strip(), top_k=top_k)
         chunks: list[dict] = []
         for rank, result in enumerate(ranked, start=1):
             chunk = fetch_chunk_by_id(cur, str(result["chunk_id"]))
             if chunk is None:
+                if retrieval_mode == "hybrid":
+                    raise RuntimeError(
+                        f"Dense artifact chunk {result['chunk_id']} is not in the RAG "
+                        "index; the artifact was built against a different index. "
+                        "Rebuild it from the active index."
+                    )
                 continue
             chunk["rank"] = rank
             chunk["score"] = result.get("score")
@@ -683,7 +717,7 @@ def retrieve_documentation_context(
 
         return {
             "query": query,
-            "retrieval_mode": "keyword",
+            "retrieval_mode": retrieval_mode,
             "chunks": chunks,
             "relationships": relationships,
             "index_version": get_index_version(conn),

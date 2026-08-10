@@ -48,6 +48,7 @@ def retrieve_context_node(
             cfg.index_path,
             budget=budget,
             top_k=budget.max_retrieved_chunks,
+            dense_index_dir=cfg.dense_index_dir,
         )
     except Exception as exc:
         trace.record("retrieval.error", error=str(exc))

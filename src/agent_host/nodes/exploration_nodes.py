@@ -121,6 +121,7 @@ def exploration_node(
                 cfg.index_path,
                 budget=budget,
                 top_k=budget.max_retrieved_chunks,
+                dense_index_dir=cfg.dense_index_dir,
             )
             fallback_chunks = [chunk.model_dump() for chunk in fallback.chunks]
             screen = screen_content(fallback_chunks, ContentSurface.TOOL_RESULT)

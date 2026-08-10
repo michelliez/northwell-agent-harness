@@ -18,6 +18,7 @@ class AppConfig:
     anthropic_custom_headers: dict[str, str] = field(default_factory=dict)
     model: str = "claude-sonnet-4-6"
     index_path: Path = field(default_factory=lambda: Path(".local/rag/index.sqlite"))
+    dense_index_dir: Path | None = None
     artifact_path: Path = field(default_factory=lambda: Path(".local"))
     intent_min_confidence: float = 0.70
     trace_content_mode: TraceContentMode = "metadata"
@@ -52,6 +53,9 @@ def get_config() -> AppConfig:
     raw_path = os.getenv("RAG_DB_PATH", "").strip()
     index_path = Path(raw_path) if raw_path else Path(".local/rag/index.sqlite")
 
+    raw_dense_dir = os.getenv("DENSE_INDEX_DIR", "").strip()
+    dense_index_dir = Path(raw_dense_dir) if raw_dense_dir else None
+
     raw_artifact = os.getenv("ARTIFACT_PATH", "").strip()
     artifact_path = Path(raw_artifact) if raw_artifact else Path(".local")
 
@@ -73,6 +77,7 @@ def get_config() -> AppConfig:
         anthropic_custom_headers=_parse_custom_headers(os.getenv("ANTHROPIC_CUSTOM_HEADERS", "")),
         model=model,
         index_path=index_path,
+        dense_index_dir=dense_index_dir,
         artifact_path=artifact_path,
         intent_min_confidence=intent_min_confidence,
         trace_content_mode=trace_content_mode,
