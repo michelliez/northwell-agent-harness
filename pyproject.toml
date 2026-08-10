@@ -65,7 +65,15 @@ package = true
 # Nothing here decrypts PKCS#7, so the path is unreachable today. The floor
 # exists so that remains true by construction rather than because no one has
 # added the feature yet.
-constraint-dependencies = ["cryptography>=50.0.0"]
+constraint-dependencies = [
+    "cryptography>=50.0.0",
+    # GitPython arrives only through streamlit/chainlit in the ui group and no
+    # agent code touches git at runtime. 3.1.57 and earlier accept forged
+    # config option names and unguarded git options (a 2026-08 advisory wave:
+    # core.sshCommand/hooksPath injection, --template hooks, read-tree
+    # forwarding). The floor keeps a re-lock from resolving back into them.
+    "gitpython>=3.1.59",
+]
 
 # PyPI ships CPU-only torch wheels for Windows, so an RTX card sits idle behind
 # `torch.cuda.is_available() == False`. CUDA builds live on PyTorch's own index.
@@ -107,7 +115,7 @@ dense = [
     "faiss-cpu>=1.14.3",
     "numpy>=2.1.0",
     "torch>=2.13.0",
-    "transformers>=4.41.0,<5",
+    "transformers>=5.14,<6",
 ]
 
 [tool.ruff]
