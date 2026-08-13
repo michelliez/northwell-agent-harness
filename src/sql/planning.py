@@ -31,9 +31,13 @@ named parameters; never put literal values or SQL fragments in the plan.
 Identifiers may only be counted or joined to identifiers. Unknown and sensitive
 columns may not be used. Row-level output is forbidden.
 For per-day/week/month/quarter/year questions, use time_buckets on a temporal
-safe_aggregate column; its alias is an output field. For top-N or ranked
-requests, use order_by (one output alias) and limit. Range predicates use
-BETWEEN with two parameters; there is no IN operator.
+safe_aggregate column; its alias is an output field. A time-bucketed column
+must not also appear in groupings; groupings are only for additional
+categorical columns. expected_output must list exactly every aggregation
+alias, every grouping column name, and every time_bucket alias — nothing
+else. For top-N or ranked requests, use order_by (one output alias) and
+limit. Range predicates use BETWEEN with two parameters; there is no IN
+operator.
 """.strip()
 
 _PLAN_TOOL: dict[str, Any] = {
@@ -308,11 +312,16 @@ def validate_query_plan(
         | {group.column.casefold() for group in proposed.groupings}
         | {bucket.alias.casefold() for bucket in proposed.time_buckets}
     )
-    if {value.casefold() for value in proposed.expected_output} != expected_outputs:
+    declared_outputs = {value.casefold() for value in proposed.expected_output}
+    if declared_outputs != expected_outputs:
         violations.append(
             _violation(
                 "output_shape_mismatch",
                 "Expected output must equal grouping names and aggregation aliases.",
+                {
+                    "declared": sorted(declared_outputs),
+                    "required": sorted(expected_outputs),
+                },
             )
         )
 

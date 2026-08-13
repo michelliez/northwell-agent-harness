@@ -80,6 +80,98 @@ def test_model_finishing_on_its_own_is_not_truncation(tmp_path, monkeypatch) -> 
     assert completed["stop_reason"] == "model_finished"
 
 
+# --- state shape ---------------------------------------------------------------
+
+
+def test_tool_chunks_are_normalized_to_the_client_shape(tmp_path, monkeypatch) -> None:
+    """Tool results carry the index's raw `doc_id`; graph state must carry the
+    retrieval client's `document_id`, or context_gate's snapshot builder dies
+    on the exact chunks a successful exploration produced."""
+    import agent_host.nodes.exploration_nodes as mod
+    from agent_host.nodes.exploration_nodes import exploration_node
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(mod, "tools_for_intent", lambda _intent: [{"name": "find_table_doc"}])
+    _install_fake_client(monkeypatch, [_Block("find_table_doc", {"table": "PAT_ENC_HSP"})])
+
+    def _execute(_intent, _name, _args, *, db_path, budget):  # noqa: ARG001
+        # The shape fetch_chunk_by_id actually returns: doc_id, not document_id.
+        return {
+            "chunks": [
+                {
+                    "chunk_id": f"c{i}",
+                    "doc_id": f"d{i}",
+                    "title": "PAT_ENC_HSP - Clarity Dictionary",
+                    "heading_path": "PAT_ENC_HSP",
+                    "category": "metadata",
+                    "source_path": "PAT_ENC_HSP.html",
+                    "text": "hospital encounters",
+                    "rank": i + 1,
+                }
+                for i in range(50)
+            ]
+        }
+
+    monkeypatch.setattr(mod, "execute_retrieval_tool", _execute)
+
+    result = exploration_node(
+        {
+            "question": "count hospital encounters by admission date",
+            "intent": "safe_sql_generation",
+            "run_id": "run",
+            "trace_file": str(tmp_path / "run.jsonl"),
+        }
+    )
+
+    chunks = result["retrieved_chunks"]
+    assert chunks, "exploration collected chunks"
+    for chunk in chunks:
+        assert chunk["document_id"] == chunk["doc_id"]
+
+    # The exact construction context_gate performs must not raise.
+    from retrieval.client import RetrievedChunk
+
+    RetrievedChunk(
+        chunk_id=chunks[0]["chunk_id"],
+        document_id=chunks[0]["document_id"],
+        source_path=chunks[0]["source_path"],
+        title=chunks[0].get("title"),
+        heading_path=chunks[0].get("heading_path"),
+        category=chunks[0].get("category"),
+        text=chunks[0]["text"],
+        rank=chunks[0].get("rank", 1),
+        score=chunks[0].get("score"),
+    )
+
+
+def test_assistant_echo_strips_gateway_extras() -> None:
+    """Response blocks can carry response-only extras (the AI Hub Vertex path
+    adds `parsed_output` to text blocks); echoing them back is a 400."""
+    from anthropic.types import TextBlock, ToolUseBlock
+
+    from agent_host.nodes.exploration_nodes import _assistant_content
+
+    text = TextBlock.model_construct(
+        type="text", text="Looking up PAT_ENC_HSP.", parsed_output={"unexpected": True}
+    )
+    tool_use = ToolUseBlock(
+        id="tu_1", name="find_table_doc", input={"table": "PAT_ENC_HSP"}, type="tool_use"
+    )
+    empty = TextBlock.model_construct(type="text", text="")
+
+    content = _assistant_content([text, tool_use, empty])
+
+    assert content == [
+        {"type": "text", "text": "Looking up PAT_ENC_HSP."},
+        {
+            "type": "tool_use",
+            "id": "tu_1",
+            "name": "find_table_doc",
+            "input": {"table": "PAT_ENC_HSP"},
+        },
+    ]
+
+
 # --- harness ------------------------------------------------------------------
 
 

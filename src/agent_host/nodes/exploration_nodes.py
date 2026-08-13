@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from anthropic import Anthropic
-from anthropic.types import ToolUseBlock
+from anthropic.types import TextBlock, ToolUseBlock
 from langgraph.runtime import Runtime
 
 from agent_host.budget import BudgetExceeded, budget_from_env
@@ -68,7 +68,7 @@ def exploration_node(
                 stop_reason = "model_finished"
                 break
 
-            messages.append({"role": "assistant", "content": response.content})
+            messages.append({"role": "assistant", "content": _assistant_content(response.content)})
             tool_results: list[dict] = []
             for tool_use in tool_uses:
                 result = execute_retrieval_tool(
@@ -112,7 +112,7 @@ def exploration_node(
         trace.record("exploration.stopped", reason=type(exc).__name__)
     except Exception as exc:
         stop_reason = f"error:{type(exc).__name__}"
-        trace.record("exploration.error", error=type(exc).__name__)
+        trace.record("exploration.error", error=type(exc).__name__, message=str(exc))
 
     if not chunks_by_id:
         try:
@@ -133,7 +133,13 @@ def exploration_node(
         except Exception as exc:
             trace.record("exploration.fallback_error", error=type(exc).__name__)
 
-    chunks = list(chunks_by_id.values())[: budget.max_retrieved_chunks]
+    # Tool results carry the index's raw `doc_id`; graph state uses the
+    # retrieval client's public shape (`document_id`), which context_gate's
+    # snapshot builder requires.
+    chunks = [
+        {**chunk, "document_id": chunk.get("document_id") or chunk.get("doc_id", "")}
+        for chunk in list(chunks_by_id.values())[: budget.max_retrieved_chunks]
+    ]
     if stop_reason in _TRUNCATING_STOPS:
         trace.record(
             "exploration.truncated",
@@ -145,6 +151,25 @@ def exploration_node(
         )
     trace.record("exploration.completed", chunk_count=len(chunks), stop_reason=stop_reason)
     return {"retrieved_chunks": chunks}
+
+
+def _assistant_content(blocks: list) -> list[dict]:
+    """Echo only the documented wire fields when replaying the assistant turn.
+
+    Gateway responses can attach response-only extras to blocks (the AI Hub
+    Vertex path adds ``parsed_output`` to text blocks); the SDK preserves
+    unknown fields, and upstream input validation rejects them with a 400
+    when the raw blocks are sent back.
+    """
+    content: list[dict] = []
+    for block in blocks:
+        if isinstance(block, ToolUseBlock):
+            content.append(
+                {"type": "tool_use", "id": block.id, "name": block.name, "input": block.input}
+            )
+        elif isinstance(block, TextBlock) and block.text:
+            content.append({"type": "text", "text": block.text})
+    return content
 
 
 def _open_trace(state: AgentState, cfg) -> TraceLogger:

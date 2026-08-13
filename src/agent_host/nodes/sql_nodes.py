@@ -114,12 +114,18 @@ def plan_safety_node(state: AgentState) -> dict:
         citations,
     )
     if not validation.allowed:
-        codes = [violation.code for violation in validation.violations]
-        trace.record("plan_safety.rejected", violations=", ".join(codes))
+        trace.record(
+            "plan_safety.rejected",
+            violations=", ".join(v.code for v in validation.violations),
+            details=[{"code": v.code, "evidence": v.evidence} for v in validation.violations],
+        )
         return {
             "plan_validation": validation.model_dump(),
             "approved_plan": None,
-            "answer": (f"I couldn't approve the proposed query plan. {describe_violations(codes)}"),
+            "answer": (
+                f"I couldn't approve the proposed query plan. "
+                f"{describe_violations(validation.violations)}"
+            ),
         }
 
     trace.record(
@@ -218,10 +224,11 @@ def validate_sql_node(
         return {"validation_result": validation_dict}
 
     trace.record("validate_sql.failed_final", reason=result.reason)
-    codes = [result.reason] if result.reason else [v.code for v in result.violations]
     return {
         "validation_result": validation_dict,
-        "answer": (f"The generated SQL failed safety validation. {describe_violations(codes)}"),
+        "answer": (
+            f"The generated SQL failed safety validation. {describe_violations(result.violations)}"
+        ),
     }
 
 

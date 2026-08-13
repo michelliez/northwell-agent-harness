@@ -7,6 +7,16 @@ internal defect fall back to a generic line rather than leaking mechanics.
 
 from __future__ import annotations
 
+import collections
+from collections.abc import Sequence
+from typing import Protocol
+
+
+class _ViolationLike(Protocol):
+    code: str
+    evidence: dict
+
+
 _GUIDANCE: dict[str, str] = {
     # plan authorization
     "objective_mismatch": "Ask the question again in a single plain sentence.",
@@ -52,14 +62,14 @@ _GUIDANCE: dict[str, str] = {
         "Use column names exactly as documented; one column could not be resolved."
     ),
     "unknown_safety_column": (
-        "One column's safety could not be established from documentation, "
-        "so it cannot be used; try different columns."
+        "Column {column}'s safety could not be established from documentation; "
+        "try a different column."
     ),
     "sensitive_column_reference": (
-        "That column is sensitive and cannot appear in results or filters."
+        "Column {column} is sensitive and cannot appear in results or filters."
     ),
     "identifier_column_disallowed_context": (
-        "Identifiers may only be counted or used to join tables."
+        "Column {column} is an identifier; identifiers may only be counted or used to join tables."
     ),
     "non_aggregate_sql": "Ask for counts, sums, or averages rather than raw rows.",
     "select_star_sql": "Ask for specific aggregate values rather than all columns.",
@@ -68,11 +78,34 @@ _GUIDANCE: dict[str, str] = {
 _FALLBACK = "Please rephrase your question."
 
 
-def describe_violations(codes: list[str]) -> str:
-    """One deduplicated guidance sentence per actionable code, else a fallback."""
+def _safe_evidence(evidence: dict) -> collections.defaultdict:
+    return collections.defaultdict(lambda: "unknown", evidence)
+
+
+def _evidence_detail(value: object) -> str:
+    if isinstance(value, dict):
+        return "; ".join(f"{key}: {_evidence_detail(item)}" for key, item in value.items())
+    if isinstance(value, list | tuple):
+        return ", ".join(str(item) for item in value)
+    return str(value)
+
+
+def describe_violations(violations: Sequence[_ViolationLike]) -> str:
+    """One deduplicated guidance sentence per actionable violation, else a fallback.
+
+    Plan-authorization violations carry their specifics under an evidence
+    ``value`` key; that detail is appended in parentheses so the user can see
+    what the check actually compared, not only how to rephrase.
+    """
     seen: list[str] = []
-    for code in codes:
-        sentence = _GUIDANCE.get(code)
-        if sentence and sentence not in seen:
+    for v in violations:
+        template = _GUIDANCE.get(v.code)
+        if not template:
+            continue
+        sentence = template.format_map(_safe_evidence(v.evidence))
+        detail = v.evidence.get("value")
+        if detail not in (None, "", [], {}):
+            sentence = f"{sentence.rstrip('.')} ({_evidence_detail(detail)})."
+        if sentence not in seen:
             seen.append(sentence)
     return " ".join(seen) if seen else _FALLBACK

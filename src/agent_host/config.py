@@ -44,7 +44,10 @@ class AppConfig:
 
 
 def get_config() -> AppConfig:
-    load_dotenv()
+    # override=True: the repo's .env is authoritative over ambient shell state.
+    # A stale ANTHROPIC_API_KEY inherited from the Windows user environment
+    # otherwise silently outranks the gateway key configured here.
+    load_dotenv(override=True)
 
     api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("AI_HUB_API_KEY") or None
     base_url = os.getenv("ANTHROPIC_BASE_URL") or None
