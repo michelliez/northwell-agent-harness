@@ -5,6 +5,7 @@ from __future__ import annotations
 from langgraph.runtime import Runtime
 from langgraph.types import interrupt
 
+from agent_host import failure_messages
 from agent_host.budget import budget_from_env
 from agent_host.config import get_config
 from agent_host.state import AgentContext, AgentState
@@ -54,11 +55,7 @@ def retrieve_context_node(
         trace.record("retrieval.error", error=str(exc))
         return {
             "retrieved_chunks": [],
-            "answer": (
-                "Documentation retrieval is temporarily unavailable because the "
-                "configured index could not be opened. Please contact the system "
-                "administrator or try again after the index configuration is fixed."
-            ),
+            "answer": failure_messages.RETRIEVAL_INDEX_UNAVAILABLE,
         }
 
     raw_chunks = [chunk.model_dump() for chunk in result.chunks]
@@ -77,7 +74,7 @@ def retrieve_context_node(
         trace.record("retrieval.content_blocked", reason="all chunks blocked by content screen")
         return {
             "retrieved_chunks": [],
-            "answer": "I stopped because retrieved documentation failed the content screen.",
+            "answer": failure_messages.RETRIEVAL_CONTENT_BLOCKED,
         }
     trace.record("retrieval.completed", chunk_count=len(clean_chunks))
     return {"retrieved_chunks": clean_chunks}
@@ -106,18 +103,10 @@ def context_gate_node(state: AgentState) -> dict:
         clarification_count = state.get("clarification_count", 0)
         if clarification_count >= MAX_CLARIFICATION_ATTEMPTS:
             trace.record("context_gate.no_context_exhausted")
-            return {
-                "answer": (
-                    "I couldn't find relevant approved documentation for your question. "
-                    "Please try a more specific query referencing a table or column name."
-                )
-            }
+            return {"answer": failure_messages.NO_DOCUMENTATION_FOUND}
 
         trace.record("context_gate.no_context_clarification")
-        new_question = interrupt(
-            "I couldn't find relevant documentation. "
-            "Could you clarify which table, column, or topic you're asking about?"
-        )
+        new_question = interrupt(failure_messages.CLARIFICATION_PROMPT)
         return {
             "question": new_question,
             "intent": None,
@@ -164,13 +153,7 @@ def context_gate_node(state: AgentState) -> dict:
             # context: say so instead of letting query_plan blame the question.
             return {
                 "schema_snapshot": None,
-                "answer": (
-                    "I retrieved documentation but hit an internal error while "
-                    "assembling schema evidence from it, so I can't plan SQL for "
-                    "this question right now. Please try again; if it persists, "
-                    "this is a bug worth reporting rather than a problem with "
-                    "your question."
-                ),
+                "answer": failure_messages.SCHEMA_EVIDENCE_INTERNAL_ERROR,
             }
 
     return {}

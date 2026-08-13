@@ -10,6 +10,7 @@ from langgraph.runtime import Runtime
 from langgraph.types import interrupt
 from pydantic import BaseModel, ConfigDict, Field
 
+from agent_host import failure_messages
 from agent_host.budget import ExecutionBudget, budget_from_env
 from agent_host.config import AppConfig, get_config
 from agent_host.state import AgentContext, AgentState
@@ -233,6 +234,9 @@ _INTENT_TOOL: dict[str, Any] = {
 
 MAX_CLARIFICATION_ATTEMPTS = 3
 
+# Refusals stay terse and fixed: they redirect to what the assistant does
+# support, and never coach a rephrase — detailed "try wording it like this"
+# guidance on a refusal is an iteration oracle toward the boundary.
 _REFUSAL_RESPONSES: dict[str, tuple[str, str]] = {
     "prohibited_phi_request": (
         "prohibited_phi_request",
@@ -247,11 +251,13 @@ _REFUSAL_RESPONSES: dict[str, tuple[str, str]] = {
     "prompt_injection_attempt": (
         "prompt_injection_attempt",
         "I can’t follow requests to replace, reveal, or bypass the assistant’s trusted "
-        "instructions or workflow controls.",
+        "instructions or workflow controls. I can help with schema documentation and "
+        "validated aggregate SQL drafts.",
     ),
     "jailbreak_attempt": (
         "jailbreak_attempt",
-        "I can’t enter an unrestricted role or disable the assistant’s safety controls.",
+        "I can’t enter an unrestricted role or disable the assistant’s safety controls. "
+        "I can help with schema documentation and validated aggregate SQL drafts.",
     ),
     "destructive_sql_request": (
         "destructive_sql_request",
@@ -260,11 +266,14 @@ _REFUSAL_RESPONSES: dict[str, tuple[str, str]] = {
     ),
     "unsupported_sql_request": (
         "unsupported_sql_request",
-        "I can’t create that SQL because it requests unsupported or unsafe data access.",
+        "I can’t create that SQL because it requests unsupported or unsafe data access. "
+        "I can draft read-only aggregate queries — counts, sums, and averages — over "
+        "documented tables.",
     ),
     "policy_probe": (
         "policy_manipulation",
-        "I can’t change permissions, skip safety gates, or expand the approved workflow.",
+        "I can’t change permissions, skip safety gates, or expand the approved workflow. "
+        "I can help with schema documentation and validated aggregate SQL drafts.",
     ),
 }
 
@@ -470,10 +479,7 @@ def classify_intent_node(
                 "intent": "unknown",
                 "intent_confidence": confidence,
                 "recommended_action": "refuse",
-                "answer": (
-                    "I wasn't able to understand your request after multiple attempts. "
-                    "Please try rephrasing more specifically."
-                ),
+                "answer": failure_messages.CLARIFICATION_EXHAUSTED,
             }
 
         candidates = [
