@@ -3,6 +3,7 @@
 Public API:
   build_graph(checkpointer=None) -> CompiledGraph
   ask(question, *, thread_id=None) -> AskResponse
+  ask_stream(question, *, thread_id=None) -> Iterator[("step", node) | ("response", AskResponse)]
   resume(reply, *, thread_id) -> AskResponse
 
 LangGraph primitives used:
@@ -17,6 +18,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Iterator
 from dataclasses import asdict
 from pathlib import Path
 
@@ -322,6 +324,25 @@ def ask(
         clarification_prompt is set; the caller should call resume() with
         the user's reply and the same thread_id.
     """
+    response: AskResponse | None = None
+    for kind, payload in ask_stream(question, thread_id=thread_id):
+        if kind == "response" and isinstance(payload, AskResponse):
+            response = payload
+    if response is None:
+        raise RuntimeError("graph stream ended without a response")
+    return response
+
+
+def ask_stream(
+    question: str,
+    *,
+    thread_id: str | None = None,
+) -> Iterator[tuple[str, str | AskResponse]]:
+    """Run a new question, yielding progress as the graph executes.
+
+    Yields ("step", node_name) each time a graph node finishes, then exactly
+    one ("response", AskResponse) — the same object ask() would return.
+    """
     tid = thread_id or uuid.uuid4().hex
     run_id = uuid.uuid4().hex
     started_at = time.monotonic()
@@ -340,27 +361,50 @@ def ask(
     context = AgentContext(budget=budget)
     _thread_contexts[tid] = context
 
+    # values mode carries the accumulated state that invoke() would return;
+    # updates mode names each completed node for progress display.
+    result: dict = {}
+    interrupts = None
     try:
-        result = graph.invoke(initial_state, config=config, context=context)
+        for mode, payload in graph.stream(
+            initial_state,
+            config=config,
+            context=context,
+            stream_mode=["updates", "values"],
+        ):
+            if mode == "updates" and isinstance(payload, dict):
+                if "__interrupt__" in payload:
+                    interrupts = payload["__interrupt__"]
+                for node_name in payload:
+                    if node_name != "__interrupt__":
+                        yield ("step", node_name)
+            elif mode == "values" and isinstance(payload, dict):
+                result = payload
     except Exception as exc:
         # Check for LangGraph interrupt (some versions raise instead of returning)
         if "GraphInterrupt" in type(exc).__name__ or hasattr(exc, "interrupt_value"):
             prompt = str(getattr(exc, "interrupt_value", str(exc)))
-            return AskResponse(
-                answer="",
-                used_tools=[],
-                run_id=run_id,
-                trace_file="",
-                thread_id=tid,
-                interrupted=True,
-                clarification_prompt=prompt,
+            yield (
+                "response",
+                AskResponse(
+                    answer="",
+                    used_tools=[],
+                    run_id=run_id,
+                    trace_file="",
+                    thread_id=tid,
+                    interrupted=True,
+                    clarification_prompt=prompt,
+                ),
             )
+            return
         raise
 
+    if interrupts is not None:
+        result = {**result, "__interrupt__": interrupts}
     response = _result_to_response(result, run_id, tid)
     if not response.interrupted:
         _finish_thread(tid, result, response)
-    return response
+    yield ("response", response)
 
 
 def resume(

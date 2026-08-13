@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import StreamingResponse
 
 from agent_host.schemas import AskResponse as GraphAskResponse
 
@@ -32,6 +35,32 @@ async def ask_question(request: Request, ask_req: AskRequest) -> AgentResponse:
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Agent workflow failed.") from exc
     return _to_api_response(response)
+
+
+@router.post("/ask/stream")
+async def ask_question_stream(request: Request, ask_req: AskRequest) -> StreamingResponse:
+    """Stream one question as NDJSON: step lines while the graph runs, then
+    a final line carrying the same AgentResponse contract as /ask.
+
+    Errors after the stream opens cannot become HTTP status codes, so they
+    are emitted as a terminal {"type": "error"} line instead.
+    """
+    handler = request.app.state.ask_stream_handler
+
+    def lines():
+        try:
+            for kind, payload in handler(ask_req.question, thread_id=ask_req.thread_id):
+                if kind == "step":
+                    yield json.dumps({"type": "step", "node": payload}) + "\n"
+                elif kind == "response":
+                    data = _to_api_response(payload).model_dump()
+                    yield json.dumps({"type": "response", "data": data}) + "\n"
+        except ValueError as exc:
+            yield json.dumps({"type": "error", "detail": str(exc)}) + "\n"
+        except Exception:
+            yield json.dumps({"type": "error", "detail": "Agent workflow failed."}) + "\n"
+
+    return StreamingResponse(lines(), media_type="application/x-ndjson")
 
 
 @router.post("/resume", response_model=AgentResponse)

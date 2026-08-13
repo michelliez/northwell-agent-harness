@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 import os
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
+from agent_host.config import get_config
 from agent_host.graph import ask as graph_ask
+from agent_host.graph import ask_stream as graph_ask_stream
 from agent_host.graph import clear_thread as graph_clear_thread
 from agent_host.graph import resume as graph_resume
 from agent_host.schemas import AskResponse
@@ -18,14 +22,34 @@ from sql.audit_log import AuditLog
 from .models import HealthResponse
 from .routes import ask, audit
 
+logger = logging.getLogger(__name__)
+
 AskHandler = Callable[..., AskResponse]
+AskStreamHandler = Callable[..., Iterator[tuple[str, str | AskResponse]]]
 ResumeHandler = Callable[..., AskResponse]
 ClearThreadHandler = Callable[[str], None]
+
+
+@asynccontextmanager
+async def _prewarm_dense(application: FastAPI) -> AsyncIterator[None]:
+    """Load the FAISS artifact and query encoder at startup, not on the first ask."""
+    dense_index_dir = get_config().dense_index_dir
+    if dense_index_dir is not None:
+        from retrieval.dense import load_dense_searcher
+
+        try:
+            searcher = load_dense_searcher(dense_index_dir)
+            searcher.search("warm up the query encoder", 1)
+            logger.info("Dense retrieval warm (%s)", searcher.metadata.model_name)
+        except Exception:
+            logger.exception("Dense pre-warm failed; hybrid will load on first request instead")
+    yield
 
 
 def create_app(
     *,
     ask_handler: AskHandler = graph_ask,
+    ask_stream_handler: AskStreamHandler = graph_ask_stream,
     resume_handler: ResumeHandler = graph_resume,
     clear_thread_handler: ClearThreadHandler = graph_clear_thread,
     audit_log: AuditLog | None = None,
@@ -35,6 +59,7 @@ def create_app(
         title="SQL Agent API",
         description="Policy-gated documentation and SQL-draft assistant",
         version="0.1.0",
+        lifespan=_prewarm_dense,
     )
     origins = [
         value.strip()
@@ -49,6 +74,7 @@ def create_app(
         allow_headers=["Content-Type", "Authorization"],
     )
     application.state.ask_handler = ask_handler
+    application.state.ask_stream_handler = ask_stream_handler
     application.state.resume_handler = resume_handler
     application.state.clear_thread_handler = clear_thread_handler
     application.state.audit_log = audit_log or AuditLog(Path(".local/audit_logs"))

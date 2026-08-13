@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from fastapi.testclient import TestClient
 
 from agent_host.graph import _result_to_response
@@ -87,6 +89,50 @@ def test_ask_uses_public_graph_boundary_and_returns_v1_contract(tmp_path) -> Non
         ],
         "execution_status": "not_configured",
     }
+
+
+def test_ask_stream_emits_step_lines_then_the_v1_response(tmp_path) -> None:
+    def fake_ask_stream(question: str, *, thread_id: str | None = None):
+        assert question == "Count A0H_MAP rows"
+        yield ("step", "input_policy")
+        yield ("step", "classify_intent")
+        yield ("response", _response(answer="Done.", thread_id=thread_id or "generated"))
+
+    app = create_app(
+        ask_stream_handler=fake_ask_stream,
+        audit_log=AuditLog(tmp_path / "audit"),
+    )
+    response = TestClient(app).post(
+        "/api/v1/ask/stream",
+        json={"question": "Count A0H_MAP rows", "thread_id": "thread-123"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/x-ndjson")
+    events = [json.loads(line) for line in response.text.splitlines() if line]
+    assert [event["type"] for event in events] == ["step", "step", "response"]
+    assert events[0]["node"] == "input_policy"
+    assert events[2]["data"]["answer"] == "Done."
+    assert events[2]["data"]["status"] == "complete"
+    assert events[2]["data"]["thread_id"] == "thread-123"
+
+
+def test_ask_stream_surfaces_mid_stream_failure_as_an_error_line(tmp_path) -> None:
+    def failing_ask_stream(_question: str, *, thread_id: str | None = None):
+        del thread_id
+        yield ("step", "input_policy")
+        raise RuntimeError("model exploded")
+
+    app = create_app(
+        ask_stream_handler=failing_ask_stream,
+        audit_log=AuditLog(tmp_path / "audit"),
+    )
+    response = TestClient(app).post("/api/v1/ask/stream", json={"question": "hello"})
+
+    events = [json.loads(line) for line in response.text.splitlines() if line]
+    assert [event["type"] for event in events] == ["step", "error"]
+    # Internal exception text must not leak through the public boundary.
+    assert events[1]["detail"] == "Agent workflow failed."
 
 
 def test_interrupted_response_can_be_resumed_with_reply_and_thread_id(tmp_path) -> None:

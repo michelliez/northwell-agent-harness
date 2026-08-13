@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from collections.abc import AsyncIterator
+
 import httpx
 
 
@@ -121,6 +124,42 @@ class AsyncAgentAPIClient:
         if thread_id:
             payload["thread_id"] = thread_id
         return await self._request("POST", "/api/v1/ask", json=payload)
+
+    async def ask_stream(
+        self,
+        question: str,
+        thread_id: str | None = None,
+    ) -> AsyncIterator[dict]:
+        """Yield NDJSON events from /ask/stream: {"type": "step", "node": ...}
+        lines while the graph runs, then {"type": "response", "data": ...} or
+        {"type": "error", "detail": ...}."""
+        payload: dict[str, str] = {"question": question}
+        if thread_id:
+            payload["thread_id"] = thread_id
+        try:
+            async with (
+                httpx.AsyncClient(
+                    base_url=self.base_url,
+                    timeout=self.timeout_seconds,
+                ) as client,
+                client.stream("POST", "/api/v1/ask/stream", json=payload) as response,
+            ):
+                if response.status_code >= 400:
+                    await response.aread()
+                    raise AgentAPIError(AgentAPIClient._error_message(response))
+                async for line in response.aiter_lines():
+                    if not line.strip():
+                        continue
+                    try:
+                        yield json.loads(line)
+                    except ValueError as exc:
+                        raise AgentAPIError("The API returned an unreadable stream.") from exc
+        except httpx.ConnectError as exc:
+            raise AgentAPIError(
+                "Could not connect to FastAPI. Make sure it is running on port 8000."
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise AgentAPIError("The API request failed.") from exc
 
     async def resume(self, reply: str, thread_id: str) -> dict:
         return await self._request(

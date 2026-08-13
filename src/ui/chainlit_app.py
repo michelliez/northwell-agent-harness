@@ -19,6 +19,31 @@ from ui.api_client import AgentAPIError, AsyncAgentAPIClient
 API_BASE_URL = os.getenv("AGENT_API_URL", "http://localhost:8000")
 api = AsyncAgentAPIClient(base_url=API_BASE_URL)
 
+# Presentation-only labels for backend graph nodes; unknown nodes fall back to
+# a prettified node name so new pipeline stages appear without a UI change.
+_STEP_LABELS = {
+    "input_policy": "Screening request",
+    "contextualize_followup": "Resolving follow-up context",
+    "classify_intent": "Classifying intent",
+    "intent_refusal": "Preparing refusal",
+    "general_answer": "Drafting answer",
+    "retrieval_permission": "Checking retrieval permission",
+    "exploration": "Exploring documentation",
+    "retrieve_context": "Retrieving documentation",
+    "context_gate": "Assembling schema evidence",
+    "documentation_answer": "Drafting answer",
+    "query_plan": "Proposing query plan",
+    "plan_safety": "Authorizing query plan",
+    "write_sql": "Compiling SQL",
+    "validate_sql": "Validating SQL",
+    "execution_not_configured": "Preparing SQL draft",
+    "classify_output_safety": "Screening output safety",
+    "result_safety": "Checking result safety",
+    "interpretation_and_citations": "Attaching citations",
+    "final_answer": "Finalizing answer",
+}
+_SILENT_NODES = {"bounded_followup"}
+
 
 @cl.set_starters
 async def starters(
@@ -60,31 +85,65 @@ async def handle_message(message: cl.Message) -> None:
     thread_id = cl.user_session.get("thread_id")
     awaiting_clarification = bool(cl.user_session.get("awaiting_clarification"))
 
-    try:
-        if awaiting_clarification:
+    if awaiting_clarification:
+        try:
             if not isinstance(thread_id, str) or not thread_id:
                 _clear_control_state()
                 raise AgentAPIError(
                     "The clarification session expired. Please submit the full question again."
                 )
             response = await api.resume(message.content, thread_id)
-        else:
-            response = await api.ask(
-                message.content,
-                thread_id if isinstance(thread_id, str) else None,
-            )
-    except AgentAPIError as exc:
+        except AgentAPIError as exc:
+            await cl.Message(
+                author="Clarity Assistant",
+                content=f"**Request unavailable**\n\n{exc}",
+            ).send()
+            return
+        _apply_response_state(response)
         await cl.Message(
             author="Clarity Assistant",
-            content=f"**Request unavailable**\n\n{exc}",
+            content=format_response(response),
         ).send()
         return
 
+    # Stream the run: one message shows each pipeline step as it completes,
+    # then is rewritten in place with the final answer.
+    status = cl.Message(author="Clarity Assistant", content="- working…")
+    await status.send()
+    response = None
+    completed: list[str] = []
+    try:
+        async for event in api.ask_stream(
+            message.content,
+            thread_id if isinstance(thread_id, str) else None,
+        ):
+            kind = event.get("type")
+            if kind == "step":
+                node = str(event.get("node") or "")
+                if node in _SILENT_NODES:
+                    continue
+                label = _STEP_LABELS.get(node, node.replace("_", " ").capitalize())
+                if label not in completed:
+                    completed.append(label)
+                status.content = "\n".join([f"- {item} ✓" for item in completed] + ["- working…"])
+                await status.update()
+            elif kind == "response":
+                response = event.get("data")
+            elif kind == "error":
+                raise AgentAPIError(_plain(event.get("detail") or "The API request failed."))
+    except AgentAPIError as exc:
+        status.content = f"**Request unavailable**\n\n{exc}"
+        await status.update()
+        return
+
+    if not isinstance(response, dict):
+        status.content = "**Request unavailable**\n\nThe stream ended without a final response."
+        await status.update()
+        return
+
     _apply_response_state(response)
-    await cl.Message(
-        author="Clarity Assistant",
-        content=format_response(response),
-    ).send()
+    status.content = format_response(response)
+    await status.update()
 
 
 @cl.on_chat_end
