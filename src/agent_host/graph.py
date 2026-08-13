@@ -62,6 +62,22 @@ from agent_host.nodes.sql_nodes import (
 from agent_host.schemas import AskResponse, Citation
 from agent_host.state import AgentContext, AgentState, make_initial_state
 
+# Nodes whose job is to produce or gate the final answer. A non-empty "answer"
+# written by any node outside this set is a short-circuit, not normal output.
+_ANSWER_WRITING_NODES: frozenset[str] = frozenset(
+    {
+        "documentation_answer",
+        "general_answer",
+        "execution_not_configured",
+        "intent_refusal",
+        "final_answer",
+        "result_safety",
+        "interpretation_and_citations",
+        "bounded_followup",
+    }
+)
+
+
 # ── routing functions ─────────────────────────────────────────────────────────
 
 
@@ -337,11 +353,11 @@ def ask_stream(
     question: str,
     *,
     thread_id: str | None = None,
-) -> Iterator[tuple[str, str | AskResponse]]:
+) -> Iterator[tuple[str, dict[str, str] | AskResponse]]:
     """Run a new question, yielding progress as the graph executes.
 
-    Yields ("step", node_name) each time a graph node finishes, then exactly
-    one ("response", AskResponse) — the same object ask() would return.
+    Yields ("step", {"node": ..., "status": "ok"|"degraded"}) for each finished
+    graph node, then exactly one ("response", AskResponse).
     """
     tid = thread_id or uuid.uuid4().hex
     run_id = uuid.uuid4().hex
@@ -375,9 +391,17 @@ def ask_stream(
             if mode == "updates" and isinstance(payload, dict):
                 if "__interrupt__" in payload:
                     interrupts = payload["__interrupt__"]
-                for node_name in payload:
-                    if node_name != "__interrupt__":
-                        yield ("step", node_name)
+                for node_name, node_output in payload.items():
+                    if node_name == "__interrupt__":
+                        continue
+                    step_status = "ok"
+                    if (
+                        node_name not in _ANSWER_WRITING_NODES
+                        and isinstance(node_output, dict)
+                        and node_output.get("answer")
+                    ):
+                        step_status = "degraded"
+                    yield ("step", {"node": node_name, "status": step_status})
             elif mode == "values" and isinstance(payload, dict):
                 result = payload
     except Exception as exc:

@@ -192,6 +192,18 @@ def test_metadata_trace_redacts_all_content_fields(tmp_path: Path) -> None:
         assert row[field]["digest"].startswith("hmac-sha256:")
 
 
+def test_retrieval_started_query_is_redacted_in_metadata_mode(tmp_path: Path) -> None:
+    secret = "What is PAT_ENC? patient-dob=1980-01-02"
+    trace = TraceLogger(str(tmp_path), hash_key="test-key")
+    trace.record("retrieval.started", query=secret)
+
+    raw = trace.path.read_text(encoding="utf-8")
+    assert secret not in raw
+    row = json.loads(raw)
+    assert row["query"]["redacted"] is True
+    assert row["query"]["digest"].startswith("hmac-sha256:")
+
+
 def test_debug_trace_mode_is_explicit(tmp_path: Path) -> None:
     trace = TraceLogger(str(tmp_path), content_mode="debug")
     trace.record("answer.ready", answer="local-only-test-content")

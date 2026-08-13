@@ -25,7 +25,7 @@ from .routes import ask, audit
 logger = logging.getLogger(__name__)
 
 AskHandler = Callable[..., AskResponse]
-AskStreamHandler = Callable[..., Iterator[tuple[str, str | AskResponse]]]
+AskStreamHandler = Callable[..., Iterator[tuple[str, dict[str, str] | AskResponse]]]
 ResumeHandler = Callable[..., AskResponse]
 ClearThreadHandler = Callable[[str], None]
 

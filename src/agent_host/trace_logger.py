@@ -18,6 +18,7 @@ TraceContentMode = Literal["metadata", "debug"]
 _SENSITIVE_KEYS = frozenset(
     {
         "question",
+        "query",
         "messages",
         "response",
         "input",

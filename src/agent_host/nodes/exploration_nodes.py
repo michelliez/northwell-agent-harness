@@ -124,11 +124,23 @@ def exploration_node(
                 dense_index_dir=cfg.dense_index_dir,
             )
             fallback_chunks = [chunk.model_dump() for chunk in fallback.chunks]
-            screen = screen_content(fallback_chunks, ContentSurface.TOOL_RESULT)
-            if screen.allowed:
-                chunks_by_id = {chunk["chunk_id"]: chunk for chunk in fallback_chunks}
-            else:
-                trace.record("exploration.fallback_content_blocked", reason=screen.reason)
+            for chunk in fallback_chunks:
+                screen = screen_content(chunk, ContentSurface.TOOL_RESULT)
+                if screen.allowed:
+                    chunk_id = chunk.get("chunk_id", "")
+                    if chunk_id:
+                        chunks_by_id[chunk_id] = chunk
+                else:
+                    trace.record(
+                        "retrieval.chunk_blocked",
+                        chunk_id=chunk.get("chunk_id", ""),
+                        reason=screen.reason,
+                    )
+            if fallback_chunks and not chunks_by_id:
+                trace.record(
+                    "exploration.fallback_content_blocked",
+                    reason="all fallback chunks blocked by content screen",
+                )
             trace.record("exploration.fallback_retrieval", chunk_count=len(chunks_by_id))
         except Exception as exc:
             trace.record("exploration.fallback_error", error=type(exc).__name__)

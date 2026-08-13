@@ -111,7 +111,7 @@ async def handle_message(message: cl.Message) -> None:
     status = cl.Message(author="Clarity Assistant", content="- working…")
     await status.send()
     response = None
-    completed: list[str] = []
+    completed: list[tuple[str, str]] = []
     try:
         async for event in api.ask_stream(
             message.content,
@@ -120,12 +120,14 @@ async def handle_message(message: cl.Message) -> None:
             kind = event.get("type")
             if kind == "step":
                 node = str(event.get("node") or "")
+                step_status = str(event.get("status") or "ok")
                 if node in _SILENT_NODES:
                     continue
                 label = _STEP_LABELS.get(node, node.replace("_", " ").capitalize())
-                if label not in completed:
-                    completed.append(label)
-                status.content = "\n".join([f"- {item} ✓" for item in completed] + ["- working…"])
+                if not any(lbl == label for lbl, _ in completed):
+                    completed.append((label, step_status))
+                marks = [f"- {lbl} {'⚠' if s == 'degraded' else '✓'}" for lbl, s in completed]
+                status.content = "\n".join(marks + ["- working…"])
                 await status.update()
             elif kind == "response":
                 response = event.get("data")

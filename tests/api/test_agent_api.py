@@ -94,8 +94,8 @@ def test_ask_uses_public_graph_boundary_and_returns_v1_contract(tmp_path) -> Non
 def test_ask_stream_emits_step_lines_then_the_v1_response(tmp_path) -> None:
     def fake_ask_stream(question: str, *, thread_id: str | None = None):
         assert question == "Count A0H_MAP rows"
-        yield ("step", "input_policy")
-        yield ("step", "classify_intent")
+        yield ("step", {"node": "input_policy", "status": "ok"})
+        yield ("step", {"node": "classify_intent", "status": "ok"})
         yield ("response", _response(answer="Done.", thread_id=thread_id or "generated"))
 
     app = create_app(
@@ -112,6 +112,7 @@ def test_ask_stream_emits_step_lines_then_the_v1_response(tmp_path) -> None:
     events = [json.loads(line) for line in response.text.splitlines() if line]
     assert [event["type"] for event in events] == ["step", "step", "response"]
     assert events[0]["node"] == "input_policy"
+    assert events[0]["status"] == "ok"
     assert events[2]["data"]["answer"] == "Done."
     assert events[2]["data"]["status"] == "complete"
     assert events[2]["data"]["thread_id"] == "thread-123"
@@ -120,7 +121,7 @@ def test_ask_stream_emits_step_lines_then_the_v1_response(tmp_path) -> None:
 def test_ask_stream_surfaces_mid_stream_failure_as_an_error_line(tmp_path) -> None:
     def failing_ask_stream(_question: str, *, thread_id: str | None = None):
         del thread_id
-        yield ("step", "input_policy")
+        yield ("step", {"node": "input_policy", "status": "ok"})
         raise RuntimeError("model exploded")
 
     app = create_app(
@@ -344,6 +345,32 @@ def test_public_api_replaces_internal_chunk_ids_with_numbered_references(tmp_pat
             "category": "column_info",
         }
     ]
+
+
+def test_ask_stream_marks_short_circuit_step_as_degraded(tmp_path) -> None:
+    """A node outside the answer-writing set that emits an answer is marked degraded."""
+
+    def fake_ask_stream(question: str, *, thread_id: str | None = None):
+        yield ("step", {"node": "retrieve_context", "status": "degraded"})
+        yield ("step", {"node": "context_gate", "status": "ok"})
+        yield ("response", _response(answer="Blocked.", thread_id=thread_id or "t"))
+
+    app = create_app(
+        ask_stream_handler=fake_ask_stream,
+        audit_log=AuditLog(tmp_path / "audit"),
+    )
+    response = TestClient(app).post(
+        "/api/v1/ask/stream",
+        json={"question": "test", "thread_id": "t"},
+    )
+
+    assert response.status_code == 200
+    events = [json.loads(line) for line in response.text.splitlines() if line]
+    step_events = [e for e in events if e["type"] == "step"]
+    assert step_events[0]["node"] == "retrieve_context"
+    assert step_events[0]["status"] == "degraded"
+    assert step_events[1]["node"] == "context_gate"
+    assert step_events[1]["status"] == "ok"
 
 
 def test_citation_extraction_accepts_canonical_ids_but_not_invented_ids() -> None:

@@ -51,7 +51,9 @@ async def ask_question_stream(request: Request, ask_req: AskRequest) -> Streamin
         try:
             for kind, payload in handler(ask_req.question, thread_id=ask_req.thread_id):
                 if kind == "step":
-                    yield json.dumps({"type": "step", "node": payload}) + "\n"
+                    node = payload["node"] if isinstance(payload, dict) else payload
+                    status = payload.get("status", "ok") if isinstance(payload, dict) else "ok"
+                    yield json.dumps({"type": "step", "node": node, "status": status}) + "\n"
                 elif kind == "response":
                     data = _to_api_response(payload).model_dump()
                     yield json.dumps({"type": "response", "data": data}) + "\n"

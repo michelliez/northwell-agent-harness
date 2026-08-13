@@ -61,17 +61,26 @@ def retrieve_context_node(
             ),
         }
 
-    chunks = [chunk.model_dump() for chunk in result.chunks]
-    screen = screen_content(chunks, ContentSurface.TOOL_RESULT)
-    if not screen.allowed:
-        trace.record("retrieval.content_blocked", reason=screen.reason)
+    raw_chunks = [chunk.model_dump() for chunk in result.chunks]
+    clean_chunks: list[dict] = []
+    for chunk in raw_chunks:
+        screen = screen_content(chunk, ContentSurface.TOOL_RESULT)
+        if screen.allowed:
+            clean_chunks.append(chunk)
+        else:
+            trace.record(
+                "retrieval.chunk_blocked",
+                chunk_id=chunk.get("chunk_id", ""),
+                reason=screen.reason,
+            )
+    if not clean_chunks and raw_chunks:
+        trace.record("retrieval.content_blocked", reason="all chunks blocked by content screen")
         return {
             "retrieved_chunks": [],
             "answer": "I stopped because retrieved documentation failed the content screen.",
         }
-    trace.record("retrieval.completed", chunk_count=len(chunks))
-
-    return {"retrieved_chunks": chunks}
+    trace.record("retrieval.completed", chunk_count=len(clean_chunks))
+    return {"retrieved_chunks": clean_chunks}
 
 
 def context_gate_node(state: AgentState) -> dict:
