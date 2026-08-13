@@ -45,6 +45,7 @@ class AgentState(TypedDict, total=False):
     permission_scope: dict | None  # serialized host-owned PermissionScope
     query_plan: dict | None  # serialized untrusted QueryPlanAST
     plan_validation: dict | None  # serialized PlanValidationResult
+    plan_repair_count: int  # rejected-plan repair attempts consumed this run
     approved_plan: dict | None  # serialized ApprovedQueryPlan
     compiled_query: dict | None  # serialized CompiledQuery
     candidate_sql: str | None  # the draft under validation, and the final draft
@@ -95,6 +96,7 @@ def make_initial_state(
         permission_scope=None,
         query_plan=None,
         plan_validation=None,
+        plan_repair_count=0,
         approved_plan=None,
         compiled_query=None,
         candidate_sql=None,

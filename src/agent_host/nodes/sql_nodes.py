@@ -10,6 +10,7 @@ import json
 
 from langgraph.runtime import Runtime
 
+from agent_host import failure_messages
 from agent_host.budget import budget_from_env
 from agent_host.config import get_config
 from agent_host.state import AgentContext, AgentState
@@ -22,6 +23,7 @@ from sql.models import (
     CompiledQuery,
     DryRunResult,
     PermissionScope,
+    PlanValidationResult,
     QueryPlanAST,
     SchemaSnapshot,
     SqlValidationResult,
@@ -29,9 +31,14 @@ from sql.models import (
 from sql.planning import (
     permission_scope_from_snapshot,
     propose_query_plan,
+    repair_feedback,
     validate_query_plan,
 )
 from sql.validation import validate_sql
+
+# One violation-fed retry, then the rejection goes to the user. The repaired
+# plan re-enters the same deterministic authorizer; repair never approves.
+MAX_PLAN_REPAIRS = 1
 
 
 def query_plan_node(
@@ -51,10 +58,7 @@ def query_plan_node(
         trace.record("query_plan.no_schema_snapshot")
         return {
             "query_plan": None,
-            "answer": (
-                "I couldn't find enough schema information to plan a SQL query for this question. "
-                "Please ask about a specific documented table."
-            ),
+            "answer": failure_messages.SQL_NO_SCHEMA_EVIDENCE,
         }
 
     snapshot = SchemaSnapshot.model_validate(raw_snapshot)
@@ -64,6 +68,11 @@ def query_plan_node(
         for chunk in state.get("retrieved_chunks", [])
         if chunk.get("chunk_id")
     ]
+
+    feedback = _repair_feedback_from_state(state)
+    if feedback is not None:
+        trace.record("query_plan.repair_attempted")
+
     try:
         proposed = propose_query_plan(
             question,
@@ -71,13 +80,14 @@ def query_plan_node(
             citations,
             cfg,
             budget,
+            feedback=feedback,
         )
     except Exception as exc:
         trace.record("query_plan.error", error=type(exc).__name__)
         return {
             "permission_scope": scope.model_dump(),
             "query_plan": None,
-            "answer": "I couldn't create a structured query plan for this request.",
+            "answer": failure_messages.SQL_PLANNER_UNAVAILABLE,
         }
 
     trace.record("query_plan.built", table_count=len(proposed.tables))
@@ -89,6 +99,18 @@ def query_plan_node(
     }
 
 
+def _repair_feedback_from_state(state: AgentState) -> str | None:
+    """Host-composed feedback when the previous plan was rejected, else None."""
+    raw_validation = state.get("plan_validation")
+    raw_plan = state.get("query_plan")
+    if not raw_validation or not raw_plan or raw_validation.get("allowed"):
+        return None
+    return repair_feedback(
+        QueryPlanAST.model_validate(raw_plan),
+        PlanValidationResult.model_validate(raw_validation),
+    )
+
+
 def plan_safety_node(state: AgentState) -> dict:
     """Deterministically authorize a proposed plan before SQL generation."""
     cfg = get_config()
@@ -98,7 +120,7 @@ def plan_safety_node(state: AgentState) -> dict:
 
     if not raw_plan or not raw_scope:
         trace.record("plan_safety.no_plan")
-        return {"answer": "I stopped because no query plan was available."}
+        return {"answer": failure_messages.SQL_PIPELINE_STATE_MISSING}
 
     proposed = QueryPlanAST.model_validate(raw_plan)
     scope = PermissionScope.model_validate(raw_scope)
@@ -114,11 +136,21 @@ def plan_safety_node(state: AgentState) -> dict:
         citations,
     )
     if not validation.allowed:
+        repair_count = state.get("plan_repair_count", 0)
         trace.record(
             "plan_safety.rejected",
             violations=", ".join(v.code for v in validation.violations),
             details=[{"code": v.code, "evidence": v.evidence} for v in validation.violations],
+            repair_attempts_used=repair_count,
         )
+        if repair_count < MAX_PLAN_REPAIRS:
+            # No answer: the graph routes back to query_plan for one
+            # violation-fed repair attempt.
+            return {
+                "plan_validation": validation.model_dump(),
+                "approved_plan": None,
+                "plan_repair_count": repair_count + 1,
+            }
         return {
             "plan_validation": validation.model_dump(),
             "approved_plan": None,
@@ -151,7 +183,7 @@ def write_sql_node(
     raw_plan = state.get("approved_plan")
     if not raw_plan:
         trace.record("generate_sql.no_plan")
-        return {"answer": "I stopped because no query plan was available for SQL generation."}
+        return {"answer": failure_messages.SQL_PIPELINE_STATE_MISSING}
 
     plan = ApprovedQueryPlan.model_validate(raw_plan)
 
@@ -160,10 +192,7 @@ def write_sql_node(
     except UnsupportedPlanError as compiler_error:
         trace.record("write_sql.compiler_unsupported", reason=compiler_error.code)
         return {
-            "answer": (
-                "The approved query plan uses a feature the deterministic SQL "
-                f"compiler does not support yet: {compiler_error.code}."
-            )
+            "answer": failure_messages.SQL_COMPILER_UNSUPPORTED.format(code=compiler_error.code)
         }
 
     trace.record(
@@ -200,7 +229,7 @@ def validate_sql_node(
         trace.record("validate_sql.no_sql")
         return {
             "validation_result": None,
-            "answer": "I stopped because no SQL was generated.",
+            "answer": failure_messages.SQL_PIPELINE_STATE_MISSING,
         }
 
     snapshot = SchemaSnapshot()

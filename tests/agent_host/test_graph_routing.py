@@ -384,9 +384,15 @@ def test_plan_safety_with_answer_routes_to_result_safety() -> None:
     assert _route_from_plan_safety(state) == "result_safety"
 
 
-def test_plan_safety_without_answer_routes_to_write_sql() -> None:
-    state = _state(answer=None)
+def test_plan_safety_with_approved_plan_routes_to_write_sql() -> None:
+    state = _state(answer=None, approved_plan={"plan": {}})
     assert _route_from_plan_safety(state) == "write_sql"
+
+
+def test_plan_safety_rejection_without_answer_routes_to_plan_repair() -> None:
+    # First rejection withholds the answer so one violation-fed repair runs.
+    state = _state(answer=None, approved_plan=None)
+    assert _route_from_plan_safety(state) == "query_plan"
 
 
 def test_write_sql_with_answer_routes_to_result_safety() -> None:

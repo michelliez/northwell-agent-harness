@@ -150,7 +150,12 @@ def _route_from_query_plan(state: AgentState) -> str:
 def _route_from_plan_safety(state: AgentState) -> str:
     if state.get("answer"):
         return "result_safety"
-    return "write_sql"
+    if state.get("approved_plan"):
+        return "write_sql"
+    # Rejected without a terminal answer: one violation-fed repair pass.
+    # Bounded because plan_safety only withholds the answer while
+    # plan_repair_count < MAX_PLAN_REPAIRS.
+    return "query_plan"
 
 
 def _route_from_write_sql(state: AgentState) -> str:
@@ -284,7 +289,11 @@ def build_graph(checkpointer=None):
     builder.add_conditional_edges(
         "plan_safety",
         _route_from_plan_safety,
-        {"result_safety": "result_safety", "write_sql": "write_sql"},
+        {
+            "result_safety": "result_safety",
+            "write_sql": "write_sql",
+            "query_plan": "query_plan",
+        },
     )
     builder.add_conditional_edges(
         "write_sql",

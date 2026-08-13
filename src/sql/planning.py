@@ -67,18 +67,26 @@ def propose_query_plan(
     budget: ExecutionBudget,
     *,
     client: MessagesClient | None = None,
+    feedback: str | None = None,
 ) -> QueryPlanAST:
-    """Ask Claude for one schema-constrained plan through a forced tool call."""
-    messages = [
-        {
-            "role": "user",
-            "content": (
-                f"User request:\n{question}\n\n"
-                f"Permission scope:\n{scope.model_dump_json()}\n\n"
-                f"Available citation IDs:\n{json.dumps(citations)}"
-            ),
-        }
-    ]
+    """Ask Claude for one schema-constrained plan through a forced tool call.
+
+    ``feedback`` carries host-composed rejection details from a previous
+    attempt (see ``repair_feedback``); the corrected plan still goes through
+    the same deterministic authorization — feedback never grants anything.
+    """
+    content = (
+        f"User request:\n{question}\n\n"
+        f"Permission scope:\n{scope.model_dump_json()}\n\n"
+        f"Available citation IDs:\n{json.dumps(citations)}"
+    )
+    if feedback:
+        content += (
+            "\n\nYour previous plan was rejected by the deterministic "
+            "authorizer. Emit a corrected plan that resolves every violation "
+            f"below without changing the user's request.\n{feedback}"
+        )
+    messages = [{"role": "user", "content": content}]
     budget.reserve_model_call(messages)
     active_client = client or Anthropic(
         api_key=config.require_api_key(),
@@ -102,6 +110,23 @@ def propose_query_plan(
     if len(tool_uses) != 1:
         raise RuntimeError("query planner did not return exactly one plan")
     return QueryPlanAST.model_validate(tool_uses[0].input)
+
+
+def repair_feedback(proposed: QueryPlanAST, validation: PlanValidationResult) -> str:
+    """Serialize a rejection into deterministic, host-owned repair guidance.
+
+    Only host-produced material goes in: the rejected plan the model itself
+    emitted and the authorizer's violation codes, messages, and evidence.
+    Retrieved documentation content is never echoed here.
+    """
+    lines = []
+    for violation in validation.violations:
+        line = f"- {violation.code}: {violation.message}"
+        value = violation.evidence.get("value")
+        if value is not None:
+            line += f" Evidence: {json.dumps(value, sort_keys=True, default=str)}"
+        lines.append(line)
+    return f"Rejected plan:\n{proposed.model_dump_json()}\n\nViolations:\n" + "\n".join(lines)
 
 
 def validate_query_plan(
