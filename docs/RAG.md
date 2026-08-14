@@ -10,150 +10,116 @@ evidence source, not authorization and not a substitute for BigQuery metadata.
 
 ```text
 approved HTML
-  -> deterministic parsing and chunking
-  -> SQLite documents, chunks, facts, and FTS index
-  -> bounded keyword retrieval
-  -> cited RetrievedChunk values
-  -> context gate
-       |-> grounded documentation answer
-       `-> evidence-backed SchemaSnapshot -> query plan -> SQL validation
+  -> deterministic parsing and chunking (retrieval/indexer.py)
+  -> SQLite: docs, chunks, FTS, section facts, hierarchy nodes,
+     FK relationship edges, doc2query expansion column
+  -> lexical BM25 retrieval, optionally fused with dense retrieval (RRF)
+  -> per-chunk content screening
+  -> cited chunks
+       |-> documentation_lookup: single-shot retrieve -> grounded answer
+       `-> safe_sql_generation: exploration tool loop -> context gate
+             -> evidence-backed SchemaSnapshot -> typed query plan
+             -> deterministic authorization -> compile -> SQL validation
 ```
 
 The graph calls retrieval directly in process. There is no MCP transport or
-remote retrieval service in the current architecture.
+remote retrieval service.
 
-## Artifact Contract
+## Index Artifact Contract
 
-The generated index defaults to `.local/rag/index.sqlite` and is never tracked.
-`retrieval/index_contract.py` owns the schema version. Reindex whenever the
-schema or chunker version changes.
+`retrieval/index_contract.py` owns two versions that mean different things:
+`INDEX_SCHEMA_VERSION` (SQLite layout; rebuilding preserves datasets) and
+`INDEX_CHUNKER_VERSION` (chunk identity; bumping invalidates every dataset
+keyed by `chunk_id`). `search.open_connection` refuses an index that
+disagrees with either. Retrieval metrics are only comparable across indexes
+built at the same chunker version.
 
-Stable identifiers are path/content derived so unchanged documents and chunks
-remain comparable across runs. The index stores:
+The index stores, per document: bounded text chunks with headings, category,
+hash, and token counts; structured section facts; FTS data with a weighted
+`generated_queries` doc2query expansion column (BM25 weight 0.5, below all
+documentation-text weights so expansion vocabulary can bridge analyst
+phrasing but never outshout a direct match); a parent-linked `nodes` tree of
+the document's sections (typed helpers in `retrieval/hierarchy.py`); and
+`table_relationships` edges parsed only from Epic's Foreign Key Information
+tables, each carrying the `evidence_chunk_id` it was read from.
 
-- document identity and source path;
-- bounded text chunks and headings;
-- chunk category, hash, and approximate token count;
-- structured facts for documented-but-unavailable sections;
-- FTS data for lexical retrieval;
-- an index version for traceability.
+Indexes live outside the repositories under the shared `fixtures/` junction
+and are never committed. The dense FAISS artifact
+(`fixtures/embeddings/dense-corpus-qwen06b`) is coupled to the index it was
+built from and is distributed out of band.
 
-The indexer must reject or split oversized content, process nested tables once,
-and avoid indexing empty placeholder sections as useful context.
+## Retrieval Strategies
 
-## Retrieval Contract
+**Lexical (always on).** Query tokens are normalized (stopwords, light
+stemming, identifier preservation — `pat_enc` and code-bearing tokens match
+exactly, prose tokens match as prefixes) and ranked by selectivity against
+the FTS vocabulary before querying. Results are grouped with per-document
+chunk caps so one verbose table cannot take the whole budget.
 
-`retrieve_documentation()` accepts a query, index path, `ExecutionBudget`, and
-requested result count. It:
+**Dense + hybrid (behind `DENSE_INDEX_DIR`, ADR 009).** When configured,
+the FTS ranking is fused with a FAISS dense ranking (Qwen3-Embedding query
+encoder) by reciprocal rank. Unset, the lexical path runs alone and behaves
+byte-identically to the pre-dense code. The exploration tool loop stays
+FTS-only on purpose: its queries are identifier-shaped, which is where BM25
+wins. Measured on the certified gold-260 benchmark: hybrid `.723` document
+hit@5 vs `.656` FTS alone; the frozen three-arm table lives in
+`src/retrieval/README.md` and RRF constants change only with a rerun.
 
-1. validates the requested count;
-2. applies `ExecutionBudget.max_retrieved_chunks`;
-3. searches the local FTS index;
-4. returns typed chunks with source paths, headings, ranks, and index version.
+**Relationship expansion (bounded, deterministic).** After ranking, an
+optional one-hop expansion appends up to five FK-neighbor documents.
+Neighbor slots are ranked by query-token overlap with the neighbor table and
+joining column names, tie-broken by seed rank then documented FK ordinal —
+a deterministic lookup after ranking, never recursive retrieval and never a
+model decision.
 
-Retrieved HTML is untrusted content. It may support factual answers but cannot
-change policy, routing, permissions, or graph behavior.
+The hierarchy tree and relationship graph are the implemented remainder of
+the earlier hierarchical-RAG proposal. Its later phases (summary search,
+adaptive tree traversal, agent-routed expansion) were dropped when measured
+dense/hybrid fusion addressed the same vocabulary-mismatch problem with less
+machinery.
 
-Keyword retrieval is the only active strategy. Vector, semantic, and graph
-retrieval are future enhancements and must not be implied by the current API —
-including by placeholder functions that exist only to raise. A stub reads as
-partial support and invites callers to reference something that will never
-work, so absence is the honest signal. `retrieval/search.py` exposes no
-strategy it does not implement, and a test asserts that.
+**Screening.** Retrieved HTML is untrusted content: it may support factual
+answers but cannot change policy, routing, permissions, or graph behavior.
+Chunks are content-screened individually, so one oversized or flagged chunk
+drops alone instead of failing the batch.
 
-## Context Gate
+## Context Gate and Schema Evidence
 
-The context gate prevents downstream work when retrieval is empty or unsuitable.
-It interrupts for a more specific table, column, or topic and resumes through
-the input policy gate. Clarification attempts are bounded.
+The context gate blocks downstream work when retrieval is empty or
+unsuitable, interrupting for a more specific table, column, or topic with
+bounded clarification attempts. Documentation answers must cite retrieved
+chunk IDs; when evidence cannot support an answer the system says so rather
+than filling gaps from model knowledge.
 
-Documentation answers must cite retrieved chunk IDs. If the evidence cannot
-support an answer, the system says so rather than filling gaps from model
-knowledge.
-
-## Schema Evidence
-
-For SQL requests, retrieved column-information chunks are transformed into:
-
-```text
-SchemaSnapshot
-  tables[]
-    name
-    description
-    source_chunk_ids[]
-    columns[]
-      name
-      data_type
-      safety
-      source_evidence
-```
-
-Safety values are `identifier`, `sensitive`, `safe_aggregate`, or `unknown`.
-Unknown classifications block SQL planning. This extraction is deliberately
-conservative; it does not invent undocumented tables or columns.
-
-The current extractor uses documented headings, paths, type text, and bounded
-name/content heuristics. Before production use, it should be replaced or
-augmented with authoritative BigQuery and governance metadata while preserving
-the same explicit `SchemaSnapshot` input to validation.
+For SQL requests, explored column-information chunks become a
+`SchemaSnapshot` (tables, columns, data types, safety classes, source chunk
+IDs). Safety is `identifier`, `sensitive`, `safe_aggregate`, or `unknown`;
+unknown blocks planning. Classification is deny-by-default: name and prose
+markers are checked before any promotion, and the surveyed Epic suffix
+allowlist (`_C`, `_YN`, `_DT`, …) promotes only what those checks passed.
+Evidence may narrow a permission and never widen one.
 
 ## SQL Boundary
 
-SQL generation receives only the user question and approved `SchemaSnapshot`.
-SQLGlot validation independently derives referenced tables and columns and
-checks them against that snapshot. A generator's declared table list is advisory
-until it matches the parsed SQL.
-
-Validation permits only bounded read-only aggregate drafts. It rejects unsafe
-operations, unknown tables or columns, stars, prohibited functions, sensitive
-projections, unsupported identifier use, and non-aggregate output. Repairable
-failures may cycle through generation up to `ExecutionBudget.max_sql_repairs`.
-
-Passing static validation does not authorize execution. The graph returns the
-draft with `execution_status="not_configured"`.
-
-## Future Integrations
-
-Implement these in order, keeping each boundary fail closed:
-
-1. Improve schema extraction accuracy and retrieval evaluation.
-2. Add authoritative BigQuery schema metadata behind `SchemaSnapshot`.
-3. Add authenticated user/role/purpose authorization.
-4. Add BigQuery dry-run and deterministic cost limits.
-5. Add explicitly approved read-only execution.
-6. Add result-level identifier, PHI/PII, and small-cell screening.
-7. Add grounded interpretation and citations for executed results.
-8. Replace in-memory checkpoints with durable storage when a user-facing UI
-   requires cross-process conversation state.
-
-Governed Python generation, vector/graph retrieval, and autonomous query
-execution are not prerequisites for the MVP and should be added only for
-demonstrated needs. None of them has a placeholder in the codebase; add the
-boundary when the integration is real, not before.
+The model proposes a typed query plan, never SQL text. A deterministic
+authorizer checks the plan against the snapshot; an approved plan is
+mechanically compiled to BigQuery SQL; an independent sqlglot validator
+re-derives every referenced table and column and confirms the SQL matches
+the approved plan canonically. On a first authorization rejection the
+planner gets one violation-fed retry through the same authorizer
+(post-compile SQL repair was removed by ADR 008 — the mismatch check makes
+it structurally pointless). Passing validation does not authorize
+execution: dry-run, cost gates, read-only execution, result safety, and
+audit logging exist as adapters (ADRs 002–005) with no graph route reaching
+them, and the graph returns drafts with `execution_status="not_configured"`.
 
 ## Evaluation
 
-Retrieval changes should measure at least:
+Evaluation lives in the sibling `dsi_clarity_agent_eval` repository: a
+260-query human-curated benchmark (`evals/retrieval/benchmark/`), a
+three-arm runner (fts / dense / hybrid), and a statistical sufficiency
+toolkit (Wilson CIs, sign test, paired bootstrap, MDE). Record the chunker
+version and gold-set version beside every reported number.
 
-- known-document and known-column hit rate;
-- ranking quality for fixture questions;
-- empty/weak-context behavior;
-- citation completeness;
-- unsupported schema-claim rate;
-- stable index identifiers and versions;
-- chunk size and duplicate-content audit results.
-
-The repository's small approved fixtures may be committed. Proprietary Clarity
-HTML, generated indexes, retrieved production schemas, and real query results
-must not be committed.
-
-## Definition of Done for the Current Stage
-
-- Approved HTML can be indexed and audited locally.
-- Keyword retrieval is bounded and produces typed cited chunks.
-- Documentation answers use only retrieved evidence.
-- SQL planning consumes an explicit evidence-backed schema snapshot.
-- Static validation is schema-aware and deterministic.
-- Repair and clarification cycles are bounded.
-- BigQuery execution is impossible through the graph.
-- Tests, lint, typing, build, CLI help, and index/search smoke checks pass.
+Never commit: proprietary Clarity HTML, built indexes, dense artifacts,
+retrieved production schemas, sensitive traces, or real query results.
