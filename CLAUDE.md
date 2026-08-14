@@ -23,24 +23,10 @@ Never add Co-Authored-By or any AI attribution to commits, PRs, or comments.
 
 ## Documentation
 
-Canonical documentation is a **closed set**: the requirement documents above,
-ADRs, and READMEs beside the code they describe. `docs/reference/` is historical
-and never updated. `tests/test_documentation_layout.py` warns when anything else
-appears; it does not fail the build, because this is a norm rather than a wall.
-
-Before adding a markdown file, place the content instead:
-
-| Content | Home |
-|---|---|
-| A decision or trade-off | `docs/adr/NNN-short-title.md` |
-| A changed contract | the one canonical document that owns it |
-| A plan, roadmap, status, or TODO | the pull-request description or an issue |
-| Superseded material | `docs/reference/` |
-
-A plan stored in `docs/` silently claims to be current forever, and the next
-reader cannot tell when it stopped being true. The same words in a pull-request
-description are dated by construction. Prefer editing an existing document over
-adding one, and deleting a wrong document over annotating it.
+Decisions and trade-offs go to `docs/adr/NNN-short-title.md`; a changed
+contract belongs in the document that owns it; `docs/reference/` is historical
+and never updated. Prefer editing an existing document over adding one, and
+deleting a wrong document over annotating it.
 
 ## Invariants
 
