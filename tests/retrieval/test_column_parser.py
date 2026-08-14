@@ -216,7 +216,7 @@ def _valid_record(**overrides: object) -> dict[str, object]:
         "section_name": "Column Information",
         "text": "Table CLARITY_ADT. Column EVENT_TYPE_C. Description: Event type.",
         "text_hash": HASH,
-        "parser_version": "epic-genq-html-v1",
+        "parser_version": "epic-genq-html-v3",
     }
     record.update(overrides)
     return record
