@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any, Protocol
 
 from anthropic import Anthropic
@@ -129,6 +130,14 @@ def repair_feedback(proposed: QueryPlanAST, validation: PlanValidationResult) ->
     return f"Rejected plan:\n{proposed.model_dump_json()}\n\nViolations:\n" + "\n".join(lines)
 
 
+# The only identifier shape the compiler may ever emit. Snapshot names come
+# from retrieved documentation, which is untrusted: a poisoned table or column
+# name would otherwise flow through an approved plan into SQL text (sqlglot
+# tokenizes raw names, so a quote-bearing name crashes or worse). Aliases are
+# already regex-bound by the plan model; this closes the same door for names.
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,255}$")
+
+
 def validate_query_plan(
     question: str,
     proposed: QueryPlanAST,
@@ -142,6 +151,47 @@ def validate_query_plan(
 
     if _normalized(proposed.objective) != _normalized(question):
         violations.append(_violation("objective_mismatch", "Plan objective differs from prompt."))
+
+    malformed = {
+        name
+        for name in [
+            *proposed.tables,
+            *(ref.table for ref in _all_references(proposed)),
+            *(ref.column for ref in _all_references(proposed)),
+        ]
+        if not _IDENTIFIER_RE.fullmatch(name)
+    }
+    if malformed:
+        violations.append(
+            _violation(
+                "malformed_identifier",
+                "Table and column names must be plain alphanumeric identifiers.",
+                malformed,
+            )
+        )
+
+    restricted_names = {
+        column.name.casefold()
+        for table in snapshot.tables
+        for column in table.columns
+        if column.safety != "safe_aggregate"
+    }
+    shadowing = {
+        alias
+        for alias in [
+            *(item.alias for item in proposed.aggregations),
+            *(item.alias for item in proposed.time_buckets),
+        ]
+        if alias.casefold() in restricted_names
+    }
+    if shadowing:
+        violations.append(
+            _violation(
+                "alias_shadows_restricted_column",
+                "Output aliases may not reuse a restricted column's name.",
+                shadowing,
+            )
+        )
 
     proposed_tables = {name.casefold() for name in proposed.tables}
     if len(proposed_tables) > scope.max_tables:

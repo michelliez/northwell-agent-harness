@@ -45,6 +45,13 @@ _GUIDANCE: dict[str, str] = {
         "the chosen filter column is not classified as safe."
     ),
     "unsafe_join": "Tables can only be joined on their documented identifier columns.",
+    "malformed_identifier": (
+        "Use plain table and column names exactly as documented — one "
+        "referenced name contains unsupported characters."
+    ),
+    "alias_shadows_restricted_column": (
+        "Choose different output names — one result alias matches a restricted column's name."
+    ),
     "citation_out_of_scope": "Ask again so the plan can cite the retrieved documentation.",
     "output_shape_mismatch": "Ask again with a simpler description of the desired output.",
     "time_bucket_unsafe_column": (
