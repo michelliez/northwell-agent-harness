@@ -164,7 +164,6 @@ def test_repair_feedback_is_host_composed_and_specific() -> None:
 
     assert "objective_mismatch" in text
     assert "Return something else entirely" in text  # the rejected plan is shown
-    assert QUESTION not in text or True  # question travels separately, not asserted here
 
 
 def test_propose_query_plan_embeds_feedback_in_the_request(tmp_path) -> None:

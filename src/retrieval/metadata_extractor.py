@@ -147,7 +147,12 @@ def _table_name(source_path: str, heading_path: str) -> str:
     return table_name.upper()
 
 
-def _write_atomic(path: Path, lines: Iterable[str]) -> None:
+def write_atomic(path: Path, lines: Iterable[str]) -> None:
+    """Replace an artifact only after its complete contents have been written.
+
+    Public surface: the evaluation repository's dataset and artifact writers
+    import this rather than carrying copies.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
         dir=path.parent,
@@ -308,8 +313,8 @@ def extract_metadata_corpus(config: MetadataExtractorConfig) -> MetadataExtracti
         output_records_hash=records_hash,
     )
 
-    _write_atomic(config.output_path, record_lines)
-    _write_atomic(
+    write_atomic(config.output_path, record_lines)
+    write_atomic(
         config.report_path,
         [json.dumps(report.model_dump(), indent=2, sort_keys=True, ensure_ascii=False)],
     )

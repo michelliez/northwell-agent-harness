@@ -6,11 +6,8 @@ import argparse
 import hashlib
 import json
 import logging
-import os
 import re
-import tempfile
 from collections import Counter
-from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,6 +23,7 @@ from retrieval.html_utils import (
     owned_cells,
     owned_rows,
 )
+from retrieval.metadata_extractor import write_atomic
 
 LOGGER = logging.getLogger(__name__)
 PARSER_VERSION = "epic-genq-html-v3"
@@ -314,23 +312,6 @@ def parse_epic_html(html_path: Path, *, corpus_root: Path) -> ParsedSource:
     return ParsedSource(records=records, unavailable_section_count=unavailable, warnings=warnings)
 
 
-def _write_atomic(path: Path, lines: Iterable[str]) -> None:
-    """Replace an artifact only after its complete contents have been written."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", text=True
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as output:
-            for line in lines:
-                output.write(line)
-                output.write("\n")
-        Path(temporary_name).replace(path)
-    except BaseException:
-        Path(temporary_name).unlink(missing_ok=True)
-        raise
-
-
 def build_corpus(config: ParserConfig) -> ParseReport:
     """Parse a deterministic file subset and write JSONL plus an inspection report."""
     config.validate()
@@ -377,8 +358,8 @@ def build_corpus(config: ParserConfig) -> ParseReport:
         warnings=warnings,
         corpus_hash=corpus_hash,
     )
-    _write_atomic(config.output_path, jsonl_lines)
-    _write_atomic(
+    write_atomic(config.output_path, jsonl_lines)
+    write_atomic(
         config.report_path,
         [json.dumps(report.model_dump(), indent=2, sort_keys=True, ensure_ascii=False)],
     )
