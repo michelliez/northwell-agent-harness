@@ -588,10 +588,33 @@ def search_ranked_chunks(
     )
 
 
+def _expansion_overlap_tokens(text: str) -> set[str]:
+    """Tokens for query/edge overlap scoring: casefolded, underscore-split.
+
+    Both the raw token and its light plural stem are kept (mirroring
+    ``normalize_search_token``) so "encounters" in a question matches an
+    ENCOUNTER table token from either side.
+    """
+    tokens: set[str] = set()
+    for raw in re.findall(r"[a-z0-9]+", text.casefold()):
+        if len(raw) < 2 or raw in STOPWORDS:
+            continue
+        tokens.add(raw)
+        if (
+            raw.isalpha()
+            and len(raw) > 4
+            and raw.endswith("s")
+            and not raw.endswith(("is", "ss", "us"))
+        ):
+            tokens.add(raw[:-1])
+    return tokens
+
+
 def expand_document_relationships(
     cur: sqlite3.Cursor,
     *,
     seed_document_ids: list[str],
+    query: str = "",
     max_related_tables: int = 5,
 ) -> list[dict]:
     """Return a bounded one-hop graph expansion from ranked seed documents.
@@ -599,12 +622,21 @@ def expand_document_relationships(
     Every returned edge originated in an explicit Foreign Key Information row.
     Expansion is deliberately one hop: this is deterministic graph lookup, not
     recursive retrieval or an LLM decision.
+
+    Neighbor slots are ranked by query-token overlap with the neighbor table
+    and joining column names. Hub tables carry thousands of edges, so an
+    unranked fill is effectively alphabetical and query-independent — measured
+    at zero retrieval delta. Ties (including every edge when the query shares
+    no tokens) fall back to seed rank, then the documented FK ordinal, so
+    identical inputs always produce identical output.
     """
     if max_related_tables < 1 or not seed_document_ids:
         return []
 
-    expanded: list[dict] = []
-    seen_neighbors: set[str] = set()
+    query_tokens = _expansion_overlap_tokens(query)
+    seeds = {str(doc_id) for doc_id in seed_document_ids}
+    # neighbor doc id -> (sort_key, record); each neighbor keeps its best edge
+    candidates: dict[str, tuple[tuple, dict]] = {}
     for seed_rank, seed_doc_id in enumerate(seed_document_ids, start=1):
         rows = cur.execute(
             """SELECT r.relationship_id, r.source_doc_id, r.target_doc_id,
@@ -617,22 +649,42 @@ def expand_document_relationships(
                JOIN docs source_doc ON source_doc.doc_id = r.source_doc_id
                JOIN docs target_doc ON target_doc.doc_id = r.target_doc_id
                WHERE r.source_doc_id = ? OR r.target_doc_id = ?
-               ORDER BY r.target_table, r.source_table, r.ordinal, r.relationship_id""",
+               ORDER BY r.relationship_id""",
             (seed_doc_id, seed_doc_id),
         ).fetchall()
         for row in rows:
             outbound = row["source_doc_id"] == seed_doc_id
-            neighbor_doc_id = row["target_doc_id"] if outbound else row["source_doc_id"]
-            if neighbor_doc_id in seen_neighbors or neighbor_doc_id in seed_document_ids:
+            neighbor_doc_id = str(row["target_doc_id"] if outbound else row["source_doc_id"])
+            if neighbor_doc_id in seeds:
                 continue
-            seen_neighbors.add(str(neighbor_doc_id))
-            expanded.append(
+            neighbor_table = row["target_table"] if outbound else row["source_table"]
+            edge_text = " ".join(
+                part
+                for part in (neighbor_table, row["source_column"], row["target_column"])
+                if part
+            )
+            overlap = len(query_tokens & _expansion_overlap_tokens(edge_text))
+            ordinal = row["ordinal"]
+            sort_key = (
+                -overlap,
+                seed_rank,
+                ordinal is None,
+                ordinal if ordinal is not None else 0,
+                row["relationship_id"],
+            )
+            existing = candidates.get(neighbor_doc_id)
+            if existing is not None and existing[0] <= sort_key:
+                continue
+            candidates[neighbor_doc_id] = (
+                sort_key,
                 {
                     "relationship_id": row["relationship_id"],
                     "seed_document_id": seed_doc_id,
                     "seed_rank": seed_rank,
                     "direction": "outbound" if outbound else "inbound",
-                    "related_document_id": neighbor_doc_id,
+                    "related_document_id": row["target_doc_id"]
+                    if outbound
+                    else row["source_doc_id"],
                     "related_source_path": row["target_path"] if outbound else row["source_path"],
                     "source_table": row["source_table"],
                     "target_table": row["target_table"],
@@ -641,11 +693,10 @@ def expand_document_relationships(
                     "ordinal": row["ordinal"],
                     "relationship_type": row["relationship_type"],
                     "evidence_chunk_id": row["evidence_chunk_id"],
-                }
+                },
             )
-            if len(expanded) >= max_related_tables:
-                return expanded
-    return expanded
+    best = sorted(candidates.values(), key=lambda item: item[0])[:max_related_tables]
+    return [record for _, record in best]
 
 
 def retrieve_documentation_context(
@@ -709,6 +760,7 @@ def retrieve_documentation_context(
             expand_document_relationships(
                 cur,
                 seed_document_ids=list(dict.fromkeys(chunk["doc_id"] for chunk in chunks)),
+                query=query,
                 max_related_tables=max_related_tables,
             )
             if include_relationships

@@ -5,6 +5,7 @@ import sqlite3
 from retrieval.search import (
     MAX_FTS_QUERY_TOKENS,
     document_hint,
+    expand_document_relationships,
     fts5_query,
     match_count_lookup,
     search_ranked_chunks,
@@ -252,6 +253,104 @@ def test_ranked_search_filters_conversational_noise_and_weights_title() -> None:
     )
 
     assert [result["chunk_id"] for result in results] == ["admission"]
+
+
+def _relationship_connection() -> sqlite3.Connection:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """CREATE TABLE docs (doc_id TEXT PRIMARY KEY, source_path TEXT);
+           CREATE TABLE table_relationships (
+               relationship_id INTEGER PRIMARY KEY,
+               source_doc_id TEXT, target_doc_id TEXT,
+               source_table TEXT, target_table TEXT,
+               source_column TEXT, target_column TEXT,
+               ordinal INTEGER, relationship_type TEXT, evidence_chunk_id TEXT
+           );"""
+    )
+    conn.executemany(
+        "INSERT INTO docs VALUES (?, ?)",
+        [
+            ("seed", "SEED_TABLE.html"),
+            ("alpha", "AAA_ALPHA.html"),
+            ("admit", "ENCOUNTER_ADMISSION.html"),
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO table_relationships VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (1, "seed", "alpha", "SEED_TABLE", "AAA_ALPHA", "LINE", "LINE", 1, "fk", "c1"),
+            (
+                2,
+                "seed",
+                "admit",
+                "SEED_TABLE",
+                "ENCOUNTER_ADMISSION",
+                "PAT_ID",
+                "PAT_ID",
+                1,
+                "fk",
+                "c2",
+            ),
+        ],
+    )
+    return conn
+
+
+def test_expansion_ranks_neighbors_by_query_overlap_not_alphabet() -> None:
+    # AAA_ALPHA sorts first alphabetically; the query names encounters and
+    # admissions, which only ENCOUNTER_ADMISSION's tokens share.
+    conn = _relationship_connection()
+
+    expanded = expand_document_relationships(
+        conn.cursor(),
+        seed_document_ids=["seed"],
+        query="count encounters by admission date",
+        max_related_tables=1,
+    )
+
+    assert [edge["target_table"] for edge in expanded] == ["ENCOUNTER_ADMISSION"]
+
+
+def test_expansion_without_overlap_is_deterministic_by_edge_order() -> None:
+    conn = _relationship_connection()
+
+    first = expand_document_relationships(
+        conn.cursor(),
+        seed_document_ids=["seed"],
+        query="completely unrelated wording",
+        max_related_tables=2,
+    )
+    second = expand_document_relationships(
+        conn.cursor(),
+        seed_document_ids=["seed"],
+        query="completely unrelated wording",
+        max_related_tables=2,
+    )
+
+    assert first == second
+    assert [edge["target_table"] for edge in first] == ["AAA_ALPHA", "ENCOUNTER_ADMISSION"]
+
+
+def test_expansion_keeps_the_best_scoring_edge_per_neighbor() -> None:
+    conn = _relationship_connection()
+    # A second, higher-ordinal edge to the same neighbor must not produce a
+    # duplicate entry, and the surviving edge is the better-ranked one.
+    conn.execute(
+        "INSERT INTO table_relationships VALUES (3, 'seed', 'admit', 'SEED_TABLE', "
+        "'ENCOUNTER_ADMISSION', 'LINE', 'LINE', 2, 'fk', 'c3')"
+    )
+
+    expanded = expand_document_relationships(
+        conn.cursor(),
+        seed_document_ids=["seed"],
+        query="encounter admission",
+        max_related_tables=5,
+    )
+
+    admission_edges = [edge for edge in expanded if edge["target_table"] == "ENCOUNTER_ADMISSION"]
+    assert len(admission_edges) == 1
+    assert admission_edges[0]["relationship_id"] == 2
 
 
 def test_ranked_search_returns_chunks_holding_any_term() -> None:
