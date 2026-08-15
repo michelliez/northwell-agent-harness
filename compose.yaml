@@ -1,0 +1,52 @@
+services:
+  api:
+    build: .
+    command: uvicorn api.main:app --app-dir src --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      ALLOWED_ORIGINS: "http://localhost:8501"
+      RAG_DB_PATH: /opt/clarity/rag/index.sqlite
+      DENSE_INDEX_DIR: ""
+      ARTIFACT_PATH: /var/lib/clarity
+      PYTHONUNBUFFERED: "1"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      AI_HUB_API_KEY: "${AI_HUB_API_KEY:-}"
+      ANTHROPIC_BASE_URL: "${ANTHROPIC_BASE_URL:-}"
+      ANTHROPIC_CUSTOM_HEADERS: "${ANTHROPIC_CUSTOM_HEADERS:-}"
+    volumes:
+      - ../fixtures/rag/index-v6-genq-combined-expansion.sqlite:/opt/clarity/rag/index.sqlite:ro
+      - clarity_artifacts:/var/lib/clarity
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  ui:
+    build: .
+    command: agent-harness-ui -h --host 0.0.0.0 --port 8501
+    ports:
+      - "8501:8501"
+    environment:
+      AGENT_API_URL: http://api:8000
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  clarity_artifacts:
+    driver: local
