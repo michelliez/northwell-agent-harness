@@ -5,13 +5,12 @@ from __future__ import annotations
 import json
 from typing import Any, Literal, get_args
 
-from anthropic import Anthropic
 from anthropic.types import ToolUseBlock
 from langgraph.runtime import Runtime
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_host.budget import BudgetExceeded, budget_from_env
-from agent_host.config import AppConfig, get_config
+from agent_host.config import AppConfig, get_anthropic_client, get_config
 from agent_host.state import AgentContext, AgentState
 from agent_host.trace_logger import TraceLogger
 
@@ -228,11 +227,7 @@ def classify_output_safety_node(
             }
         }
 
-    client = Anthropic(
-        api_key=cfg.require_api_key(),
-        base_url=cfg.require_base_url() if cfg.anthropic_base_url else None,
-        default_headers=cfg.anthropic_custom_headers,
-    )
+    client = get_anthropic_client()
 
     try:
         response = client.messages.create(

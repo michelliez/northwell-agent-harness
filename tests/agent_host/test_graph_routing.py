@@ -470,8 +470,10 @@ def test_execution_not_configured_node_does_not_execute_sql(tmp_path, monkeypatc
     result = sql_nodes.execution_not_configured_node(state)
 
     assert result["execution_status"] == "not_configured"
-    # Answer contains the SQL draft but no indication that execution occurred
-    assert "not configured" in result["answer"].lower()
+    # The SQL block must not appear in answer — the UI renders it from
+    # generated_sql to avoid a double render alongside format_response's
+    # "### Validated SQL draft" section.
+    assert "```sql" not in (result.get("answer") or "")
 
 
 # ── thread isolation ──────────────────────────────────────────────────────────

@@ -44,6 +44,31 @@ async def _prewarm_dense(application: FastAPI) -> AsyncIterator[None]:
             logger.info("Dense retrieval warm (%s)", searcher.metadata.model_name)
         except Exception:
             logger.exception("Dense pre-warm failed; hybrid will load on first request instead")
+
+    # Establish the Anthropic API connection and prime the intent-classifier
+    # prompt cache so the first user query does not pay TCP + TLS setup cost.
+    try:
+        from agent_host.config import get_anthropic_client
+        from agent_host.nodes.intent_nodes import CLASSIFIER_SYSTEM_PROMPT
+
+        cfg = get_config()
+        client = get_anthropic_client()
+        client.messages.create(
+            model=cfg.require_model(),
+            max_tokens=1,
+            system=[
+                {
+                    "type": "text",
+                    "text": CLASSIFIER_SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            messages=[{"role": "user", "content": "warm"}],
+        )
+        logger.info("Anthropic API warm and intent-classifier cache primed")
+    except Exception:
+        logger.exception("Anthropic pre-warm failed; first request will pay cold-start cost")
+
     yield
 
 

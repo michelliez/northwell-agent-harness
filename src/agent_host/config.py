@@ -3,10 +3,16 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from dotenv import load_dotenv
 
 from agent_host.trace_logger import TraceContentMode
+
+if TYPE_CHECKING:
+    from anthropic import Anthropic
+
+_anthropic_client: "Anthropic | None" = None
 
 
 @dataclass(frozen=True)
@@ -41,6 +47,26 @@ class AppConfig:
 
     def require_model(self) -> str:
         return self.model
+
+
+def get_anthropic_client() -> "Anthropic":
+    """Return a process-level Anthropic client, creating it once on first call.
+
+    Reusing a single client keeps the underlying httpx connection pool alive
+    across requests, which eliminates TCP + TLS handshake latency on every
+    model call. The client is safe to share across threads.
+    """
+    global _anthropic_client
+    if _anthropic_client is None:
+        from anthropic import Anthropic
+
+        cfg = get_config()
+        _anthropic_client = Anthropic(
+            api_key=cfg.require_api_key(),
+            base_url=cfg.require_base_url() if cfg.anthropic_base_url else None,
+            default_headers=cfg.anthropic_custom_headers,
+        )
+    return _anthropic_client
 
 
 def get_config() -> AppConfig:

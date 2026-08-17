@@ -161,6 +161,23 @@ def test_objective_check_tolerates_punctuation_differences() -> None:
     assert result.allowed is True
 
 
+def test_objective_check_tolerates_dropped_write_sql_prefix() -> None:
+    """'Write SQL to X' and 'X' are the same analytical goal.
+
+    The model consistently treats 'Write SQL to' as an imperative prefix and
+    omits it from the objective field. Both sides strip the prefix before
+    comparison so the repair slot is not wasted on a non-issue.
+    """
+    result = validate_query_plan(
+        "Write SQL to count all A0H_MAP rows",
+        _count_plan(objective="Count all A0H_MAP rows"),
+        _scope(),
+        {"chunk-a0h"},
+    )
+
+    assert result.allowed is True
+
+
 def test_objective_drift_is_still_rejected() -> None:
     result = validate_query_plan(
         "Count all A0H_MAP rows",

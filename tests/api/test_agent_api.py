@@ -383,4 +383,6 @@ def test_citation_extraction_accepts_canonical_ids_but_not_invented_ids() -> Non
         }
     )
 
-    assert update == {"citations": [chunk_id]}
+    # Chunk-ID bracket stripped from prose; non-ID bracket preserved.
+    assert update["citations"] == [chunk_id]
+    assert update["answer"] == "Supported, not [INVENTED]."

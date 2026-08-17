@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import json
 
-from anthropic import Anthropic
 from anthropic.types import TextBlock, ToolUseBlock
 from langgraph.runtime import Runtime
 
 from agent_host.budget import BudgetExceeded, budget_from_env
-from agent_host.config import get_config
+from agent_host.config import get_anthropic_client, get_config
 from agent_host.state import AgentContext, AgentState
 from agent_host.tools import execute_retrieval_tool, tools_for_intent
 from agent_host.trace_logger import TraceLogger
@@ -47,11 +46,7 @@ def exploration_node(
     stop_reason = "no_tools" if not tools else "max_rounds"
 
     try:
-        client = Anthropic(
-            api_key=cfg.require_api_key(),
-            base_url=cfg.require_base_url() if cfg.anthropic_base_url else None,
-            default_headers=cfg.anthropic_custom_headers,
-        )
+        client = get_anthropic_client()
         while tools and budget.rounds_used < budget.max_rounds:
             budget.reserve_round()
             budget.reserve_model_call(messages)

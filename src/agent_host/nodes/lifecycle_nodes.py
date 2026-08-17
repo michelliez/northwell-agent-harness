@@ -10,7 +10,14 @@ from agent_host.trace_logger import TraceLogger
 
 
 def interpretation_and_citations_node(state: AgentState) -> dict:
-    """Extract citations from the answer and append to accumulated citations."""
+    """Extract citations and strip inline chunk-ID markers from the answer.
+
+    The model cites with raw chunk IDs in square brackets. Those IDs are
+    recorded in the structured citations list (resolved to human-readable
+    labels by _citation_from_chunk in graph.py) and then removed from the
+    answer prose so users see clean text, not opaque hex strings.
+    Handles comma-separated multi-ID brackets defensively.
+    """
     answer = state.get("answer") or ""
     available_ids = {
         str(chunk.get("chunk_id"))
@@ -18,12 +25,30 @@ def interpretation_and_citations_node(state: AgentState) -> dict:
         if chunk.get("chunk_id")
     }
     existing = set(state.get("citations") or [])
-    cited_ids = [
-        candidate
-        for candidate in re.findall(r"\[([^\[\]]+)\]", answer)
-        if candidate in available_ids and candidate not in existing
-    ]
-    return {"citations": cited_ids}
+
+    cited_ids: list[str] = []
+    seen: set[str] = set(existing)
+    for raw in re.findall(r"\[([^\[\]]+)\]", answer):
+        for candidate in re.split(r",\s*", raw):
+            candidate = candidate.strip()
+            if candidate in available_ids and candidate not in seen:
+                cited_ids.append(candidate)
+                seen.add(candidate)
+
+    def _is_citation_bracket(m: re.Match) -> bool:
+        parts = [p.strip() for p in re.split(r",\s*", m.group(1))]
+        return bool(parts) and all(p in available_ids for p in parts)
+
+    cleaned = re.sub(
+        r"\[([^\[\]]+)\]",
+        lambda m: "" if _is_citation_bracket(m) else m.group(0),
+        answer,
+    )
+    # Tidy spacing artifacts left by stripped inline markers.
+    cleaned = re.sub(r" +([.,;:])", r"\1", cleaned)  # "text ," → "text,"
+    cleaned = re.sub(r" {2,}", " ", cleaned).strip()
+
+    return {"citations": cited_ids, "answer": cleaned}
 
 
 def final_answer_node(state: AgentState) -> dict:

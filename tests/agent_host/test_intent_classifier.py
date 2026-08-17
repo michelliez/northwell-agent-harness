@@ -137,3 +137,41 @@ def test_tool_schema_enum_matches_the_validator_vocabulary() -> None:
 
 def test_every_intent_has_a_declared_action() -> None:
     assert set(EXPECTED_ACTION) == set(get_args(IntentName))
+
+
+def test_resolve_candidate_reply_expands_numeric_pick() -> None:
+    """A bare number resolves to the candidate text the prompt showed the user.
+
+    Without this, the classifier receives 'User clarification: 2.' and cannot
+    infer intent, looping until max_tokens. Regression for the clarification
+    loop bug.
+    """
+    from agent_host.nodes.intent_nodes import _resolve_candidate_reply
+
+    candidates = [
+        "Which tables and columns are needed to group by department?",
+        "Can you draft SQL to break down a count by department?",
+        "What does the department column look like in the schema?",
+    ]
+
+    assert _resolve_candidate_reply("2", candidates) == candidates[1]
+    assert _resolve_candidate_reply("2.", candidates) == candidates[1]
+    assert _resolve_candidate_reply("1", candidates) == candidates[0]
+    assert _resolve_candidate_reply("3", candidates) == candidates[2]
+
+
+def test_resolve_candidate_reply_passes_through_prose() -> None:
+    """A natural-language reply is returned unchanged."""
+    from agent_host.nodes.intent_nodes import _resolve_candidate_reply
+
+    candidates = ["Option A", "Option B"]
+    reply = "I want to know about the schema structure"
+    assert _resolve_candidate_reply(reply, candidates) == reply
+
+
+def test_resolve_candidate_reply_handles_out_of_range_number() -> None:
+    """An out-of-range number is passed through rather than crashing."""
+    from agent_host.nodes.intent_nodes import _resolve_candidate_reply
+
+    assert _resolve_candidate_reply("5", ["A", "B"]) == "5"
+    assert _resolve_candidate_reply("0", ["A", "B"]) == "0"

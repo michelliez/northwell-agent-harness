@@ -162,3 +162,22 @@ def test_input_policy_allows_safe_request(tmp_path, monkeypatch) -> None:
     result = input_policy_node(_make_state("how many encounters were there last month?"))
 
     assert result.get("policy_blocked") is False
+
+
+def test_surface_screen_allows_table_relationship_answer() -> None:
+    """Schema-relationship answers must not be blocked by the row-level output check.
+
+    An answer describing FK connections between tables uses natural prose that
+    includes verbs like 'show' and nouns like 'encounter records'. The output
+    screen must only block actual data-bearing output patterns, not schema
+    descriptions. Regression for the query-2 false positive.
+    """
+    answer = (
+        "The following tables show how hospital encounter records connect to diagnoses:\n"
+        "- **PAT_ENC_HSP** links to **HSP_ACCOUNT** via PAT_ENC_CSN_ID.\n"
+        "- **HSP_ACCOUNT** links to **HSP_ACCT_DX_LIST** to return diagnosis codes.\n"
+        "Each record in PAT_ENC_HSP represents a single inpatient stay."
+    )
+    result = screen_content(answer, ContentSurface.FINAL_ANSWER)
+
+    assert result.allowed is True

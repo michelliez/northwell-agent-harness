@@ -262,10 +262,13 @@ def validate_sql_node(
 
 
 def execution_not_configured_node(state: AgentState) -> dict:
-    """Return the validated SQL draft; note that execution is not configured.
+    """Record that execution is not configured; the SQL is in candidate_sql.
 
-    This is the terminal SQL node. No SQL is executed. BigQuery integration
-    is future work (see sql/bigquery_adapter.py).
+    The UI renders the SQL code block, the 'not configured' notice, and any
+    named parameters from the structured generated_sql, execution_status, and
+    query_parameters response fields. Writing the SQL block into answer would
+    duplicate it. Only validation notes — prose the UI has no other source for
+    — belong in answer.
     """
     cfg = get_config()
     trace = _open_trace(state, cfg)
@@ -277,19 +280,7 @@ def execution_not_configured_node(state: AgentState) -> dict:
         result = SqlValidationResult.model_validate(raw_validation)
         notes = result.notes
 
-    answer = (
-        f"Here is the validated SQL draft:\n\n```sql\n{sql}\n```\n\n"
-        "Note: SQL execution is not configured in this environment. "
-        "This draft requires authorized review before execution.\n"
-    )
-    if notes:
-        answer += f"\nValidation notes: {'; '.join(notes)}"
-    parameters = state.get("query_parameters") or []
-    if parameters:
-        answer += (
-            "\n\nNamed query parameters:\n\n```json\n"
-            f"{json.dumps(parameters, indent=2, ensure_ascii=False)}\n```"
-        )
+    answer = f"Validation notes: {'; '.join(notes)}" if notes else ""
 
     trace.record("execution_not_configured", sql_length=len(sql))
 

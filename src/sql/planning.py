@@ -150,7 +150,13 @@ def validate_query_plan(
     tables = snapshot.tables_by_name
 
     if _normalized(proposed.objective) != _normalized(question):
-        violations.append(_violation("objective_mismatch", "Plan objective differs from prompt."))
+        violations.append(
+            _violation(
+                "objective_mismatch",
+                "Plan objective differs from prompt.",
+                {"proposed": proposed.objective, "expected": question},
+            )
+        )
 
     malformed = {
         name
@@ -444,11 +450,30 @@ def _resolve_column(
     )
 
 
+# The planner is told to copy the user's request verbatim into objective, but
+# models consistently treat "Write SQL to …" / "Generate SQL for …" as an
+# imperative prefix and omit it from the analytical goal they write. Stripping
+# these prefixes from both sides before comparing preserves drift detection
+# (a changed table name or metric still fails) while eliminating the false
+# positive that would otherwise block every sql-generation request phrased this
+# way, exhaust the one repair attempt on a non-issue, and surface the opaque
+# "I couldn't approve the proposed query plan" message.
+_WRITE_SQL_PREFIX = re.compile(
+    r"^(?:write(?:\s+me)?(?:\s+some)?\s+sql\s+(?:to|for|that)\s+"
+    r"|generate\s+(?:a\s+)?sql\s+(?:query\s+)?(?:to|for|that)\s+"
+    r"|draft\s+sql\s+(?:to|for|that)\s+"
+    r"|create\s+(?:a\s+)?(?:sql\s+)?query\s+(?:to|for|that)\s+)",
+    re.IGNORECASE,
+)
+
+
 def _normalized(value: str) -> str:
     # Punctuation-insensitive: the check exists to stop objective *drift*
     # (a planner substituting its own goal), not to fail a plan because the
-    # model dropped a question mark or a comma while copying the request.
-    cleaned = "".join(ch if ch.isalnum() or ch.isspace() else " " for ch in value)
+    # model dropped a question mark, a comma, or the leading sql-request
+    # imperative that precedes the actual analytical goal.
+    stripped = _WRITE_SQL_PREFIX.sub("", value.strip())
+    cleaned = "".join(ch if ch.isalnum() or ch.isspace() else " " for ch in stripped)
     return " ".join(cleaned.split()).casefold()
 
 

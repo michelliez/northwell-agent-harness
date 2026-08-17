@@ -15,7 +15,6 @@ from enum import StrEnum
 from typing import Any
 
 from policy.gates import policy_gate
-from policy.modules.pii import check_row_level_request
 from policy.normalize import matches_blocked_term, normalize_prompt
 from policy.result import PolicyGateResult
 
@@ -160,14 +159,6 @@ def screen_content(value: Any, surface: ContentSurface) -> ContentScreenResult:
                     "Final answer contains row-level output",
                     "row-level output",
                 )
-        row_result = check_row_level_request(normalize_prompt(text))
-        if row_result is not None and not row_result["allowed"]:
-            return ContentScreenResult(
-                allowed=False,
-                surface=surface,
-                reason=row_result["reason"],
-                matched_term=row_result["matched_term"],
-            )
         for pattern, reason, matched_term in OUTPUT_VALUE_PATTERNS:
             if pattern.search(text):
                 return _blocked(surface, reason, matched_term)

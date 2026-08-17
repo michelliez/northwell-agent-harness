@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any, Literal, get_args
 
-from anthropic import Anthropic
 from anthropic.types import ToolUseBlock
 from langgraph.runtime import Runtime
 from langgraph.types import interrupt
@@ -12,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agent_host import failure_messages
 from agent_host.budget import ExecutionBudget, budget_from_env
-from agent_host.config import AppConfig, get_config
+from agent_host.config import AppConfig, get_anthropic_client, get_config
 from agent_host.state import AgentContext, AgentState
 from agent_host.trace_logger import TraceLogger
 
@@ -394,15 +393,17 @@ def classify_intent(
     messages = [{"role": "user", "content": question}]
     request_budget.reserve_model_call(messages)
 
-    client = Anthropic(
-        api_key=config.require_api_key(),
-        base_url=config.require_base_url() if config.anthropic_base_url else None,
-        default_headers=config.anthropic_custom_headers,
-    )
+    client = get_anthropic_client()
     response = client.messages.create(
         model=config.require_model(),
         max_tokens=request_budget.intent_max_tokens,
-        system=CLASSIFIER_SYSTEM_PROMPT,
+        system=[
+            {
+                "type": "text",
+                "text": CLASSIFIER_SYSTEM_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
         messages=messages,  # type: ignore[arg-type]
         tools=[_INTENT_TOOL],  # type: ignore[arg-type]
         tool_choice={"type": "tool", "name": "emit_intent"},
@@ -454,6 +455,7 @@ def classify_intent_node(
             "intent": "unknown",
             "intent_confidence": 0.0,
             "recommended_action": "clarify",
+            "answer": failure_messages.CLARIFICATION_EXHAUSTED,
         }
 
     intent = str(decision["intent"])
@@ -507,8 +509,14 @@ def classify_intent_node(
         # Resume with both pieces of user input. Replacing the question with a
         # short reply such as "mean" discards the column/table context and can
         # cause an endless clarification loop.
+        #
+        # Resolve a bare numeric reply ("2", "2.") to the candidate text before
+        # merging. Without this, the classifier receives "User clarification: 2."
+        # which it cannot interpret, producing another unknown/low-confidence
+        # decision that loops indefinitely until max_tokens is hit.
+        resolved_reply = _resolve_candidate_reply(str(new_question), candidates)
         return {
-            "question": _merge_clarification(question, str(new_question)),
+            "question": _merge_clarification(question, resolved_reply),
             "intent": None,
             "intent_confidence": None,
             "recommended_action": None,
@@ -538,6 +546,23 @@ def intent_refusal_node(state: AgentState) -> dict:
         "policy_reason": reason,
         "recommended_action": "refuse",
     }
+
+
+def _resolve_candidate_reply(reply: str, candidates: list[str]) -> str:
+    """Expand a numeric pick ('2', '2.') into the candidate text it refers to.
+
+    The clarification prompt shows numbered options; users naturally reply with
+    just the number. Without resolution the classifier receives 'User
+    clarification: 2.' and cannot infer the intent, looping until max_tokens.
+    """
+    stripped = reply.strip().rstrip(".").strip()
+    try:
+        idx = int(stripped) - 1
+        if candidates and 0 <= idx < len(candidates):
+            return candidates[idx]
+    except ValueError:
+        pass
+    return reply
 
 
 def _merge_clarification(original_question: str, reply: str) -> str:
