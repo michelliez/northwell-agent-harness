@@ -21,6 +21,30 @@ _TABLE_REFERENCE = re.compile(r"\b(?:this|that|the)\s+table\b", re.IGNORECASE)
 _COLUMN_REFERENCE = re.compile(r"\b(?:this|that|the)\s+column\b", re.IGNORECASE)
 _CATALOG_IDENTIFIER = re.compile(r"\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b")
 _SUGGESTED_QUERY_LINE = re.compile(r"^Suggested query:\s*(.+?)\s*$", re.MULTILINE)
+
+# Matches requests asking the agent to generate or write the previously offered
+# suggested query. Handled deterministically before any model call so the concrete
+# question flows through the entire pipeline (classifier + planner).
+_SUGGESTED_QUERY_REQUEST = re.compile(
+    r"""
+    \b(?:
+        # Direct imperative: "write/generate/draft/give me that query"
+        (?:write|generate|draft|create|produce|give\s+me)\s+(?:me\s+)?
+        (?:that|the)\s+(?:suggested\s+)?(?:query|sql)\b
+        |
+        # Modal: "can/could/would you [please] [verb] [me] that query"
+        (?:can|could|would)\s+you\s+(?:please\s+)?
+        (?:write|generate|draft|create|produce|give\s+me)\s+(?:me\s+)?
+        (?:that|the)\s+(?:suggested\s+)?(?:query|sql)\b
+        |
+        # Ability: "[are/would] you [be] able to [verb] that query"
+        (?:are|would)\s+you\s+(?:be\s+)?able\s+to\s+
+        (?:write|generate|draft|create|produce)\s+(?:me\s+)?
+        (?:that|the)\s+(?:suggested\s+)?(?:query|sql)\b
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
 MAX_SUGGESTION_CHARS = 300
 
 # A closed vocabulary, not sentiment analysis: only a reply that is nothing
@@ -131,7 +155,9 @@ def resolve_followup(question: str, turns: list[ConversationTurn]) -> tuple[str,
         return question, False
 
     latest = turns[-1]
-    if latest.suggested_question and _is_acceptance(question):
+    if latest.suggested_question and (
+        _is_acceptance(question) or _SUGGESTED_QUERY_REQUEST.search(question)
+    ):
         return latest.suggested_question, True
 
     resolved = question

@@ -110,3 +110,50 @@ def test_turn_without_suggestion_line_stores_none() -> None:
     )
 
     assert turn.suggested_question == ""
+
+
+_SUGGESTED_TURN = ConversationTurn(
+    question="Which tables connect diagnoses to encounters?",
+    tables=("PAT_ENC_DX",),
+    suggested_question="Count diagnoses per encounter in PAT_ENC_DX grouped by LINE",
+)
+
+
+def test_suggested_query_request_resolves_to_stored_suggestion() -> None:
+    """'Write me that query' and variants must resolve to the prior suggested question.
+
+    Without resolution the planner receives an ambiguous pronoun and hallucinates
+    a table. Regression for the ZC_MACRO_ABLE misrouting bug.
+    """
+    phrases = [
+        "write me that query",
+        "Write me that query.",
+        "can you write that query",
+        "could you generate that SQL",
+        "would you draft that query",
+        "give me that query",
+        "Would you be able to write me that query?",
+        "are you able to generate that suggested query",
+        "can you please create that query",
+        "would you produce that SQL",
+    ]
+    for phrase in phrases:
+        resolved, changed = resolve_followup(phrase, [_SUGGESTED_TURN])
+        assert changed is True, f"Expected resolution for: {phrase!r}"
+        assert resolved == _SUGGESTED_TURN.suggested_question, f"Wrong resolution for: {phrase!r}"
+
+
+def test_suggested_query_request_no_match_without_stored_suggestion() -> None:
+    """Phrases must not resolve when no suggestion was offered in the prior turn."""
+    turn = ConversationTurn(question="What does PAT_ENC contain?", tables=("PAT_ENC",))
+    resolved, changed = resolve_followup("can you write that query", [turn])
+    assert changed is False
+    assert resolved == "can you write that query"
+
+
+def test_substantive_query_request_is_not_treated_as_suggested_query_reference() -> None:
+    """A request naming a different table must not be rewritten to the suggestion."""
+    resolved, changed = resolve_followup(
+        "write SQL to count rows in HSP_ACCT_DX_LIST", [_SUGGESTED_TURN]
+    )
+    assert changed is False

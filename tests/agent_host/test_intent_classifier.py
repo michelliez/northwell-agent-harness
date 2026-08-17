@@ -175,3 +175,60 @@ def test_resolve_candidate_reply_handles_out_of_range_number() -> None:
 
     assert _resolve_candidate_reply("5", ["A", "B"]) == "5"
     assert _resolve_candidate_reply("0", ["A", "B"]) == "0"
+
+
+# --- _build_prior_context ---------------------------------------------------
+
+
+def test_build_prior_context_returns_none_for_empty_turns() -> None:
+    from agent_host.nodes.intent_nodes import _build_prior_context
+
+    assert _build_prior_context([]) is None
+
+
+def test_build_prior_context_includes_question_and_suggestion() -> None:
+    from agent_host.nodes.intent_nodes import _build_prior_context
+
+    turns = [
+        {
+            "question": "Which tables connect hospital encounters to diagnoses?",
+            "suggested_question": "Count diagnoses by LINE in HSP_ACCT_DX_LIST",
+            "tables": [],
+            "columns": [],
+        }
+    ]
+    result = _build_prior_context(turns)
+
+    assert result is not None
+    assert "Which tables connect hospital encounters to diagnoses?" in result
+    assert "Count diagnoses by LINE in HSP_ACCT_DX_LIST" in result
+
+
+def test_build_prior_context_omits_empty_suggestion() -> None:
+    from agent_host.nodes.intent_nodes import _build_prior_context
+
+    turns = [{"question": "What is PAT_ENC?", "suggested_question": "", "tables": [], "columns": []}]
+    result = _build_prior_context(turns)
+
+    assert result == "User asked: What is PAT_ENC?"
+
+
+def test_build_prior_context_returns_none_when_all_fields_empty() -> None:
+    from agent_host.nodes.intent_nodes import _build_prior_context
+
+    assert _build_prior_context([{"question": "", "suggested_question": "", "tables": [], "columns": []}]) is None
+
+
+def test_build_prior_context_uses_only_last_turn() -> None:
+    """Only the most recent turn is included; older turns are not surfaced."""
+    from agent_host.nodes.intent_nodes import _build_prior_context
+
+    turns = [
+        {"question": "Old question", "suggested_question": "Old suggestion", "tables": [], "columns": []},
+        {"question": "Recent question", "suggested_question": "Recent suggestion", "tables": [], "columns": []},
+    ]
+    result = _build_prior_context(turns)
+
+    assert result is not None
+    assert "Recent question" in result
+    assert "Old question" not in result

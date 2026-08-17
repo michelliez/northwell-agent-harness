@@ -240,7 +240,14 @@ def validate_sql_node(
         declared_tables = plan.plan.tables
 
     approved = ApprovedQueryPlan.model_validate(raw_plan) if raw_plan else None
-    result = validate_sql(sql, declared_tables, snapshot, approved)
+    try:
+        result = validate_sql(sql, declared_tables, snapshot, approved)
+    except Exception as exc:
+        trace.record("validate_sql.error", error=type(exc).__name__)
+        return {
+            "validation_result": None,
+            "answer": failure_messages.SQL_PIPELINE_STATE_MISSING,
+        }
     trace.record(
         "validate_sql.completed",
         allowed=result.allowed,
