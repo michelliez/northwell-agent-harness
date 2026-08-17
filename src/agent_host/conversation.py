@@ -1,12 +1,17 @@
-"""Bounded, process-local context for safe follow-up resolution.
+"""Conversation history for multi-turn continuity.
 
-The store deliberately retains no assistant answer, retrieved passage, SQL, or
-query result. It keeps only recent standalone questions, catalog-like anchors
-long enough to resolve phrases such as ``this table``, and at most one
-model-suggested follow-up *question* per turn. That suggestion is the single
-sanctioned piece of assistant-derived text, because it is question-shaped by
-construction, size-capped, and — like every contextualized rewrite — passes
-the deterministic input policy screen again before anything routes on it.
+Each completed turn stores the user question, the cleaned policy-screened
+answer, catalog anchors (table/column names) for deixis resolution, and the
+offered suggested follow-up question. The full Q&A pair flows into model calls
+as a standard messages array so the classifier, planner, and answer nodes all
+share the same conversational context — the same design any chat application
+uses.
+
+The Clarity Dictionary is Epic's first-party schema documentation and is
+treated as authoritative ground truth. Policy-screened answers derived from it
+are safe to carry forward in conversation history. Raw retrieved chunks, SQL
+results, and execution outputs are never stored here; only the final
+cleaned answer that already passed the output content screen is kept.
 """
 
 from __future__ import annotations
@@ -21,30 +26,6 @@ _TABLE_REFERENCE = re.compile(r"\b(?:this|that|the)\s+table\b", re.IGNORECASE)
 _COLUMN_REFERENCE = re.compile(r"\b(?:this|that|the)\s+column\b", re.IGNORECASE)
 _CATALOG_IDENTIFIER = re.compile(r"\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b")
 _SUGGESTED_QUERY_LINE = re.compile(r"^Suggested query:\s*(.+?)\s*$", re.MULTILINE)
-
-# Matches requests asking the agent to generate or write the previously offered
-# suggested query. Handled deterministically before any model call so the concrete
-# question flows through the entire pipeline (classifier + planner).
-_SUGGESTED_QUERY_REQUEST = re.compile(
-    r"""
-    \b(?:
-        # Direct imperative: "write/generate/draft/give me that query"
-        (?:write|generate|draft|create|produce|give\s+me)\s+(?:me\s+)?
-        (?:that|the)\s+(?:suggested\s+)?(?:query|sql)\b
-        |
-        # Modal: "can/could/would you [please] [verb] [me] that query"
-        (?:can|could|would)\s+you\s+(?:please\s+)?
-        (?:write|generate|draft|create|produce|give\s+me)\s+(?:me\s+)?
-        (?:that|the)\s+(?:suggested\s+)?(?:query|sql)\b
-        |
-        # Ability: "[are/would] you [be] able to [verb] that query"
-        (?:are|would)\s+you\s+(?:be\s+)?able\s+to\s+
-        (?:write|generate|draft|create|produce)\s+(?:me\s+)?
-        (?:that|the)\s+(?:suggested\s+)?(?:query|sql)\b
-    )
-    """,
-    re.IGNORECASE | re.VERBOSE,
-)
 MAX_SUGGESTION_CHARS = 300
 
 # A closed vocabulary, not sentiment analysis: only a reply that is nothing
@@ -77,9 +58,10 @@ _ACCEPTANCE_PHRASES = frozenset(
 
 @dataclass(frozen=True)
 class ConversationTurn:
-    """Minimal metadata retained for one completed turn."""
+    """One completed turn retained for conversational continuity."""
 
     question: str
+    answer: str = ""
     tables: tuple[str, ...] = ()
     columns: tuple[str, ...] = ()
     suggested_question: str = ""
@@ -155,9 +137,7 @@ def resolve_followup(question: str, turns: list[ConversationTurn]) -> tuple[str,
         return question, False
 
     latest = turns[-1]
-    if latest.suggested_question and (
-        _is_acceptance(question) or _SUGGESTED_QUERY_REQUEST.search(question)
-    ):
+    if latest.suggested_question and _is_acceptance(question):
         return latest.suggested_question, True
 
     resolved = question
@@ -169,16 +149,34 @@ def resolve_followup(question: str, turns: list[ConversationTurn]) -> tuple[str,
 
 
 def turn_from_result(question: str, result: dict) -> ConversationTurn:
-    """Derive non-sensitive catalog anchors from a completed graph result."""
+    """Build a conversation turn from a completed graph result."""
     explicit = _ordered_unique(_CATALOG_IDENTIFIER.findall(question))
     plan_tables = _plan_table_names(result)
     chunk_tables = _chunk_table_names(result)
     tables = explicit or plan_tables or chunk_tables
     return ConversationTurn(
         question=question,
+        answer=str(result.get("answer") or "").strip(),
         tables=tuple(tables[:5]),
         suggested_question=_extract_suggestion(result),
     )
+
+
+def turns_to_messages(turns: list[dict]) -> list[dict]:
+    """Convert serialized ConversationTurn dicts to a messages array.
+
+    Produces the standard [{role: user}, {role: assistant}] pairs that the
+    Anthropic API expects for multi-turn conversation context. Turns without
+    an answer (e.g. policy-blocked turns that were not stored) are skipped.
+    """
+    messages: list[dict] = []
+    for turn in turns:
+        q = str(turn.get("question") or "").strip()
+        a = str(turn.get("answer") or "").strip()
+        if q and a:
+            messages.append({"role": "user", "content": q})
+            messages.append({"role": "assistant", "content": a})
+    return messages
 
 
 def _is_acceptance(question: str) -> bool:
@@ -228,4 +226,5 @@ __all__ = [
     "ConversationTurn",
     "resolve_followup",
     "turn_from_result",
+    "turns_to_messages",
 ]

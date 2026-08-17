@@ -9,6 +9,7 @@ from langgraph.runtime import Runtime
 
 from agent_host.budget import BudgetExceeded, budget_from_env
 from agent_host.config import get_anthropic_client, get_config
+from agent_host.conversation import turns_to_messages
 from agent_host.state import AgentContext, AgentState
 from agent_host.trace_logger import TraceLogger
 
@@ -62,7 +63,8 @@ def general_answer_node(
 
     trace.record("general_answer.started")
 
-    messages = [{"role": "user", "content": question}]
+    history = turns_to_messages(state.get("conversation_turns") or [])
+    messages = [*history, {"role": "user", "content": question}]
     try:
         budget.reserve_model_call(messages)
     except BudgetExceeded as exc:
@@ -119,13 +121,15 @@ def documentation_answer_node(
         {k: v for k, v in chunk.items() if k in ("chunk_id", "title", "heading_path", "text")}
         for chunk in chunks
     ]
+    history = turns_to_messages(state.get("conversation_turns") or [])
     messages = [
+        *history,
         {
             "role": "user",
             "content": (
                 f"Question: {question}\n\nApproved documentation chunks:\n{json.dumps(evidence)}"
             ),
-        }
+        },
     ]
 
     try:

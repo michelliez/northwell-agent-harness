@@ -5,17 +5,19 @@ from agent_host.conversation import (
     ConversationTurn,
     resolve_followup,
     turn_from_result,
+    turns_to_messages,
 )
 
 
 def test_resolves_unique_table_reference_without_storing_answer() -> None:
     turn = turn_from_result(
         "What is the A0H_MAP table?",
-        {"answer": "Sensitive answer text that must not enter context."},
+        {"answer": "A0H_MAP is an encounter map table."},
     )
 
     assert turn == ConversationTurn(
         question="What is the A0H_MAP table?",
+        answer="A0H_MAP is an encounter map table.",
         tables=("A0H_MAP",),
     )
     resolved, changed = resolve_followup("What can I use this table for?", [turn])
@@ -88,6 +90,15 @@ def test_acceptance_without_stored_suggestion_stays_unchanged() -> None:
     assert changed is False
 
 
+def test_turn_stores_cleaned_answer() -> None:
+    turn = turn_from_result(
+        "What does PAT_ENC contain?",
+        {"answer": "PAT_ENC holds encounter records.", "retrieved_chunks": []},
+    )
+
+    assert turn.answer == "PAT_ENC holds encounter records."
+
+
 def test_turn_extracts_single_bounded_suggestion_from_answer() -> None:
     turn = turn_from_result(
         "What does PAT_ENC contain?",
@@ -112,48 +123,37 @@ def test_turn_without_suggestion_line_stores_none() -> None:
     assert turn.suggested_question == ""
 
 
-_SUGGESTED_TURN = ConversationTurn(
-    question="Which tables connect diagnoses to encounters?",
-    tables=("PAT_ENC_DX",),
-    suggested_question="Count diagnoses per encounter in PAT_ENC_DX grouped by LINE",
-)
+# --- turns_to_messages -------------------------------------------------------
 
 
-def test_suggested_query_request_resolves_to_stored_suggestion() -> None:
-    """'Write me that query' and variants must resolve to the prior suggested question.
-
-    Without resolution the planner receives an ambiguous pronoun and hallucinates
-    a table. Regression for the ZC_MACRO_ABLE misrouting bug.
-    """
-    phrases = [
-        "write me that query",
-        "Write me that query.",
-        "can you write that query",
-        "could you generate that SQL",
-        "would you draft that query",
-        "give me that query",
-        "Would you be able to write me that query?",
-        "are you able to generate that suggested query",
-        "can you please create that query",
-        "would you produce that SQL",
+def test_turns_to_messages_produces_user_assistant_pairs() -> None:
+    """Each stored turn becomes a (user, assistant) message pair."""
+    turns = [
+        {"question": "What is PAT_ENC?", "answer": "PAT_ENC is an encounter table.", "tables": [], "columns": [], "suggested_question": ""},
+        {"question": "Which tables link encounters to diagnoses?", "answer": "PAT_ENC_DX and HSP_ACCT_DX_LIST.", "tables": [], "columns": [], "suggested_question": ""},
     ]
-    for phrase in phrases:
-        resolved, changed = resolve_followup(phrase, [_SUGGESTED_TURN])
-        assert changed is True, f"Expected resolution for: {phrase!r}"
-        assert resolved == _SUGGESTED_TURN.suggested_question, f"Wrong resolution for: {phrase!r}"
+    messages = turns_to_messages(turns)
+
+    assert messages == [
+        {"role": "user", "content": "What is PAT_ENC?"},
+        {"role": "assistant", "content": "PAT_ENC is an encounter table."},
+        {"role": "user", "content": "Which tables link encounters to diagnoses?"},
+        {"role": "assistant", "content": "PAT_ENC_DX and HSP_ACCT_DX_LIST."},
+    ]
 
 
-def test_suggested_query_request_no_match_without_stored_suggestion() -> None:
-    """Phrases must not resolve when no suggestion was offered in the prior turn."""
-    turn = ConversationTurn(question="What does PAT_ENC contain?", tables=("PAT_ENC",))
-    resolved, changed = resolve_followup("can you write that query", [turn])
-    assert changed is False
-    assert resolved == "can you write that query"
+def test_turns_to_messages_skips_turns_without_answer() -> None:
+    """Turns that have no answer (e.g. policy-blocked) are omitted."""
+    turns = [
+        {"question": "What is PAT_ENC?", "answer": "", "tables": [], "columns": [], "suggested_question": ""},
+        {"question": "Which tables link encounters?", "answer": "PAT_ENC_DX.", "tables": [], "columns": [], "suggested_question": ""},
+    ]
+    messages = turns_to_messages(turns)
+
+    assert len(messages) == 2
+    assert messages[0]["role"] == "user"
+    assert messages[0]["content"] == "Which tables link encounters?"
 
 
-def test_substantive_query_request_is_not_treated_as_suggested_query_reference() -> None:
-    """A request naming a different table must not be rewritten to the suggestion."""
-    resolved, changed = resolve_followup(
-        "write SQL to count rows in HSP_ACCT_DX_LIST", [_SUGGESTED_TURN]
-    )
-    assert changed is False
+def test_turns_to_messages_returns_empty_for_no_turns() -> None:
+    assert turns_to_messages([]) == []

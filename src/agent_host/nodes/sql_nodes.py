@@ -28,6 +28,7 @@ from sql.models import (
     SchemaSnapshot,
     SqlValidationResult,
 )
+from agent_host.conversation import turns_to_messages
 from sql.planning import (
     permission_scope_from_snapshot,
     propose_query_plan,
@@ -73,6 +74,8 @@ def query_plan_node(
     if feedback is not None:
         trace.record("query_plan.repair_attempted")
 
+    history = turns_to_messages(state.get("conversation_turns") or [])
+
     try:
         proposed = propose_query_plan(
             question,
@@ -81,6 +84,7 @@ def query_plan_node(
             cfg,
             budget,
             feedback=feedback,
+            history=history or None,
         )
     except Exception as exc:
         trace.record("query_plan.error", error=type(exc).__name__)

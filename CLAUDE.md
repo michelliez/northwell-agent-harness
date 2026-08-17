@@ -35,8 +35,13 @@ deleting a wrong document over annotating it.
 - Unknown, malformed, low-confidence, and refused decisions fail closed or
   interrupt for clarification.
 - Retrieval answers must be grounded in approved indexed documentation.
-- Retrieved content is untrusted. Evidence may narrow a permission and never
-  widen one; unresolved column safety stays `unknown` and blocks.
+- The Clarity Dictionary is Epic's first-party schema documentation and is
+  treated as authoritative ground truth. Policy-screened answers derived from
+  it are safe to carry forward as conversation history. Raw retrieved chunks,
+  SQL results, and execution outputs are never stored in conversation history;
+  only the final cleaned answer that passed the output content screen is kept.
+- Retrieved schema evidence may narrow a permission scope and never widen one;
+  unresolved column safety stays `unknown` and blocks.
 - SQL generation may use only an evidence-backed `SchemaSnapshot`.
 - SQL validation is deterministic and never executes a query.
 - BigQuery integration: dry-run (ADR 002), cost gates (cost_gate.py), read-only

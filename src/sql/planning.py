@@ -12,6 +12,7 @@ from anthropic.types import ToolUseBlock
 
 from agent_host.budget import ExecutionBudget
 from agent_host.config import AppConfig
+from agent_host.conversation import turns_to_messages
 from sql.models import (
     ApprovedQueryPlan,
     CatalogRef,
@@ -25,10 +26,13 @@ from sql.models import (
 
 PLAN_SYSTEM_PROMPT = """
 Create a structured aggregate-query plan, not SQL. Use only the supplied
-permission scope and cited schema evidence. Copy the user's request verbatim
-into objective. Never introduce tables, columns, filters, joins, metrics, or
-output fields not requested or supported by the scope. All predicates must use
-named parameters; never put literal values or SQL fragments in the plan.
+permission scope and cited schema evidence. Copy the user's analytical goal
+verbatim into objective; if the current request refers to a prior conversation
+turn (e.g. "that query", "the same but for X"), resolve the reference using
+the conversation history and copy the resolved goal. Never introduce tables,
+columns, filters, joins, metrics, or output fields not requested or supported
+by the scope. All predicates must use named parameters; never put literal
+values or SQL fragments in the plan.
 Identifiers may only be counted or joined to identifiers. Unknown and sensitive
 columns may not be used. Row-level output is forbidden.
 For per-day/week/month/quarter/year questions, use time_buckets on a temporal
@@ -69,12 +73,15 @@ def propose_query_plan(
     *,
     client: MessagesClient | None = None,
     feedback: str | None = None,
+    history: list[dict] | None = None,
 ) -> QueryPlanAST:
     """Ask Claude for one schema-constrained plan through a forced tool call.
 
     ``feedback`` carries host-composed rejection details from a previous
     attempt (see ``repair_feedback``); the corrected plan still goes through
     the same deterministic authorization — feedback never grants anything.
+    ``history`` is the prior conversation as a messages array so the planner
+    can resolve follow-up references such as "that query" naturally.
     """
     content = (
         f"User request:\n{question}\n\n"
@@ -87,7 +94,7 @@ def propose_query_plan(
             "authorizer. Emit a corrected plan that resolves every violation "
             f"below without changing the user's request.\n{feedback}"
         )
-    messages = [{"role": "user", "content": content}]
+    messages = [*(history or []), {"role": "user", "content": content}]
     budget.reserve_model_call(messages)
     active_client = client or Anthropic(
         api_key=config.require_api_key(),

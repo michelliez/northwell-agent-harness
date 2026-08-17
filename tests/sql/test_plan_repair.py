@@ -105,7 +105,7 @@ def test_repair_pass_feeds_violations_to_the_planner(tmp_path, monkeypatch) -> N
 
     captured: dict = {}
 
-    def fake_propose(question, scope, citations, cfg, budget, *, feedback=None):
+    def fake_propose(question, scope, citations, cfg, budget, *, feedback=None, history=None):
         captured["feedback"] = feedback
         return _plan()
 
@@ -132,7 +132,7 @@ def test_repair_pass_feeds_violations_to_the_planner(tmp_path, monkeypatch) -> N
 def test_first_pass_sends_no_feedback(tmp_path, monkeypatch) -> None:
     captured: dict = {}
 
-    def fake_propose(question, scope, citations, cfg, budget, *, feedback=None):
+    def fake_propose(question, scope, citations, cfg, budget, *, feedback=None, history=None):
         captured["feedback"] = feedback
         return _plan()
 

@@ -9,6 +9,7 @@ from langgraph.runtime import Runtime
 
 from agent_host.budget import BudgetExceeded, budget_from_env
 from agent_host.config import get_anthropic_client, get_config
+from agent_host.conversation import turns_to_messages
 from agent_host.state import AgentContext, AgentState
 from agent_host.tools import execute_retrieval_tool, tools_for_intent
 from agent_host.trace_logger import TraceLogger
@@ -39,7 +40,8 @@ def exploration_node(
     question = state.get("question", "")
     intent = state.get("intent") or "unknown"
     tools = tools_for_intent(intent)
-    messages: list[dict] = [{"role": "user", "content": question}]
+    history = turns_to_messages(state.get("conversation_turns") or [])
+    messages: list[dict] = [*history, {"role": "user", "content": question}]
     chunks_by_id: dict[str, dict] = {}
 
     # Falling out of the loop without a break means the round cap ended it.
