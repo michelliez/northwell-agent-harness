@@ -179,7 +179,7 @@ class MetricsAggregator:
             run_cost = self._extract_cost(audit_events)
             run_rejected = self._is_rejected(audit_events)
             run_clarified = self._is_clarified(audit_events)
-            run_sql_success = self._is_sql_success(audit_events)
+            run_sql_success = self._is_sql_success(trace_events)
             run_retrieval_coverage = self._extract_retrieval_coverage(audit_events)
 
             # Update totals
@@ -534,11 +534,11 @@ class MetricsAggregator:
                 pass
         return False
 
-    def _is_sql_success(self, audit_events: list[dict]) -> bool | None:
-        """Check if SQL generation succeeded."""
-        for event in audit_events:
-            if event.get("event_type") == "sql_compiled":
-                return event.get("decision") == "allowed"
+    def _is_sql_success(self, trace_events: list[dict]) -> bool | None:
+        """Check if SQL validation succeeded from trace events."""
+        for event in trace_events:
+            if event.get("event") == "validate_sql.completed":
+                return event.get("allowed", False)
         return None
 
     def _extract_retrieval_coverage(self, audit_events: list[dict]) -> float:

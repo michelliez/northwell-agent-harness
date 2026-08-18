@@ -67,36 +67,40 @@ with kpi_col1:
     )
 
 with kpi_col2:
+    latency = metrics['avg_latency_ms']
     st.metric(
         "Avg Latency",
-        f"{metrics['avg_latency_ms']:.0f}ms",
+        f"{latency:.0f}ms",
+        delta=f"{'Good' if latency < 1000 else 'OK' if latency < 2000 else 'High'}",
+        delta_color="inverse",
         help="Average time from question to answer",
     )
 
 with kpi_col3:
     rejection_rate = metrics["policy_rejection_rate"]
-    delta = "↓ Good" if rejection_rate < 5 else "→ OK" if rejection_rate < 15 else "↑ High"
     st.metric(
         "Policy Rejections",
         f"{rejection_rate:.1f}%",
-        delta=delta,
         help="Percentage of requests blocked by policy",
     )
 
 with kpi_col4:
     sql_rate = metrics["sql_generation_success_rate"]
-    delta = "↑ Good" if sql_rate > 80 else "→ OK" if sql_rate > 60 else "↓ Low"
     st.metric(
         "SQL Success Rate",
         f"{sql_rate:.1f}%",
-        delta=delta,
+        delta=f"{sql_rate:.1f}% {'Good' if sql_rate > 80 else 'OK' if sql_rate > 60 else 'Low'}",
+        delta_color="normal",
         help="Successfully generated and validated SQL",
     )
 
 with kpi_col5:
+    cost = metrics['estimated_bigquery_cost']
     st.metric(
         "Est. BQ Cost",
-        f"${metrics['estimated_bigquery_cost']:.2f}",
+        f"${cost:.2f}",
+        delta=f"{'Good' if cost < 10 else 'OK' if cost < 50 else 'High'}",
+        delta_color="inverse",
         help="Estimated BigQuery cost",
     )
 
