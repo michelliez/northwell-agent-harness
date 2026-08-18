@@ -12,7 +12,7 @@ from typing import Annotated, Any
 import sqlglot
 from pydantic import BaseModel, Field
 from sqlglot import exp
-from sqlglot.errors import OptimizeError, ParseError
+from sqlglot.errors import OptimizeError, ParseError, SchemaError
 from sqlglot.optimizer.qualify import qualify
 
 from sql.compiler import plan_to_bigquery_sql
@@ -286,7 +286,7 @@ def validate_sql(
             quote_identifiers=False,
             validate_qualify_columns=True,
         )
-    except OptimizeError as exc:
+    except (OptimizeError, SchemaError) as exc:
         return _blocked(
             "unknown_or_ambiguous_column",
             declared_tables,

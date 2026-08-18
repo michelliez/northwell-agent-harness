@@ -41,6 +41,16 @@ aggregate (counts, sums, averages, per-period breakdowns), and must never ask
 for individual records or patient identifiers. Omit the line entirely when no
 safe aggregate follow-up exists. This is only a suggestion for the user's next
 question; do not draft SQL.
+
+When a "Schema aggregation constraints" block is present in the user message,
+apply these rules to any suggested query:
+- Only group or break down by columns listed as aggregate-safe.
+- Only suggest time bucketing (per day/week/month/year) for columns whose
+  data type is DATE or DATETIME — never for REAL, FLOAT, INTEGER, or VARCHAR.
+- Identifier columns may only be counted (COUNT or COUNT DISTINCT) or used in
+  joins — never grouped or projected.
+- If no aggregate-safe column supports the intended breakdown, omit the
+  suggested query line entirely rather than proposing an invalid one.
 """.strip()
 
 _GENERAL_SYSTEM = """
@@ -121,15 +131,16 @@ def documentation_answer_node(
         {k: v for k, v in chunk.items() if k in ("chunk_id", "title", "heading_path", "text")}
         for chunk in chunks
     ]
+    schema_ctx = _schema_aggregation_context(state.get("schema_snapshot") or {})
+    user_content = f"Question: {question}\n\n"
+    if schema_ctx:
+        user_content += f"Schema aggregation constraints:\n{schema_ctx}\n\n"
+    user_content += f"Approved documentation chunks:\n{json.dumps(evidence)}"
+
     history = turns_to_messages(state.get("conversation_turns") or [])
     messages = [
         *history,
-        {
-            "role": "user",
-            "content": (
-                f"Question: {question}\n\nApproved documentation chunks:\n{json.dumps(evidence)}"
-            ),
-        },
+        {"role": "user", "content": user_content},
     ]
 
     try:
@@ -184,6 +195,42 @@ def documentation_answer_node(
                 seen_ids.add(candidate)
 
     return {"answer": answer, "citations": cited_ids}
+
+
+def _schema_aggregation_context(raw_snapshot: dict) -> str:
+    """Summarise safe-to-aggregate columns from the schema snapshot.
+
+    Returns a plain-text block listing aggregate-safe and identifier columns
+    per table so the answer model can constrain its suggested queries to
+    columns that will pass plan safety validation.  Works directly on the
+    serialised dict (state["schema_snapshot"]) to avoid an import cycle.
+    """
+    tables = raw_snapshot.get("tables") or []
+    if not tables:
+        return ""
+
+    lines: list[str] = []
+    for table in tables:
+        name = str(table.get("name") or "")
+        columns = table.get("columns") or []
+        safe: list[str] = []
+        identifiers: list[str] = []
+        for col in columns:
+            safety = str(col.get("safety") or "unknown")
+            col_name = str(col.get("name") or "")
+            data_type = str(col.get("data_type") or "").strip()
+            if safety == "safe_aggregate":
+                safe.append(f"{col_name} ({data_type})" if data_type else col_name)
+            elif safety == "identifier":
+                identifiers.append(col_name)
+        if safe or identifiers:
+            lines.append(f"Table {name}:")
+            if safe:
+                lines.append(f"  Aggregate-safe: {', '.join(safe)}")
+            if identifiers:
+                lines.append(f"  Identifier (count/join only, not groupable): {', '.join(identifiers)}")
+
+    return "\n".join(lines)
 
 
 def _open_trace(state: AgentState, cfg) -> TraceLogger:
