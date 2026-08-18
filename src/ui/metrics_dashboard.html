@@ -14,9 +14,68 @@
 
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: #f5f5f5;
             min-height: 100vh;
             padding: 20px;
+            color: #1a1a1a;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            body {
+                background: #1a1a1a;
+                color: #f5f5f5;
+            }
+
+            .header h1 {
+                color: #f5f5f5;
+            }
+
+            .header p {
+                color: #999;
+            }
+
+            .period-btn {
+                background: #2a2a2a;
+                border-color: #3a3a3a;
+                color: #f5f5f5;
+            }
+
+            .period-btn:hover {
+                background: #3a3a3a;
+                border-color: #f5f5f5;
+            }
+
+            .period-btn.active {
+                background: #f5f5f5;
+                color: #1a1a1a;
+                border-color: #f5f5f5;
+            }
+
+            .kpi-card {
+                background: #2a2a2a;
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+            }
+
+            .kpi-value {
+                color: #1a1a1a;
+            }
+
+            .kpi-label {
+                color: #666;
+            }
+
+            .chart-card {
+                background: #2a2a2a;
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+            }
+
+            .chart-card h3 {
+                color: #f5f5f5;
+            }
+
+            .footer {
+                color: #666;
+            }
         }
 
         .container {
@@ -26,21 +85,21 @@
 
         .header {
             text-align: center;
-            color: white;
+            color: #1a1a1a;
             margin-bottom: 40px;
             padding-bottom: 20px;
-            border-bottom: 2px solid rgba(255, 255, 255, 0.3);
         }
 
         .header h1 {
             font-size: 32px;
             font-weight: 600;
             margin-bottom: 5px;
+            color: #1a1a1a;
         }
 
         .header p {
             font-size: 14px;
-            opacity: 0.9;
+            color: #666;
         }
 
         .period-selector {
@@ -54,93 +113,96 @@
 
         .period-btn {
             background: white;
-            border: none;
+            border: 1px solid #e0e0e0;
             padding: 8px 16px;
             border-radius: 6px;
             cursor: pointer;
             font-size: 13px;
             font-weight: 500;
             transition: all 0.2s;
-            color: #667eea;
+            color: #1a1a1a;
         }
 
         .period-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            background: #f0f0f0;
+            border-color: #1a1a1a;
         }
 
         .period-btn.active {
-            background: #667eea;
+            background: #1a1a1a;
             color: white;
+            border-color: #1a1a1a;
         }
 
         /* KPI Cards */
         .kpi-row {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 20px;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
             margin-bottom: 30px;
         }
 
         .kpi-card {
             background: white;
-            border-radius: 12px;
-            padding: 25px;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
             transition: all 0.3s;
+            border-left: 4px solid #1a1a1a;
         }
 
         .kpi-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
         }
 
         .kpi-value {
-            font-size: 36px;
+            font-size: 28px;
             font-weight: 700;
             margin-bottom: 8px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+            color: #1a1a1a;
         }
 
         .kpi-label {
-            font-size: 14px;
-            color: #666;
+            font-size: 12px;
+            color: #999;
             font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .kpi-card.status-good {
+            border-left-color: #00c896;
         }
 
         .kpi-card.status-good .kpi-value {
-            background: linear-gradient(135deg, #00c896 0%, #00a86b 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+            color: #00c896;
+        }
+
+        .kpi-card.status-caution {
+            border-left-color: #ffa500;
         }
 
         .kpi-card.status-caution .kpi-value {
-            background: linear-gradient(135deg, #ffa500 0%, #ff8c00 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+            color: #ffa500;
+        }
+
+        .kpi-card.status-poor {
+            border-left-color: #ff6b6b;
         }
 
         .kpi-card.status-poor .kpi-value {
-            background: linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+            color: #ff6b6b;
         }
 
         /* Chart Cards */
         .chart-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(600px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
             gap: 20px;
             margin-bottom: 30px;
         }
 
-        @media (max-width: 768px) {
+        @media (max-width: 900px) {
             .chart-grid {
                 grid-template-columns: 1fr;
             }
@@ -148,31 +210,38 @@
 
         .chart-card {
             background: white;
-            border-radius: 12px;
+            border-radius: 8px;
             padding: 20px;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+            display: flex;
+            flex-direction: column;
         }
 
         .chart-card h3 {
-            font-size: 16px;
+            font-size: 15px;
             font-weight: 600;
-            margin-bottom: 15px;
-            color: #333;
+            margin-bottom: 20px;
+            color: #1a1a1a;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-size: 13px;
         }
 
         .chart-container {
-            min-height: 400px;
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 350px;
         }
 
         /* Footer */
         .footer {
             text-align: center;
-            color: white;
+            color: #999;
             margin-top: 40px;
             padding-top: 20px;
-            border-top: 1px solid rgba(255, 255, 255, 0.3);
             font-size: 12px;
-            opacity: 0.8;
         }
 
         /* Loading state */
@@ -383,18 +452,20 @@
                 yaxis: {title: 'Avg Latency (ms)', titlefont: {color: colors.primary}},
                 yaxis2: {title: 'Queries', titlefont: {color: colors.light}, overlaying: 'y', side: 'right'},
                 hovermode: 'x unified',
-                margin: {b: 40, l: 60, r: 60, t: 20},
-                height: 400,
+                margin: {b: 50, l: 70, r: 70, t: 20},
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                plot_bgcolor: 'rgba(245,245,245,0.5)',
+                autosize: true,
             };
 
-            Plotly.newPlot('latency-chart', [trace2, trace1], layout, {responsive: true});
+            Plotly.newPlot('latency-chart', [trace2, trace1], layout, {responsive: true, displayModeBar: false});
         }
 
         function renderQualityChart(data) {
             const metrics = [
-                'SQL Success Rate',
-                'Policy Approval Rate',
-                'Retrieval Coverage',
+                'SQL Success',
+                'Policy Approval',
+                'Retrieval',
             ];
             const values = [
                 data.sql_generation_success_rate,
@@ -412,17 +483,19 @@
             const layout = {
                 title: '',
                 yaxis: {title: 'Percentage (%)', range: [0, 100]},
-                margin: {b: 60, l: 60, r: 20, t: 20},
-                height: 400,
+                margin: {b: 60, l: 70, r: 20, t: 20},
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                plot_bgcolor: 'rgba(245,245,245,0.5)',
                 showlegend: false,
+                autosize: true,
             };
 
-            Plotly.newPlot('quality-chart', [trace], layout, {responsive: true});
+            Plotly.newPlot('quality-chart', [trace], layout, {responsive: true, displayModeBar: false});
         }
 
         function renderIntentChart(data) {
-            const intents = Object.keys(data.by_intent);
-            const counts = intents.map(i => data.by_intent[i].count);
+            const intents = Object.keys(data.by_intent).length > 0 ? Object.keys(data.by_intent) : ['No data'];
+            const counts = intents.length > 0 ? intents.map(i => data.by_intent[i].count) : [0];
 
             const trace = {
                 labels: intents,
@@ -430,16 +503,19 @@
                 type: 'pie',
                 marker: {
                     colors: [colors.primary, colors.success, colors.warning, colors.danger, colors.light],
+                    line: {color: 'white', width: 2}
                 },
+                textinfo: 'label+percent',
             };
 
             const layout = {
                 title: '',
-                height: 400,
+                paper_bgcolor: 'rgba(0,0,0,0)',
                 margin: {b: 20, l: 20, r: 20, t: 20},
+                autosize: true,
             };
 
-            Plotly.newPlot('intent-chart', [trace], layout, {responsive: true});
+            Plotly.newPlot('intent-chart', [trace], layout, {responsive: true, displayModeBar: false});
         }
 
         function renderCostChart(data) {
@@ -454,6 +530,7 @@
                 mode: 'lines+markers',
                 line: {color: colors.danger, width: 3},
                 fillcolor: 'rgba(255, 107, 107, 0.2)',
+                marker: {size: 8},
             };
 
             const layout = {
@@ -461,11 +538,13 @@
                 xaxis: {title: 'Date'},
                 yaxis: {title: 'Estimated Cost ($)'},
                 hovermode: 'x',
-                margin: {b: 40, l: 60, r: 20, t: 20},
-                height: 400,
+                margin: {b: 50, l: 70, r: 20, t: 20},
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                plot_bgcolor: 'rgba(245,245,245,0.5)',
+                autosize: true,
             };
 
-            Plotly.newPlot('cost-chart', [trace], layout, {responsive: true});
+            Plotly.newPlot('cost-chart', [trace], layout, {responsive: true, displayModeBar: false});
         }
 
         // Load metrics on page load

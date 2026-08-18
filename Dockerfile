@@ -20,6 +20,8 @@ RUN useradd -m -u 1000 app
 
 COPY --from=builder --chown=app:app /app /app
 
+RUN chmod u+w /app && mkdir -p /app/.files && chmod -R u+w /app/.files
+
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
 

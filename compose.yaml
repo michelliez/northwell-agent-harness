@@ -18,7 +18,7 @@ services:
       ANTHROPIC_CUSTOM_HEADERS: "${ANTHROPIC_CUSTOM_HEADERS:-}"
     volumes:
       - ../fixtures/rag/index-v6-genq-combined-expansion.sqlite:/opt/clarity/rag/index.sqlite:ro
-      - clarity_artifacts:/var/lib/clarity
+      - ./artifacts:/var/lib/clarity
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
       interval: 10s
@@ -47,6 +47,16 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-volumes:
-  clarity_artifacts:
-    driver: local
+  metrics:
+    build: .
+    command: streamlit run src/ui/metrics_app.py --server.port=8502 --server.address=0.0.0.0
+    ports:
+      - "8502:8502"
+    environment:
+      AGENT_API_URL: http://api:8000
+      PYTHONUNBUFFERED: "1"
+      STREAMLIT_SERVER_HEADLESS: "true"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped

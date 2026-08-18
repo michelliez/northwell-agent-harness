@@ -34,12 +34,24 @@ directory beside this repository:
 docker compose up
 ```
 
-This will:
-1. Start the FastAPI API service on `http://localhost:8000`
-2. Wait for the API to pass health checks
-3. Start the Chainlit UI service on `http://localhost:8501`
+This will start three services:
+1. **API** (`http://localhost:8000`) - FastAPI backend
+2. **Chat UI** (`http://localhost:8501`) - Chainlit chat interface
+3. **Metrics Dashboard** (`http://localhost:8502`) - Streamlit analytics (auto-detects dark/light mode)
 
-You can now open `http://localhost:8501` in your browser to use the chat interface.
+You can now:
+- Open `http://localhost:8501` to chat with the agent
+- Open `http://localhost:8502` to view metrics and analytics
+
+**To disable the metrics dashboard** (optional), edit `compose.yaml` and comment out the `metrics` service.
+
+### Access the Services
+
+| Service | URL | Purpose |
+|---------|-----|---------|
+| **Chat** | `http://localhost:8501` | Ask questions, interact with the agent |
+| **Metrics** | `http://localhost:8502` | View performance, cost, and quality analytics |
+| **API** | `http://localhost:8000` | Backend API (for direct API calls) |
 
 ### Stop the Services
 
