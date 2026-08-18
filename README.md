@@ -80,6 +80,50 @@ Optional dependency groups are not needed to run the agent:
 still runs unchanged — no node imports the BigQuery SDK, and `dry_run` fails
 closed with an install hint. Tests for those paths skip rather than fail.
 
+## Docker quick start
+
+Docker Compose starts the FastAPI backend, Chainlit chat interface, and metrics
+dashboard. The default configuration mounts the shared SQLite RAG and FAISS
+dense indexes from the sibling `fixtures/` directory.
+
+```bash
+# Validate without rendering values from .env.
+docker compose config --quiet
+
+# Build after cloning or changing dependencies.
+docker compose build
+
+# Start all services in the background.
+docker compose up -d
+
+# Check container health and status.
+docker compose ps
+```
+
+Open the services at:
+
+- Chainlit chat: <http://localhost:8501>
+- Metrics dashboard: <http://localhost:8502>
+- FastAPI and Swagger: <http://localhost:8000/docs>
+- API readiness: <http://localhost:8000/ready>
+
+Follow API startup and retrieval logs with:
+
+```bash
+docker compose logs -f api
+```
+
+Stop the services while preserving their containers and downloaded model cache:
+
+```bash
+docker compose stop
+```
+
+See [Docker and Compose Setup](docs/DOCKER.md) for configuration, index mounts,
+health checks, troubleshooting, and deployment preparation. Avoid plain
+`docker compose config` when `.env` contains credentials because it prints
+interpolated values; use `docker compose config --quiet` for validation.
+
 ## Index Documentation
 
 ```powershell

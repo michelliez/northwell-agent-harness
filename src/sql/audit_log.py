@@ -25,12 +25,21 @@ class AuditEvent:
         "cost_gate",
         "result_safety",
         "execution",
+        "model_usage",
     ]
     decision: Literal["allowed", "rejected", "error"]
     reason: str | None = None
     sql: str | None = None
     bytes_processed: int | None = None
     referenced_tables: list[str] | None = None
+    provider: str | None = None
+    operation: str | None = None
+    model: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_creation_input_tokens: int | None = None
+    cache_read_input_tokens: int | None = None
+    total_tokens: int | None = None
 
     def validate(self) -> None:
         """Validate that the event is well-formed."""
@@ -45,6 +54,10 @@ class AuditEvent:
         # When decision is rejected or error, reason should be provided
         if self.decision in ("rejected", "error") and not self.reason:
             raise ValueError(f"decision '{self.decision}' requires a reason")
+        if self.event_type == "model_usage":
+            required = (self.provider, self.operation, self.model, self.total_tokens)
+            if any(value is None for value in required):
+                raise ValueError("model_usage requires provider, operation, model, and total_tokens")
 
 
 class AuditLog:

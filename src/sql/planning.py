@@ -12,7 +12,8 @@ from anthropic.types import ToolUseBlock
 
 from agent_host.budget import ExecutionBudget
 from agent_host.config import AppConfig
-from agent_host.conversation import turns_to_messages
+from agent_host.model_usage import record_anthropic_usage
+from agent_host.trace_logger import TraceLogger
 from sql.models import (
     ApprovedQueryPlan,
     CatalogRef,
@@ -74,6 +75,7 @@ def propose_query_plan(
     client: MessagesClient | None = None,
     feedback: str | None = None,
     history: list[dict] | None = None,
+    trace: TraceLogger | None = None,
 ) -> QueryPlanAST:
     """Ask Claude for one schema-constrained plan through a forced tool call.
 
@@ -110,6 +112,14 @@ def propose_query_plan(
         tool_choice={"type": "tool", "name": "emit_query_plan"},
         timeout=budget.model_call_timeout_seconds,
     )
+    if trace is not None:
+        record_anthropic_usage(
+            response,
+            trace=trace,
+            artifact_path=config.artifact_path,
+            operation="query_planning",
+            model=config.require_model(),
+        )
     tool_uses = [
         block
         for block in response.content

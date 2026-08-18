@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -38,6 +39,30 @@ def test_rrf_fuse_breaks_ties_on_chunk_id_and_truncates() -> None:
 def test_dense_searcher_fails_closed_on_missing_artifacts(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="missing.*chunk_mapping"):
         DenseSearcher(tmp_path)
+
+
+def _fake_torch(*, cuda: bool = False, mps: bool = False):
+    return SimpleNamespace(
+        cuda=SimpleNamespace(is_available=lambda: cuda),
+        backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: mps)),
+    )
+
+
+def test_auto_device_prefers_cuda_then_mps_then_cpu() -> None:
+    assert dense_module._resolve_device(_fake_torch(cuda=True, mps=True), "auto") == "cuda"
+    assert dense_module._resolve_device(_fake_torch(mps=True), "auto") == "mps"
+    assert dense_module._resolve_device(_fake_torch(), "auto") == "cpu"
+
+
+def test_explicit_mps_fails_closed_when_unavailable() -> None:
+    assert dense_module._resolve_device(_fake_torch(mps=True), "mps") == "mps"
+    with pytest.raises(RuntimeError, match="Apple MPS is unavailable"):
+        dense_module._resolve_device(_fake_torch(), "mps")
+
+
+def test_unknown_dense_device_is_rejected() -> None:
+    with pytest.raises(RuntimeError, match="DENSE_DEVICE must be one of"):
+        dense_module._resolve_device(_fake_torch(), "metal")
 
 
 def _build_two_document_index(tmp_path: Path) -> Path:

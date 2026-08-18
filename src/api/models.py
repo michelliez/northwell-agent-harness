@@ -71,6 +71,14 @@ class AuditEventResponse(BaseModel):
     reason: str | None = None
     sql: str | None = None
     bytes_processed: int | None = None
+    provider: str | None = None
+    operation: str | None = None
+    model: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_creation_input_tokens: int | None = None
+    cache_read_input_tokens: int | None = None
+    total_tokens: int | None = None
 
 
 class AuditRunResponse(BaseModel):

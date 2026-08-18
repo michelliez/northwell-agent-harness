@@ -7,7 +7,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .models import DailyMetrics, IntentMetrics, MetricsSummary
+from .models import DailyMetrics, IntentMetrics, MetricsSummary, NodeMetrics
 
 
 class MetricsAggregator:
@@ -35,9 +35,13 @@ class MetricsAggregator:
         Returns:
             MetricsSummary with aggregated metrics
         """
-        # Load audit logs (most comprehensive source for decisions)
+        # Load audit logs and traces
         runs = self._load_audit_logs(days, start_date, end_date)
         traces = self._load_traces(days, start_date, end_date)
+
+        # If no audit logs, use traces as source of runs
+        if not runs and traces:
+            runs = {run_id: [] for run_id in traces.keys()}
 
         if not runs:
             return MetricsSummary(
@@ -282,6 +286,9 @@ class MetricsAggregator:
                 ),
             )
 
+        # Compute node-level metrics from traces and audit events
+        node_summary = self._compute_node_metrics(traces, runs)
+
         return MetricsSummary(
             total_queries=total_queries,
             total_tokens=total_tokens,
@@ -297,8 +304,140 @@ class MetricsAggregator:
             avg_cost_per_query=avg_cost,
             by_intent=intent_summary,
             by_date=date_summary,
+            by_node=node_summary,
             sample_count=total_queries,
         )
+
+    def _compute_node_metrics(
+        self, traces: dict[str, list[dict]], audit_events: dict[str, list[dict]]
+    ) -> dict[str, NodeMetrics]:
+        """Compute per-node metrics from trace events and map tokens from audit events."""
+        node_data: dict[str, dict] = defaultdict(
+            lambda: {
+                "count": 0,
+                "latencies": [],
+                "success_count": 0,
+                "failure_count": 0,
+                "total_tokens": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_read_tokens": 0,
+            }
+        )
+
+        # Map operation names to node names for token attribution
+        operation_to_node = {
+            "intent_classification": "Intent Classification",
+            "schema_exploration": "Retrieval",
+            "documentation_answer": "Answer Generation",
+            "query_planning": "SQL Planning",
+            "output_safety": "Result Safety",
+            "policy_check": "Policy Gate",
+        }
+
+        # Map trace event names to node names
+        event_to_node = {
+            "policy_gate": "Policy Gate",
+            "intent_classified": "Intent Classification",
+            "retrieval": "Retrieval",
+            "context_gate": "Context Gate",
+            "sql_planning": "SQL Planning",
+            "sql_compiled": "SQL Validation",
+            "answer_generated": "Answer Generation",
+            "result_safety": "Result Safety",
+        }
+
+        for run_id, events in traces.items():
+            # Group events by node
+            current_node = None
+            node_start_time = None
+
+            for event in events:
+                event_name = event.get("event", "")
+                ts = event.get("ts", 0)
+
+                # Determine node from event name
+                node = None
+                for key, label in event_to_node.items():
+                    if key in event_name:
+                        node = label
+                        break
+
+                if node:
+                    # Check if this is a new node (different from current)
+                    if node != current_node and node_start_time is not None:
+                        # Record latency for previous node
+                        latency = (ts - node_start_time) * 1000  # Convert to ms
+                        if latency > 0:
+                            node_data[current_node]["latencies"].append(latency)
+                            node_data[current_node]["count"] += 1
+
+                    current_node = node
+                    node_start_time = ts
+
+                    # Check success/failure from event
+                    result = event.get("result", {})
+                    if isinstance(result, dict) and result.get("decision") == "rejected":
+                        node_data[node]["failure_count"] += 1
+                    elif "allowed" in event_name or "completed" in event_name:
+                        node_data[node]["success_count"] += 1
+
+        # Process audit events to extract token data
+        for run_id, events in audit_events.items():
+            for event in events:
+                if event.get("event_type") == "model_usage":
+                    operation = event.get("operation", "")
+                    node_name = operation_to_node.get(operation)
+
+                    if node_name:
+                        node_data[node_name]["total_tokens"] += event.get(
+                            "total_tokens", 0
+                        )
+                        node_data[node_name]["input_tokens"] += event.get(
+                            "input_tokens", 0
+                        )
+                        node_data[node_name]["output_tokens"] += event.get(
+                            "output_tokens", 0
+                        )
+                        node_data[node_name]["cache_creation_tokens"] += event.get(
+                            "cache_creation_input_tokens", 0
+                        )
+                        node_data[node_name]["cache_read_tokens"] += event.get(
+                            "cache_read_input_tokens", 0
+                        )
+
+        # Build node metrics
+        node_summary = {}
+        for node_name, data in node_data.items():
+            latencies = data["latencies"]
+            count = data["count"]
+            success = data["success_count"]
+            failure = data["failure_count"]
+            total = success + failure if success + failure > 0 else count
+
+            avg_latency = sum(latencies) / len(latencies) if latencies else 0
+            min_latency = min(latencies) if latencies else 0
+            max_latency = max(latencies) if latencies else 0
+            success_rate = (success / total * 100) if total > 0 else 0
+
+            node_summary[node_name] = NodeMetrics(
+                node_name=node_name,
+                count=count,
+                avg_latency_ms=avg_latency,
+                min_latency_ms=min_latency,
+                max_latency_ms=max_latency,
+                success_count=success,
+                failure_count=failure,
+                success_rate=success_rate,
+                total_tokens=data["total_tokens"],
+                input_tokens=data["input_tokens"],
+                output_tokens=data["output_tokens"],
+                cache_creation_tokens=data["cache_creation_tokens"],
+                cache_read_tokens=data["cache_read_tokens"],
+            )
+
+        return node_summary
 
     def _get_cutoff_date(
         self, days: int | None, start_date: str | None, end_date: str | None
@@ -313,9 +452,11 @@ class MetricsAggregator:
 
     def _extract_tokens(self, audit_events: list[dict]) -> int:
         """Extract token count from audit events."""
-        # Look for any event with tokens info (currently not in audit, would come from API response)
-        # For now, estimate from event count or return 0
-        return 0
+        return sum(
+            int(event.get("total_tokens") or 0)
+            for event in audit_events
+            if event.get("event_type") == "model_usage"
+        )
 
     def _extract_latency(self, trace_events: list[dict]) -> float:
         """Extract latency in milliseconds from trace events."""
@@ -353,15 +494,33 @@ class MetricsAggregator:
         return None
 
     def _extract_cost(self, audit_events: list[dict]) -> float:
-        """Extract BigQuery cost estimate from audit events."""
+        """Extract total cost: BigQuery + Claude API token costs."""
+        bq_cost = 0
+        claude_cost = 0
+
         for event in audit_events:
+            # BigQuery dry-run cost
             if event.get("event_type") == "cost_gate":
-                # Estimate: $6.25 per TB, bytes_processed field has byte count
                 bytes_processed = event.get("bytes_processed", 0)
                 if bytes_processed:
-                    cost = (bytes_processed / (1024 ** 4)) * 6.25  # TB to cost
-                    return cost
-        return 0
+                    bq_cost += (bytes_processed / (1024 ** 4)) * 6.25  # TB to cost
+
+            # Claude API token cost
+            if event.get("event_type") == "model_usage":
+                input_tokens = event.get("input_tokens", 0)
+                output_tokens = event.get("output_tokens", 0)
+                cache_creation_tokens = event.get("cache_creation_input_tokens", 0)
+                cache_read_tokens = event.get("cache_read_input_tokens", 0)
+
+                # Claude 3.5 Sonnet pricing: $3 per 1M input, $15 per 1M output
+                # Cache creation tokens count as input, cache read is 10% of input cost
+                input_cost = (input_tokens + cache_creation_tokens) / 1_000_000 * 3.0
+                output_cost = output_tokens / 1_000_000 * 15.0
+                cache_read_cost = cache_read_tokens / 1_000_000 * 0.3  # 10% of input cost
+
+                claude_cost += input_cost + output_cost + cache_read_cost
+
+        return bq_cost + claude_cost
 
     def _is_rejected(self, audit_events: list[dict]) -> bool:
         """Check if request was rejected at any gate."""

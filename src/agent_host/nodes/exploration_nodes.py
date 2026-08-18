@@ -10,6 +10,7 @@ from langgraph.runtime import Runtime
 from agent_host.budget import BudgetExceeded, budget_from_env
 from agent_host.config import get_anthropic_client, get_config
 from agent_host.conversation import turns_to_messages
+from agent_host.model_usage import record_anthropic_usage
 from agent_host.state import AgentContext, AgentState
 from agent_host.tools import execute_retrieval_tool, tools_for_intent
 from agent_host.trace_logger import TraceLogger
@@ -59,6 +60,13 @@ def exploration_node(
                 messages=messages,  # type: ignore[arg-type]
                 tools=tools,  # type: ignore[arg-type]
                 timeout=budget.model_call_timeout_seconds,
+            )
+            record_anthropic_usage(
+                response,
+                trace=trace,
+                artifact_path=cfg.artifact_path,
+                operation="schema_exploration",
+                model=cfg.require_model(),
             )
             tool_uses = [block for block in response.content if isinstance(block, ToolUseBlock)]
             if not tool_uses:

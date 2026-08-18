@@ -13,6 +13,7 @@ from agent_host import failure_messages
 from agent_host.budget import ExecutionBudget, budget_from_env
 from agent_host.config import AppConfig, get_anthropic_client, get_config
 from agent_host.conversation import turns_to_messages
+from agent_host.model_usage import record_anthropic_usage
 from agent_host.state import AgentContext, AgentState
 from agent_host.trace_logger import TraceLogger
 from policy.screen import ContentSurface, screen_content
@@ -406,6 +407,7 @@ def classify_intent(
     *,
     budget: ExecutionBudget | None = None,
     history: list[dict] | None = None,
+    trace: TraceLogger | None = None,
 ) -> dict[str, Any]:
     """Classify one question and enforce the host-owned routing contract."""
     request_budget = budget or budget_from_env()
@@ -428,6 +430,14 @@ def classify_intent(
         tool_choice={"type": "tool", "name": "emit_intent"},
         timeout=request_budget.model_call_timeout_seconds,
     )
+    if trace is not None:
+        record_anthropic_usage(
+            response,
+            trace=trace,
+            artifact_path=config.artifact_path,
+            operation="intent_classification",
+            model=config.require_model(),
+        )
 
     stop_reason = getattr(response, "stop_reason", None)
     if stop_reason in {"refusal", "max_tokens"}:
@@ -468,7 +478,13 @@ def classify_intent_node(
     try:
         budget = runtime.context.budget if runtime is not None else budget_from_env()
         history = turns_to_messages(state.get("conversation_turns") or [])
-        decision = classify_intent(question, cfg, budget=budget, history=history or None)
+        decision = classify_intent(
+            question,
+            cfg,
+            budget=budget,
+            history=history or None,
+            trace=trace,
+        )
     except Exception as exc:
         trace.record("intent.model_error", error=str(exc))
         return {

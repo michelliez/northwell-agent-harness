@@ -9,8 +9,10 @@ services:
       API_PORT: 8000
       ALLOWED_ORIGINS: "http://localhost:8501"
       RAG_DB_PATH: /opt/clarity/rag/index.sqlite
-      DENSE_INDEX_DIR: ""
+      DENSE_INDEX_DIR: /opt/clarity/dense
+      DENSE_DEVICE: cpu
       ARTIFACT_PATH: /var/lib/clarity
+      TRACE_CONTENT_MODE: debug
       PYTHONUNBUFFERED: "1"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       AI_HUB_API_KEY: "${AI_HUB_API_KEY:-}"
@@ -18,13 +20,17 @@ services:
       ANTHROPIC_CUSTOM_HEADERS: "${ANTHROPIC_CUSTOM_HEADERS:-}"
     volumes:
       - ../fixtures/rag/index-v6-genq-combined-expansion.sqlite:/opt/clarity/rag/index.sqlite:ro
+      - ../fixtures/embeddings/dense-corpus-qwen06b:/opt/clarity/dense:ro
       - ./artifacts:/var/lib/clarity
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
       interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      # Dense retrieval loads the Qwen encoder during API startup. A cold
+      # container may first download ~1.2 GB from Hugging Face, so do not mark
+      # it unhealthy while that one-time initialization is still running.
+      start_period: 180s
     restart: unless-stopped
     stop_grace_period: 30s
 

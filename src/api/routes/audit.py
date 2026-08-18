@@ -82,6 +82,14 @@ async def get_run_audit(request: Request, run_id: str) -> AuditRunResponse:
                 reason=e.reason,
                 sql=e.sql,
                 bytes_processed=e.bytes_processed,
+                provider=e.provider,
+                operation=e.operation,
+                model=e.model,
+                input_tokens=e.input_tokens,
+                output_tokens=e.output_tokens,
+                cache_creation_input_tokens=e.cache_creation_input_tokens,
+                cache_read_input_tokens=e.cache_read_input_tokens,
+                total_tokens=e.total_tokens,
             )
             for e in events
         ],

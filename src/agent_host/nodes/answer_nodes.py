@@ -10,6 +10,7 @@ from langgraph.runtime import Runtime
 from agent_host.budget import BudgetExceeded, budget_from_env
 from agent_host.config import get_anthropic_client, get_config
 from agent_host.conversation import turns_to_messages
+from agent_host.model_usage import record_anthropic_usage
 from agent_host.state import AgentContext, AgentState
 from agent_host.trace_logger import TraceLogger
 
@@ -92,6 +93,13 @@ def general_answer_node(
             tools=[],
             timeout=budget.model_call_timeout_seconds,
         )
+        record_anthropic_usage(
+            response,
+            trace=trace,
+            artifact_path=cfg.artifact_path,
+            operation="general_answer",
+            model=cfg.require_model(),
+        )
     except Exception as exc:
         trace.record("general_answer.error", error=str(exc))
         return {"answer": "I encountered an error generating the answer."}
@@ -159,6 +167,13 @@ def documentation_answer_node(
             messages=messages,  # type: ignore[arg-type]
             tools=[],
             timeout=budget.model_call_timeout_seconds,
+        )
+        record_anthropic_usage(
+            response,
+            trace=trace,
+            artifact_path=cfg.artifact_path,
+            operation="documentation_answer",
+            model=cfg.require_model(),
         )
     except Exception as exc:
         trace.record("documentation_answer.error", error=str(exc))

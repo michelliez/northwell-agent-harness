@@ -20,6 +20,7 @@ actionable message when the group is absent, mirroring the BigQuery adapter.
 
 from __future__ import annotations
 
+import os
 from collections import defaultdict
 from collections.abc import Sequence
 from pathlib import Path
@@ -38,6 +39,36 @@ QUERY_TASK = (
     "retrieve the data-dictionary passage that answers it"
 )
 QUERY_MAX_LENGTH = 512
+SUPPORTED_DENSE_DEVICES = frozenset({"auto", "cpu", "cuda", "mps"})
+
+
+def _resolve_device(torch: Any, requested: str) -> str:
+    """Resolve and validate the query-encoder device.
+
+    CUDA remains preferred where available. Apple Silicon now uses MPS before
+    falling back to CPU, and operators can pin any supported backend with
+    ``DENSE_DEVICE``.
+    """
+    normalized = requested.strip().lower()
+    if normalized not in SUPPORTED_DENSE_DEVICES:
+        choices = ", ".join(sorted(SUPPORTED_DENSE_DEVICES))
+        raise RuntimeError(f"DENSE_DEVICE must be one of: {choices}")
+
+    cuda_available = bool(torch.cuda.is_available())
+    mps_backend = getattr(getattr(torch, "backends", None), "mps", None)
+    mps_available = bool(mps_backend is not None and mps_backend.is_available())
+
+    if normalized == "auto":
+        if cuda_available:
+            return "cuda"
+        if mps_available:
+            return "mps"
+        return "cpu"
+    if normalized == "cuda" and not cuda_available:
+        raise RuntimeError("DENSE_DEVICE=cuda was requested but CUDA is unavailable")
+    if normalized == "mps" and not mps_available:
+        raise RuntimeError("DENSE_DEVICE=mps was requested but Apple MPS is unavailable")
+    return normalized
 
 
 class QueryEncoder(Protocol):
@@ -73,13 +104,15 @@ class QwenQueryEncoder:
 
         self._torch = torch
         self.model_name = model_name
-        if device == "auto":
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = _resolve_device(torch, device)
         self.device_name = device
         self._tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
         self._model = AutoModel.from_pretrained(
             model_name,
-            dtype=torch.float16 if device == "cuda" else torch.float32,
+            # MPS and CUDA both support half precision and avoid expanding the
+            # 0.6B checkpoint to a multi-gigabyte float32 CPU copy.
+            dtype=torch.float16 if device in {"cuda", "mps"} else torch.float32,
+            low_cpu_mem_usage=True,
         )
         self._model.eval()
         self._model.to(device)
@@ -153,7 +186,10 @@ class DenseSearcher:
                     f"Dense artifact was built with {self.metadata.model_name!r}; only "
                     "Qwen3-Embedding checkpoints are supported in the request path."
                 )
-            encoder = QwenQueryEncoder(self.metadata.model_name)
+            encoder = QwenQueryEncoder(
+                self.metadata.model_name,
+                device=os.getenv("DENSE_DEVICE", "auto"),
+            )
         self._encoder = encoder
 
     def search(self, query: str, top_k: int) -> list[tuple[str, float]]:
@@ -171,6 +207,8 @@ _SEARCHERS: dict[str, DenseSearcher] = {}
 
 
 def load_dense_searcher(index_dir: Path, *, encoder: QueryEncoder | None = None) -> DenseSearcher:
+    # Device configuration is startup configuration; restart the process after
+    # changing DENSE_DEVICE so the resident encoder is rebuilt on that backend.
     key = str(index_dir.resolve())
     if key not in _SEARCHERS:
         _SEARCHERS[key] = DenseSearcher(index_dir, encoder=encoder)
@@ -197,6 +235,7 @@ def rrf_fuse(
 __all__ = [
     "HYBRID_CANDIDATE_MULTIPLIER",
     "RRF_K",
+    "SUPPORTED_DENSE_DEVICES",
     "DenseSearcher",
     "QueryEncoder",
     "QwenQueryEncoder",

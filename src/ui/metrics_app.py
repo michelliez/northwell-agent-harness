@@ -173,6 +173,74 @@ with cost_col:
     else:
         st.info("No cost data yet.")
 
+# Node performance
+st.divider()
+st.subheader("Workflow Node Performance")
+
+if metrics.get("by_node"):
+    node_col1, node_col2 = st.columns(2)
+
+    with node_col1:
+        st.markdown("#### Node Latency Timeline")
+        nodes = sorted(metrics["by_node"].keys())
+        latencies = [metrics["by_node"][n]["avg_latency_ms"] for n in nodes]
+        st.bar_chart(
+            {node: metrics["by_node"][node]["avg_latency_ms"] for node in nodes},
+            use_container_width=True,
+        )
+
+    with node_col2:
+        st.markdown("#### Node Success Rates")
+        st.bar_chart(
+            {node: metrics["by_node"][node]["success_rate"] for node in nodes},
+            use_container_width=True,
+        )
+
+    st.markdown("#### Node Detailed Metrics")
+    node_data = []
+    for node in sorted(metrics["by_node"].keys()):
+        n = metrics["by_node"][node]
+        node_data.append(
+            {
+                "Node": n["node_name"],
+                "Count": n["count"],
+                "Avg Latency (ms)": f"{n['avg_latency_ms']:.0f}",
+                "Min (ms)": f"{n['min_latency_ms']:.0f}",
+                "Max (ms)": f"{n['max_latency_ms']:.0f}",
+                "Success": n["success_count"],
+                "Failures": n["failure_count"],
+                "Success Rate": f"{n['success_rate']:.1f}%",
+                "Total Tokens": n["total_tokens"],
+                "Input Tokens": n["input_tokens"],
+                "Output Tokens": n["output_tokens"],
+                "Cache Created": n["cache_creation_tokens"],
+                "Cache Read": n["cache_read_tokens"],
+            }
+        )
+    st.dataframe(node_data, use_container_width=True)
+
+    st.markdown("#### Token Breakdown by Node")
+    token_col1, token_col2 = st.columns(2)
+
+    with token_col1:
+        st.markdown("**Total Tokens per Node**")
+        st.bar_chart(
+            {node: metrics["by_node"][node]["total_tokens"] for node in sorted(metrics["by_node"].keys())},
+            use_container_width=True,
+        )
+
+    with token_col2:
+        st.markdown("**Token Type Breakdown**")
+        token_types = {
+            "Input": sum(n["input_tokens"] for n in metrics["by_node"].values()),
+            "Output": sum(n["output_tokens"] for n in metrics["by_node"].values()),
+            "Cache Created": sum(n["cache_creation_tokens"] for n in metrics["by_node"].values()),
+            "Cache Read": sum(n["cache_read_tokens"] for n in metrics["by_node"].values()),
+        }
+        st.bar_chart(token_types, use_container_width=True)
+else:
+    st.info("No node performance data yet.")
+
 # Detailed tables
 st.divider()
 st.subheader("Detailed Breakdown")

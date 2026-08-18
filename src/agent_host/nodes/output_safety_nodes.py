@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agent_host.budget import BudgetExceeded, budget_from_env
 from agent_host.config import AppConfig, get_anthropic_client, get_config
+from agent_host.model_usage import record_anthropic_usage
 from agent_host.state import AgentContext, AgentState
 from agent_host.trace_logger import TraceLogger
 
@@ -238,6 +239,13 @@ def classify_output_safety_node(
             tools=[_SAFETY_TOOL],  # type: ignore[arg-type]
             tool_choice={"type": "tool", "name": "emit_output_safety_assessment"},
             timeout=budget.model_call_timeout_seconds,
+        )
+        record_anthropic_usage(
+            response,
+            trace=trace,
+            artifact_path=cfg.artifact_path,
+            operation="output_safety",
+            model=cfg.require_model(),
         )
     except Exception as exc:
         trace.record("output_safety.error", error=str(exc))

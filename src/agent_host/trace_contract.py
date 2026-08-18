@@ -104,6 +104,7 @@ TraceEventName = Literal[
     "documentation_answer.budget_exceeded",
     "documentation_answer.error",
     "answer.ready",
+    "model.usage",
 ]
 
 
@@ -201,6 +202,7 @@ EVENT_SPEC: dict[TraceEventName, EventSpec] = {
     "documentation_answer.budget_exceeded": _s("lifecycle", "blocked", "Budget exceeded"),
     "documentation_answer.error": _s("lifecycle", "error", "Doc answer failed"),
     "answer.ready": _s("lifecycle", "ok", "Answer returned"),
+    "model.usage": _s("operational", "ok", "Model usage recorded"),
 }
 
 EVENT_NAMES: frozenset[str] = frozenset(get_args(TraceEventName))

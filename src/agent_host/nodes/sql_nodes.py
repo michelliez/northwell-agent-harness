@@ -6,13 +6,12 @@ with execution_status='not_configured'. No SQL is ever run.
 
 from __future__ import annotations
 
-import json
-
 from langgraph.runtime import Runtime
 
 from agent_host import failure_messages
 from agent_host.budget import budget_from_env
 from agent_host.config import get_config
+from agent_host.conversation import turns_to_messages
 from agent_host.state import AgentContext, AgentState
 from agent_host.trace_logger import TraceLogger
 from sql.compiler import UnsupportedPlanError, plan_to_bigquery_sql
@@ -28,7 +27,6 @@ from sql.models import (
     SchemaSnapshot,
     SqlValidationResult,
 )
-from agent_host.conversation import turns_to_messages
 from sql.planning import (
     permission_scope_from_snapshot,
     propose_query_plan,
@@ -85,6 +83,7 @@ def query_plan_node(
             budget,
             feedback=feedback,
             history=history or None,
+            trace=trace,
         )
     except Exception as exc:
         trace.record("query_plan.error", error=type(exc).__name__)

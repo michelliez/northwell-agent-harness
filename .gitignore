@@ -20,6 +20,7 @@ claude-code.md
 
 # Generated runtime state (use .local/ instead of logs/, var/)
 .local/
+artifacts/
 logs/
 var/
 pytest-cache-files-*

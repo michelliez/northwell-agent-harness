@@ -7,6 +7,25 @@ from datetime import datetime
 
 
 @dataclass
+class NodeMetrics:
+    """Metrics for a single workflow node."""
+
+    node_name: str
+    count: int
+    avg_latency_ms: float
+    min_latency_ms: float
+    max_latency_ms: float
+    success_count: int
+    failure_count: int
+    success_rate: float
+    total_tokens: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_creation_tokens: int = 0
+    cache_read_tokens: int = 0
+
+
+@dataclass
 class IntentMetrics:
     """Metrics grouped by detected intent."""
 
@@ -58,6 +77,7 @@ class MetricsSummary:
     # Breakdowns
     by_intent: dict[str, IntentMetrics] = field(default_factory=dict)
     by_date: dict[str, DailyMetrics] = field(default_factory=dict)
+    by_node: dict[str, NodeMetrics] = field(default_factory=dict)
 
     # Metadata
     sample_count: int = 0
@@ -102,6 +122,24 @@ class MetricsSummary:
                     "success_rate": round(m.success_rate, 2),
                 }
                 for date, m in self.by_date.items()
+            },
+            "by_node": {
+                name: {
+                    "node_name": m.node_name,
+                    "count": m.count,
+                    "avg_latency_ms": round(m.avg_latency_ms, 2),
+                    "min_latency_ms": round(m.min_latency_ms, 2),
+                    "max_latency_ms": round(m.max_latency_ms, 2),
+                    "success_count": m.success_count,
+                    "failure_count": m.failure_count,
+                    "success_rate": round(m.success_rate, 2),
+                    "total_tokens": m.total_tokens,
+                    "input_tokens": m.input_tokens,
+                    "output_tokens": m.output_tokens,
+                    "cache_creation_tokens": m.cache_creation_tokens,
+                    "cache_read_tokens": m.cache_read_tokens,
+                }
+                for name, m in self.by_node.items()
             },
             "sample_count": self.sample_count,
             "last_updated": self.last_updated,
