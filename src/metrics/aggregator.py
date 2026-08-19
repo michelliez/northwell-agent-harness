@@ -41,7 +41,7 @@ class MetricsAggregator:
 
         # If no audit logs, use traces as source of runs
         if not runs and traces:
-            runs = {run_id: [] for run_id in traces.keys()}
+            runs = {run_id: [] for run_id in traces}
 
         if not runs:
             return MetricsSummary(
@@ -90,7 +90,7 @@ class MetricsAggregator:
                             continue
 
                         runs[run_id].append(event)
-                    except (json.JSONDecodeError, KeyError):
+                    except json.JSONDecodeError, KeyError:
                         continue
 
         return runs
@@ -125,7 +125,7 @@ class MetricsAggregator:
                                 continue
 
                         traces[run_id].append(event)
-                    except (json.JSONDecodeError, KeyError):
+                    except json.JSONDecodeError, KeyError:
                         continue
 
         return traces
@@ -235,17 +235,11 @@ class MetricsAggregator:
         # Compute averages and rates
         avg_latency = total_latency_ms / total_queries if total_queries > 0 else 0
         rejection_rate = (rejection_count / total_queries * 100) if total_queries > 0 else 0
-        clarification_rate = (
-            (clarification_count / total_queries * 100) if total_queries > 0 else 0
-        )
+        clarification_rate = (clarification_count / total_queries * 100) if total_queries > 0 else 0
         sql_success_rate = (
             (sql_success_count / sql_attempt_count * 100) if sql_attempt_count > 0 else 0
         )
-        avg_retrieval = (
-            (retrieval_coverage_sum / total_queries)
-            if total_queries > 0
-            else 0
-        )
+        avg_retrieval = (retrieval_coverage_sum / total_queries) if total_queries > 0 else 0
         avg_cost = total_cost / total_queries if total_queries > 0 else 0
 
         # Build by_intent summary
@@ -256,12 +250,8 @@ class MetricsAggregator:
                 intent=intent,
                 count=count,
                 avg_latency_ms=data["latency_sum"] / count if count > 0 else 0,
-                success_rate=(
-                    data["success_count"] / count * 100 if count > 0 else 0
-                ),
-                rejection_rate=(
-                    data["rejection_count"] / count * 100 if count > 0 else 0
-                ),
+                success_rate=(data["success_count"] / count * 100 if count > 0 else 0),
+                rejection_rate=(data["rejection_count"] / count * 100 if count > 0 else 0),
                 avg_tokens=int(data["tokens_sum"] / count) if count > 0 else 0,
             )
 
@@ -273,9 +263,7 @@ class MetricsAggregator:
                 queries=data["queries"],
                 total_tokens=data["tokens"],
                 total_latency_ms=int(data["latency_sum"]),
-                avg_latency_ms=data["latency_sum"] / data["queries"]
-                if data["queries"] > 0
-                else 0,
+                avg_latency_ms=data["latency_sum"] / data["queries"] if data["queries"] > 0 else 0,
                 rejections=data["rejections"],
                 clarifications=data["clarifications"],
                 estimated_cost=data["cost"],
@@ -311,13 +299,21 @@ class MetricsAggregator:
     def _compute_node_metrics(
         self, traces: dict[str, list[dict]], audit_events: dict[str, list[dict]]
     ) -> dict[str, NodeMetrics]:
-        """Compute per-node metrics from trace events and map tokens from audit events."""
+        """Compute stage metrics from explicit lifecycle events and model usage.
+
+        Latency is measured only between a stage's own start and terminal event;
+        neighboring trace events are never used as a proxy.  Older traces that
+        predate explicit starts still contribute executions and tokens, but not
+        invented latency values.
+        """
         node_data: dict[str, dict] = defaultdict(
             lambda: {
                 "count": 0,
                 "latencies": [],
                 "success_count": 0,
                 "failure_count": 0,
+                "terminal_runs": set(),
+                "usage_runs": set(),
                 "total_tokens": 0,
                 "input_tokens": 0,
                 "output_tokens": 0,
@@ -326,62 +322,95 @@ class MetricsAggregator:
             }
         )
 
-        # Map operation names to node names for token attribution
+        # One vocabulary is shared by timings and token attribution.
         operation_to_node = {
-            "intent_classification": "Intent Classification",
-            "schema_exploration": "Retrieval",
-            "documentation_answer": "Answer Generation",
-            "query_planning": "SQL Planning",
-            "output_safety": "Result Safety",
-            "policy_check": "Policy Gate",
+            "intent_classification": "Request Classification",
+            "schema_exploration": "Evidence Retrieval",
+            "general_answer": "Answer Creation",
+            "documentation_answer": "Answer Creation",
+            "query_planning": "SQL Drafting",
+            "output_safety": "Final Safety Review",
+            "policy_check": "Safety Screening",
         }
 
-        # Map trace event names to node names
-        event_to_node = {
-            "policy_gate": "Policy Gate",
-            "intent_classified": "Intent Classification",
-            "retrieval": "Retrieval",
-            "context_gate": "Context Gate",
-            "sql_planning": "SQL Planning",
-            "sql_compiled": "SQL Validation",
-            "answer_generated": "Answer Generation",
-            "result_safety": "Result Safety",
+        stages = {
+            "Safety Screening": {
+                "starts": {"policy_gate.checked"},
+                "success": {"policy_gate.allowed"},
+                "failure": {"request.blocked"},
+            },
+            "Request Classification": {
+                "starts": {"intent.started"},
+                "success": {"intent.classified"},
+                "failure": {"intent.empty_question", "intent.model_error"},
+            },
+            "Evidence Retrieval": {
+                "starts": {"retrieval.started", "exploration.started"},
+                "success": {"retrieval.completed", "exploration.completed"},
+                "failure": {"retrieval.error", "retrieval.content_blocked"},
+            },
+            "Evidence Validation": {
+                "starts": {"context_gate.started"},
+                "success": {"context_gate.completed"},
+                "failure": set(),
+            },
+            "SQL Drafting": {
+                "starts": {"query_plan.started"},
+                "success": {"query_plan.built"},
+                "failure": {"query_plan.no_schema_snapshot", "query_plan.error"},
+            },
+            "Answer Creation": {
+                "starts": {"general_answer.started", "documentation_answer.started"},
+                "success": {"general_answer.completed", "documentation_answer.completed"},
+                "failure": {
+                    "general_answer.budget_exceeded",
+                    "general_answer.error",
+                    "documentation_answer.budget_exceeded",
+                    "documentation_answer.error",
+                },
+            },
+            "Final Safety Review": {
+                "starts": {"output_safety.started"},
+                "success": {"output_safety.completed"},
+                "failure": {
+                    "output_safety.error",
+                    "output_safety.budget_exceeded",
+                    "output_safety.invalid_response",
+                    "output_safety.validation_error",
+                },
+            },
         }
+
+        start_to_stage = {
+            event: stage for stage, spec in stages.items() for event in spec["starts"]
+        }
+        terminal_to_stage = {
+            event: (stage, True) for stage, spec in stages.items() for event in spec["success"]
+        }
+        terminal_to_stage.update(
+            {event: (stage, False) for stage, spec in stages.items() for event in spec["failure"]}
+        )
 
         for run_id, events in traces.items():
-            # Group events by node
-            current_node = None
-            node_start_time = None
-
-            for event in events:
+            pending_starts: dict[str, list[float]] = defaultdict(list)
+            for event in sorted(events, key=lambda row: (row.get("ts", 0), row.get("seq", 0))):
                 event_name = event.get("event", "")
-                ts = event.get("ts", 0)
-
-                # Determine node from event name
-                node = None
-                for key, label in event_to_node.items():
-                    if key in event_name:
-                        node = label
-                        break
-
-                if node:
-                    # Check if this is a new node (different from current)
-                    if node != current_node and node_start_time is not None:
-                        # Record latency for previous node
-                        latency = (ts - node_start_time) * 1000  # Convert to ms
-                        if latency > 0:
-                            node_data[current_node]["latencies"].append(latency)
-                            node_data[current_node]["count"] += 1
-
-                    current_node = node
-                    node_start_time = ts
-
-                    # Check success/failure from event
-                    result = event.get("result", {})
-                    if isinstance(result, dict) and result.get("decision") == "rejected":
-                        node_data[node]["failure_count"] += 1
-                    elif "allowed" in event_name or "completed" in event_name:
-                        node_data[node]["success_count"] += 1
+                ts = float(event.get("ts", 0) or 0)
+                if event_name in start_to_stage:
+                    pending_starts[start_to_stage[event_name]].append(ts)
+                    continue
+                terminal = terminal_to_stage.get(event_name)
+                if terminal is None:
+                    continue
+                stage, succeeded = terminal
+                data = node_data[stage]
+                data["count"] += 1
+                data["terminal_runs"].add(run_id)
+                data["success_count" if succeeded else "failure_count"] += 1
+                if pending_starts[stage]:
+                    started = pending_starts[stage].pop(0)
+                    if ts >= started:
+                        data["latencies"].append((ts - started) * 1000)
 
         # Process audit events to extract token data
         for run_id, events in audit_events.items():
@@ -391,15 +420,10 @@ class MetricsAggregator:
                     node_name = operation_to_node.get(operation)
 
                     if node_name:
-                        node_data[node_name]["total_tokens"] += event.get(
-                            "total_tokens", 0
-                        )
-                        node_data[node_name]["input_tokens"] += event.get(
-                            "input_tokens", 0
-                        )
-                        node_data[node_name]["output_tokens"] += event.get(
-                            "output_tokens", 0
-                        )
+                        node_data[node_name]["usage_runs"].add(run_id)
+                        node_data[node_name]["total_tokens"] += event.get("total_tokens", 0)
+                        node_data[node_name]["input_tokens"] += event.get("input_tokens", 0)
+                        node_data[node_name]["output_tokens"] += event.get("output_tokens", 0)
                         node_data[node_name]["cache_creation_tokens"] += event.get(
                             "cache_creation_input_tokens", 0
                         )
@@ -407,9 +431,15 @@ class MetricsAggregator:
                             "cache_read_input_tokens", 0
                         )
 
-        # Build node metrics
+        # A legacy run may have model usage but no recognized terminal event.
+        # Count that execution once, while leaving latency unavailable (zero).
+        for data in node_data.values():
+            data["count"] += len(data["usage_runs"] - data["terminal_runs"])
+
+        # Build node metrics in workflow order, including zero-usage stages.
         node_summary = {}
-        for node_name, data in node_data.items():
+        for node_name in stages:
+            data = node_data[node_name]
             latencies = data["latencies"]
             count = data["count"]
             success = data["success_count"]
@@ -424,6 +454,7 @@ class MetricsAggregator:
             node_summary[node_name] = NodeMetrics(
                 node_name=node_name,
                 count=count,
+                timed_count=len(latencies),
                 avg_latency_ms=avg_latency,
                 min_latency_ms=min_latency,
                 max_latency_ms=max_latency,
@@ -464,9 +495,7 @@ class MetricsAggregator:
             return 0
 
         timestamps: list[float] = [
-            float(timestamp)
-            for event in trace_events
-            if (timestamp := event.get("ts")) is not None
+            float(timestamp) for event in trace_events if (timestamp := event.get("ts")) is not None
         ]
         if len(timestamps) < 2:
             return 0
@@ -503,7 +532,7 @@ class MetricsAggregator:
             if event.get("event_type") == "cost_gate":
                 bytes_processed = event.get("bytes_processed", 0)
                 if bytes_processed:
-                    bq_cost += (bytes_processed / (1024 ** 4)) * 6.25  # TB to cost
+                    bq_cost += (bytes_processed / (1024**4)) * 6.25  # TB to cost
 
             # Claude API token cost
             if event.get("event_type") == "model_usage":

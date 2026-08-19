@@ -12,6 +12,7 @@ class NodeMetrics:
 
     node_name: str
     count: int
+    timed_count: int
     avg_latency_ms: float
     min_latency_ms: float
     max_latency_ms: float
@@ -127,6 +128,7 @@ class MetricsSummary:
                 name: {
                     "node_name": m.node_name,
                     "count": m.count,
+                    "timed_count": m.timed_count,
                     "avg_latency_ms": round(m.avg_latency_ms, 2),
                     "min_latency_ms": round(m.min_latency_ms, 2),
                     "max_latency_ms": round(m.max_latency_ms, 2),

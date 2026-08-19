@@ -48,6 +48,7 @@ def query_plan_node(
     cfg = get_config()
     budget = runtime.context.budget if runtime is not None else budget_from_env()
     trace = _open_trace(state, cfg)
+    trace.record("query_plan.started")
     question = state.get("question", "")
     raw_snapshot = state.get("schema_snapshot")
 

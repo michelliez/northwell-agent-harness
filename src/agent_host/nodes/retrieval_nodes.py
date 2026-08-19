@@ -93,19 +93,23 @@ def context_gate_node(state: AgentState) -> dict:
     intent = state.get("intent", "unknown")
     cfg = get_config()
     trace = _open_trace(state, cfg)
+    trace.record("context_gate.started")
 
     # Operational retrieval failures already carry a safe answer. They are not
     # missing user context and must never enter the clarification loop.
     if state.get("answer"):
+        trace.record("context_gate.completed", outcome="upstream_answer")
         return {}
 
     if not chunks:
         clarification_count = state.get("clarification_count", 0)
         if clarification_count >= MAX_CLARIFICATION_ATTEMPTS:
             trace.record("context_gate.no_context_exhausted")
+            trace.record("context_gate.completed", outcome="no_context_exhausted")
             return {"answer": failure_messages.NO_DOCUMENTATION_FOUND}
 
         trace.record("context_gate.no_context_clarification")
+        trace.record("context_gate.completed", outcome="clarification")
         new_question = interrupt(failure_messages.CLARIFICATION_PROMPT)
         return {
             "question": new_question,
@@ -146,9 +150,11 @@ def context_gate_node(state: AgentState) -> dict:
                 table_count=len(snapshot.tables),
                 has_unknown_safety=snapshot.has_unknown_safety(),
             )
+            trace.record("context_gate.completed", outcome="schema_snapshot_built")
             return {"schema_snapshot": snapshot.model_dump()}
         except Exception as exc:
             trace.record("context_gate.schema_build_error", error=str(exc))
+            trace.record("context_gate.completed", outcome="schema_build_error")
             # An assembly failure is an internal error, not missing user
             # context: say so instead of letting query_plan blame the question.
             return {
@@ -156,6 +162,7 @@ def context_gate_node(state: AgentState) -> dict:
                 "answer": failure_messages.SCHEMA_EVIDENCE_INTERNAL_ERROR,
             }
 
+    trace.record("context_gate.completed", outcome="context_available")
     return {}
 
 

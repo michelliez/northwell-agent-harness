@@ -38,6 +38,7 @@ def exploration_node(
     cfg = get_config()
     budget = runtime.context.budget if runtime is not None else budget_from_env()
     trace = _open_trace(state, cfg)
+    trace.record("exploration.started")
     question = state.get("question", "")
     intent = state.get("intent") or "unknown"
     tools = tools_for_intent(intent)

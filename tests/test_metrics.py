@@ -14,6 +14,69 @@ from metrics.exporter import export_csv, export_json, export_markdown
 from metrics.models import MetricsSummary
 
 
+def test_node_metrics_pair_stage_events_and_reconcile_cached_tokens(tmp_path: Path) -> None:
+    aggregator = MetricsAggregator(tmp_path)
+    traces = {
+        "run-1": [
+            {"ts": 10.0, "seq": 0, "event": "intent.started"},
+            {"ts": 10.25, "seq": 1, "event": "model.usage"},
+            {"ts": 10.5, "seq": 2, "event": "intent.classified"},
+        ]
+    }
+    audits = {
+        "run-1": [
+            {
+                "event_type": "model_usage",
+                "operation": "intent_classification",
+                "input_tokens": 100,
+                "cache_creation_input_tokens": 20,
+                "cache_read_input_tokens": 30,
+                "output_tokens": 10,
+                "total_tokens": 160,
+            }
+        ]
+    }
+
+    metric = aggregator._compute_node_metrics(traces, audits)["Request Classification"]
+
+    assert metric.count == 1
+    assert metric.timed_count == 1
+    assert metric.success_count == 1
+    assert metric.failure_count == 0
+    assert metric.avg_latency_ms == 500
+    assert metric.min_latency_ms == 500
+    assert metric.max_latency_ms == 500
+    assert metric.total_tokens == (
+        metric.input_tokens
+        + metric.cache_creation_tokens
+        + metric.cache_read_tokens
+        + metric.output_tokens
+    )
+
+
+def test_legacy_model_usage_counts_execution_without_inventing_latency(tmp_path: Path) -> None:
+    aggregator = MetricsAggregator(tmp_path)
+    metric = aggregator._compute_node_metrics(
+        {},
+        {
+            "legacy-run": [
+                {
+                    "event_type": "model_usage",
+                    "operation": "query_planning",
+                    "input_tokens": 10,
+                    "output_tokens": 2,
+                    "total_tokens": 12,
+                }
+            ]
+        },
+    )["SQL Drafting"]
+
+    assert metric.count == 1
+    assert metric.timed_count == 0
+    assert metric.avg_latency_ms == 0
+    assert metric.total_tokens == 12
+
+
 @pytest.fixture
 def temp_artifact_dir():
     """Create a temporary artifact directory with sample data."""

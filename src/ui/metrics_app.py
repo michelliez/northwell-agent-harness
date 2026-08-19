@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
 
 import requests
 import streamlit as st
@@ -67,7 +66,7 @@ with kpi_col1:
     )
 
 with kpi_col2:
-    latency = metrics['avg_latency_ms']
+    latency = metrics["avg_latency_ms"]
     st.metric(
         "Avg Latency",
         f"{latency:.0f}ms",
@@ -95,7 +94,7 @@ with kpi_col4:
     )
 
 with kpi_col5:
-    cost = metrics['estimated_bigquery_cost']
+    cost = metrics["estimated_bigquery_cost"]
     st.metric(
         "Est. BQ Cost",
         f"${cost:.2f}",
@@ -159,8 +158,7 @@ with intent_col:
     st.markdown("#### Requests by Intent")
     if metrics["by_intent"]:
         intent_data = {
-            intent: metrics["by_intent"][intent]["count"]
-            for intent in metrics["by_intent"]
+            intent: metrics["by_intent"][intent]["count"] for intent in metrics["by_intent"]
         }
         st.bar_chart(intent_data, use_container_width=True)
     else:
@@ -170,8 +168,7 @@ with cost_col:
     st.markdown("#### Cost Trend")
     if metrics["by_date"]:
         cost_data = {
-            d: metrics["by_date"][d]["estimated_cost"]
-            for d in sorted(metrics["by_date"].keys())
+            d: metrics["by_date"][d]["estimated_cost"] for d in sorted(metrics["by_date"].keys())
         }
         st.line_chart(cost_data, use_container_width=True)
     else:
@@ -208,6 +205,7 @@ if metrics.get("by_node"):
             {
                 "Node": n["node_name"],
                 "Count": n["count"],
+                "Timed Runs": n.get("timed_count", 0),
                 "Avg Latency (ms)": f"{n['avg_latency_ms']:.0f}",
                 "Min (ms)": f"{n['min_latency_ms']:.0f}",
                 "Max (ms)": f"{n['max_latency_ms']:.0f}",
@@ -229,7 +227,10 @@ if metrics.get("by_node"):
     with token_col1:
         st.markdown("**Total Tokens per Node**")
         st.bar_chart(
-            {node: metrics["by_node"][node]["total_tokens"] for node in sorted(metrics["by_node"].keys())},
+            {
+                node: metrics["by_node"][node]["total_tokens"]
+                for node in sorted(metrics["by_node"].keys())
+            },
             use_container_width=True,
         )
 

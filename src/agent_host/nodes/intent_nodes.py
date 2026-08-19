@@ -465,6 +465,7 @@ def classify_intent_node(
     """Classify intent via forced tool call. Interrupt for clarification if needed."""
     cfg = get_config()
     trace = _open_trace(state, cfg)
+    trace.record("intent.started")
 
     question = state.get("question", "")
     if not question.strip():
@@ -617,8 +618,6 @@ def _resolve_candidate_reply(reply: str, candidates: list[str]) -> str:
 def _merge_clarification(original_question: str, reply: str) -> str:
     """Create a bounded standalone request from an interrupt and its reply."""
     return f"Original request: {original_question.strip()}\nUser clarification: {reply.strip()}"
-
-
 
 
 def _open_trace(state: AgentState, cfg) -> TraceLogger:
